@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
 import { TrendingUp, FileText, Newspaper, Rss, RefreshCw, Loader2, ExternalLink, AlertCircle, Sparkles, Lightbulb, Star } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -10,6 +10,7 @@ import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import { api, ApiError, type RadarData, type Industry, type Announcement, type NewsItem } from "@/lib/api";
 import { loadWatch } from "@/lib/watchlist";
 import { hasLlm, chatStream } from "@/lib/llm";
+import { storageGet, storageSet } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 
 const TABS = [
@@ -19,23 +20,56 @@ const TABS = [
   { key: "investment-news", label: "Investment News", icon: Rss, integrated: true, desc: "12 赛道全球公开 RSS 资讯（集成自 investment-news 仓库）" },
 ];
 
-interface Digest { loading?: boolean; text?: string; err?: string; needKey?: boolean }
+interface Digest {
+  loading?: boolean; text?: string; err?: string; needKey?: boolean;
+  analysisLoading?: boolean; analysis?: string; analysisErr?: string;
+}
+
+// 持久化 digests 到 localStorage，使切换页面再回来仍保留提炼结果。
+const DIGEST_KEY = "vr-intel-digests";
+const RADAR_KEY = "vr-intel-radar";
+
+function loadDigests(): Record<string, Digest> {
+  try { return JSON.parse(storageGet(DIGEST_KEY) || "{}"); } catch { return {}; }
+}
+function saveDigests(d: Record<string, Digest>) {
+  storageSet(DIGEST_KEY, JSON.stringify(d));
+}
 
 function InvestmentNewsPanel() {
   const [data, setData] = useState<RadarData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [active, setActive] = useState("ai");
   const [refreshing, setRefreshing] = useState(false);
-  const [digests, setDigests] = useState<Record<string, Digest>>({});
+  const [digests, setDigests] = useState<Record<string, Digest>>(loadDigests);
   const [bulk, setBulk] = useState<{ running: boolean; done: number; total: number }>({ running: false, done: 0, total: 0 });
+  // 防止刷新→自动提炼 与 手动一键提炼 同时跑
+  const bulkRunning = useRef(false);
 
   useEffect(() => {
-    api.radar().then(setData).catch((e) => setErr(e instanceof ApiError ? e.message : "加载失败"));
+    // 优先从 localStorage 恢复缓存的 radar 数据，避免每次进页面都白屏等待
+    const cached = storageGet(RADAR_KEY);
+    if (cached) {
+      try { setData(JSON.parse(cached)); } catch { /* ignore */ }
+    }
+    api.radar().then((d) => { setData(d); storageSet(RADAR_KEY, JSON.stringify(d)); }).catch((e) => setErr(e instanceof ApiError ? e.message : "加载失败"));
   }, []);
+
+  // digests 变化时持久化
+  useEffect(() => { saveDigests(digests); }, [digests]);
 
   const refresh = async () => {
     setRefreshing(true); setErr(null);
-    try { setData(await api.radarRefresh()); }
+    try {
+      const d = await api.radarRefresh();
+      setData(d);
+      storageSet(RADAR_KEY, JSON.stringify(d));
+      // 刷新成功后自动触发一键提炼全部要点
+      if (hasLlm()) {
+        // 延迟 0ms 让 UI 先更新到非 refreshing 状态
+        setTimeout(() => genAll(d), 0);
+      }
+    }
     catch (e) { setErr(e instanceof ApiError ? e.message : "刷新失败"); }
     finally { setRefreshing(false); }
   };
@@ -47,33 +81,132 @@ function InvestmentNewsPanel() {
   const genDigest = async (ind: Industry) => {
     if (!hasLlm()) { setDigests((d) => ({ ...d, [ind.key]: { needKey: true } })); return; }
     setDigests((d) => ({ ...d, [ind.key]: { loading: true } }));
-    const ctx = ind.items.slice(0, 25).map((it) => `[${it.time}] ${it.source}｜${it.zh || it.title}`).join("\n");
+    const items = ind.items.slice(0, 25);
+    // 给资讯编号 [0]..[24]，AI 引用时标注，渲染时替换为可点击链接
+    const ctx = items.map((it, i) => `[${i}] [${it.time}] ${it.source}｜${it.zh || it.title}`).join("\n");
     const prompt =
-      `以下是「${ind.name}」赛道近期资讯。请提炼「今日要点」3-5 条：每条一句话（≤40 字），` +
-      `只客观陈述重要事件 / 趋势，不推荐标的、不预测涨跌、不构成建议。直接用「- 」列点，不要多余前后缀。\n\n${ctx}`;
+      `以下是「${ind.name}」赛道近期资讯（每条以 [编号] 开头）。请提炼「今日要点」：
+` +
+      `1. 严格分为「## 国内」和「## 国外」两个小节（某侧无内容就写「无重要更新」）；
+` +
+      `2. 每小节 2-4 条，每条一句话（≤40 字），用「- 」列点；
+` +
+      `3. 每条结尾必须标注来源编号，格式 [^编号]（如 [^3]），可标多个如 [^1][^4]；
+` +
+      `4. 只客观陈述事件 / 趋势，不推荐标的、不预测涨跌、不构成建议；
+` +
+      `5. 不要多余前后缀、不要总结段。
+
+${ctx}`;
     try {
       let acc = "";
-      await chatStream([{ role: "user", content: prompt }], `${ind.name}赛道资讯`, {
-        onDelta: (t) => { acc += t; setDigests((d) => ({ ...d, [ind.key]: { text: acc } })); },
-      });
+      // 120 秒超时兜底：网络断开或 LLM 无响应时不至于永远转圈
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("请求超时（120 秒），请检查网络或 AI 服务状态")), 120_000)
+      );
+      await Promise.race([
+        chatStream([{ role: "user", content: prompt }], `${ind.name}赛道资讯`, {
+          onDelta: (t) => { acc += t; setDigests((d) => ({ ...d, [ind.key]: { text: acc } })); },
+        }),
+        timeout,
+      ]);
     } catch (e) {
-      setDigests((d) => ({ ...d, [ind.key]: { err: e instanceof ApiError ? e.message : "生成失败" } }));
+      const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : "生成失败";
+      setDigests((d) => ({ ...d, [ind.key]: { err: msg } }));
+    }
+  };
+
+  // 深入分析：基于已提炼的要点，逐条分析影响 + 对投资的影响
+  const genAnalysis = async (ind: Industry) => {
+    const dg = digests[ind.key];
+    if (!hasLlm() || !dg?.text) return;
+    setDigests((d) => ({ ...d, [ind.key]: { ...d[ind.key], analysisLoading: true, analysisErr: undefined } }));
+    const items = ind.items.slice(0, 25);
+    const ctx = items.map((it, i) => `[${i}] [${it.time}] ${it.source}｜${it.zh || it.title}`).join("\n");
+    const prompt =
+      `以下是「${ind.name}」赛道的今日要点（已按国内/国外分类，[^编号] 对应下方资讯列表）：
+
+${dg.text}
+
+` +
+      `请对每条要点做「深入分析」，要求：
+` +
+      `1. 保持「## 国内」「## 国外」结构，每条要点一个子条目（复述要点原文 ≤20 字）；
+` +
+      `2. 每条下分两行写：「影响：」（对行业 / 产业链 / 竞争格局的实际影响，≤60 字）和「投资视角：」（对二级市场相关板块 / 个股的客观影响路径，点明利好或承压方向但不推荐具体买卖，≤60 字）；
+` +
+      `3. 每条结尾保留来源编号 [^编号]；
+` +
+      `4. 全部基于下方资讯事实推演，不确定的写明「待验证」，不编造数据，不构成投资建议。
+
+资讯列表：
+${ctx}`;
+    try {
+      let acc = "";
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("请求超时（120 秒），请检查网络或 AI 服务状态")), 120_000)
+      );
+      await Promise.race([
+        chatStream([{ role: "user", content: prompt }], `${ind.name}深入分析`, {
+          onDelta: (t) => { acc += t; setDigests((d) => ({ ...d, [ind.key]: { ...d[ind.key], analysis: acc, analysisLoading: true } })); },
+        }),
+        timeout,
+      ]);
+      setDigests((d) => ({ ...d, [ind.key]: { ...d[ind.key], analysis: acc, analysisLoading: false } }));
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : "分析失败";
+      setDigests((d) => ({ ...d, [ind.key]: { ...d[ind.key], analysisLoading: false, analysisErr: msg } }));
     }
   };
 
   // 一键提炼全部赛道要点（串行，带进度；单赛道按需的按钮仍保留）
-  const genAll = async () => {
+  const genAll = async (override?: RadarData) => {
+    if (bulkRunning.current) return;
     if (!hasLlm()) { if (cur) setDigests((d) => ({ ...d, [cur.key]: { needKey: true } })); return; }
-    const targets = industries.filter((i) => i.items.length > 0);
+    const base = override || data;
+    const targets = (base?.industries || []).filter((i) => i.items.length > 0);
+    if (!targets.length) return;
+    bulkRunning.current = true;
     setBulk({ running: true, done: 0, total: targets.length });
     for (const ind of targets) {
-      await genDigest(ind);
+      try { await genDigest(ind); } catch { /* 单赛道失败不阻塞整体 */ }
       setBulk((b) => ({ ...b, done: b.done + 1 }));
     }
     setBulk((b) => ({ ...b, running: false }));
+    bulkRunning.current = false;
   };
 
   const dg = cur ? digests[cur.key] : undefined;
+
+  // 渲染要点文本：先把 [^N] 提取成可点击来源 chip，正文用 ReactMarkdown 渲染剩余部分。
+  // 每个 <li> 单独处理（md 按行拆），普通段落（## 国内 / ## 国外 标题）原样渲染。
+  const DigestBody = ({ text, items }: { text: string; items: Industry["items"] }) => {
+    const lines = text.split("\n");
+    return (
+      <div className="prose prose-sm prose-invert max-w-none text-foreground">
+        {lines.map((line, li) => {
+          const refs = Array.from(line.matchAll(/\[\^(\d+)\]/g)).map((m) => Number(m[1]));
+          const clean = line.replace(/\s*\[\^\d+\]/g, "");
+          if (!clean.trim()) return null;
+          const chips = refs.filter((n) => items[n]).map((n) => (
+            <a key={n} href={items[n].url} target="_blank" rel="noreferrer"
+              title={`${items[n].source}｜${items[n].zh || items[n].title}`}
+              className="ml-1 inline-flex items-center gap-0.5 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary no-underline hover:bg-primary/25">
+              {items[n].source}<ExternalLink className="h-2.5 w-2.5" />
+            </a>
+          ));
+          return (
+            <div key={li} className="my-0.5 flex flex-wrap items-baseline">
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ p: ({ children }) => <span>{children}</span>, li: ({ children }) => <span>{children}</span> }}>
+                {clean}
+              </ReactMarkdown>
+              {chips}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
 
   return (
     <div>
@@ -83,7 +216,7 @@ function InvestmentNewsPanel() {
         </span>
         <div className="flex items-center gap-2">
           {hasData && (
-            <button onClick={genAll} disabled={bulk.running || refreshing}
+            <button onClick={() => genAll()} disabled={bulk.running || refreshing}
               className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">
               {bulk.running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
               {bulk.running ? `提炼中 ${bulk.done}/${bulk.total}` : "一键提炼全部要点"}
@@ -141,13 +274,45 @@ function InvestmentNewsPanel() {
                   <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" /> AI 正在读这个赛道的资讯…</p>
                 ) : dg?.text ? (
                   <>
-                    <div className="prose prose-sm prose-invert max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]}>{dg.text}</ReactMarkdown></div>
-                    <div className="mt-2"><SaveNoteButton kind="今日要点" title={`${cur.name} 今日要点`} content={dg.text} /></div>
+                    <DigestBody text={dg.text} items={cur.items.slice(0, 25)} />
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <SaveNoteButton kind="今日要点" title={`${cur.name} 今日要点`} content={dg.text} />
+                      <button onClick={() => genAnalysis(cur)} disabled={dg.analysisLoading}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/20 disabled:opacity-50">
+                        {dg.analysisLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <TrendingUp className="h-3.5 w-3.5" />}
+                        {dg.analysis ? "重新深入分析" : "深入分析"}
+                      </button>
+                    </div>
+                    {dg.analysisLoading && !dg.analysis && (
+                      <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> 正在逐条分析影响…</p>
+                    )}
+                    {dg.analysisErr && (
+                      <div className="mt-2 flex items-center gap-3">
+                        <p className="flex-1 text-xs text-destructive">{dg.analysisErr}</p>
+                        <button onClick={() => genAnalysis(cur)}
+                          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border/60 px-2.5 py-1 text-xs text-muted-foreground hover:border-primary/50 hover:text-primary">
+                          <RefreshCw className="h-3 w-3" /> 重试
+                        </button>
+                      </div>
+                    )}
+                    {dg.analysis && (
+                      <div className="mt-3 rounded-lg border border-border/60 bg-background/40 p-3">
+                        <p className="mb-1.5 text-xs font-semibold text-muted-foreground">深入分析 · 影响与投资视角</p>
+                        <DigestBody text={dg.analysis} items={cur.items.slice(0, 25)} />
+                        <div className="mt-2"><SaveNoteButton kind="深入分析" title={`${cur.name} 深入分析`} content={dg.analysis} /></div>
+                      </div>
+                    )}
                   </>
                 ) : dg?.needKey ? (
                   <p className="text-sm text-muted-foreground">还没接入 AI。<Link to="/settings" className="text-primary">先接入你的 AI</Link>，即可一键提炼本赛道今日要点。</p>
                 ) : dg?.err ? (
-                  <p className="text-sm text-destructive">{dg.err}</p>
+                  <div className="flex items-center gap-3">
+                    <p className="flex-1 text-sm text-destructive">{dg.err}</p>
+                    <button onClick={() => genDigest(cur)}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border/60 px-2.5 py-1 text-xs text-muted-foreground hover:border-primary/50 hover:text-primary">
+                      <RefreshCw className="h-3 w-3" /> 重试
+                    </button>
+                  </div>
                 ) : (
                   <button onClick={() => genDigest(cur)}
                     className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary hover:bg-primary/25">
