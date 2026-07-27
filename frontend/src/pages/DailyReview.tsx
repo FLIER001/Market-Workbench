@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { Sparkles, Loader2, AlertCircle, RefreshCw, Gauge, ArrowDownUp, TrendingUp, TrendingDown, Plus, X, Flame, BarChart3, Globe } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -7,7 +8,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { Disclaimer } from "@/components/ui/Disclaimer";
-import { api, ApiError, type IndexQuote, type Quote, type MarketOverview, type ShortTermEmotion, type TurnoverTop, type GlobalIndex } from "@/lib/api";
+import { api, ApiError, type IndexQuote, type Quote, type MarketOverview, type ShortTermEmotion, type TurnoverTop, type GlobalIndex, type SearchResult } from "@/lib/api";
 import { hasLlm, chatStream } from "@/lib/llm";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import { loadWatch, saveWatch, addCodes } from "@/lib/watchlist";
@@ -35,6 +36,15 @@ export function DailyReview() {
   const [watchQuotes, setWatchQuotes] = useState<Record<string, Quote>>({});
   const [watchInput, setWatchInput] = useState("");
   const [watchLoading, setWatchLoading] = useState(false);
+  // 自动提示
+  const [watchSuggestions, setWatchSuggestions] = useState<SearchResult[]>([]);
+  const [showWatchDrop, setShowWatchDrop] = useState(false);
+  const [watchHlIdx, setWatchHlIdx] = useState(-1);
+  const watchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const watchWrapRef = useRef<HTMLDivElement>(null);
+  const watchInputRef = useRef<HTMLInputElement>(null);
+  const watchDropRef = useRef<HTMLDivElement>(null);
+  const [watchDropPos, setWatchDropPos] = useState({ top: 0, left: 0, width: 240 });
 
   // 各数据块请求是否已结束：区分「加载中」与「数据源暂不可用」（非交易时段/被限流时后端返回空）
   const [ovDone, setOvDone] = useState(false);
@@ -66,6 +76,55 @@ export function DailyReview() {
     loadIndices();
     refreshWatch(loadWatch());
   }, []);
+
+  // 自动搜索（debounce 300ms）
+  useEffect(() => {
+    if (watchDebounceRef.current) clearTimeout(watchDebounceRef.current);
+    const q = watchInput.trim();
+    if (!q) { setWatchSuggestions([]); setShowWatchDrop(false); return; }
+    watchDebounceRef.current = setTimeout(() => {
+      api.search(q).then(setWatchSuggestions).catch(() => setWatchSuggestions([]));
+    }, 300);
+    return () => { if (watchDebounceRef.current) clearTimeout(watchDebounceRef.current); };
+  }, [watchInput]);
+
+  // 点外部关闭下拉（portal 下拉也算"内部"）
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (watchWrapRef.current?.contains(t)) return;
+      if (watchDropRef.current?.contains(t)) return;
+      setShowWatchDrop(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  // 下拉打开时按输入框实际位置 fixed 定位，滚动 / 缩放时跟随
+  useEffect(() => {
+    if (!showWatchDrop || !watchInputRef.current) return;
+    const update = () => {
+      const r = watchInputRef.current!.getBoundingClientRect();
+      setWatchDropPos({ top: r.bottom + 4, left: r.left, width: Math.max(r.width, 240) });
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [showWatchDrop]);
+
+  const pickWatch = (s: SearchResult) => {
+    setWatchInput(s.code);
+    setShowWatchDrop(false);
+    setWatchHlIdx(-1);
+    // 直接添加
+    const { next, added } = addCodes(watchCodes, s.code);
+    if (added) { setWatchCodes(next); saveWatch(next); refreshWatch(next); }
+    setTimeout(() => setWatchInput(""), 100);
+  };
 
   const addWatch = () => {
     // 支持一次粘贴多只（逗号 / 空格分隔）；全部无效或重复则清空输入、无副作用。
@@ -188,13 +247,52 @@ export function DailyReview() {
       </div>
       <GlassCard className="mb-6">
         <div className="mb-3 flex gap-2">
-          <input
-            value={watchInput}
-            onChange={(e) => setWatchInput(e.target.value.replace(/[^\d,\s]/g, "").slice(0, 80))}
-            onKeyDown={(e) => e.key === "Enter" && addWatch()}
-            placeholder="加自选：可批量，如 600519 000858"
-            className="w-60 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
-          />
+          <div className="relative" ref={watchWrapRef}>
+            <input
+              ref={watchInputRef}
+              value={watchInput}
+              onChange={(e) => { setWatchInput(e.target.value); setShowWatchDrop(true); setWatchHlIdx(-1); }}
+              onFocus={() => watchSuggestions.length > 0 && setShowWatchDrop(true)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  if (watchHlIdx >= 0 && watchHlIdx < watchSuggestions.length) pickWatch(watchSuggestions[watchHlIdx]);
+                  else addWatch();
+                } else if (e.key === "ArrowDown") {
+                  e.preventDefault(); setWatchHlIdx((i) => Math.min(i + 1, watchSuggestions.length - 1));
+                } else if (e.key === "ArrowUp") {
+                  e.preventDefault(); setWatchHlIdx((i) => Math.max(i - 1, -1));
+                } else if (e.key === "Escape") {
+                  setShowWatchDrop(false); setWatchHlIdx(-1);
+                }
+              }}
+              placeholder="加自选：代码 / 中文 / 首字母，如 600519、茅台、MT"
+              className="w-60 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
+            />
+            {showWatchDrop && watchSuggestions.length > 0 && createPortal(
+              <div
+                ref={watchDropRef}
+                style={{ position: "fixed", top: watchDropPos.top, left: watchDropPos.left, width: watchDropPos.width, zIndex: 9999 }}
+                className="rounded-lg border border-border bg-background shadow-lg"
+              >
+                {watchSuggestions.map((s, i) => (
+                  <button
+                    key={s.code}
+                    onClick={() => pickWatch(s)}
+                    onMouseEnter={() => setWatchHlIdx(i)}
+                    className={cn(
+                      "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted/50",
+                      i === watchHlIdx && "bg-muted/50",
+                    )}
+                  >
+                    <span className="font-mono text-xs text-muted-foreground">{s.code}</span>
+                    <span className="flex-1 truncate">{s.name}</span>
+                    <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">{s.market}</span>
+                  </button>
+                ))}
+              </div>,
+              document.body,
+            )}
+          </div>
           <button onClick={addWatch}
             className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25">
             <Plus className="h-4 w-4" /> 增加

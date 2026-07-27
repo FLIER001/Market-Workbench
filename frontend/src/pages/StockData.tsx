@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import {
   Search, FileText, Newspaper, Loader2, AlertCircle, LineChart, BarChart3, Megaphone,
   Wallet, Trophy, CalendarClock, Boxes, MessageSquare,
@@ -12,7 +13,7 @@ import {
   api, ApiError, type Valuation, type Report, type NewsItem, type ValPercentile, type ValMetric,
   type Financials, type Announcement, type MarginRow, type BlockTradeRow, type HolderRow,
   type DividendRow, type FundFlowRow, type DragonTiger, type Lockup, type Blocks, type HotConcept, type QaRow,
-  type GlobalStock,
+  type GlobalStock, type SearchResult,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -81,6 +82,14 @@ export function StockData() {
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // 自动提示
+  const [suggestions, setSuggestions] = useState<SearchResult[]>([]);
+  const [showDrop, setShowDrop] = useState(false);
+  const [hlIdx, setHlIdx] = useState(-1);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const dropRef = useRef<HTMLDivElement>(null);
+  const [dropPos, setDropPos] = useState({ top: 0, left: 0, width: 320 });
   const [val, setVal] = useState<Valuation | null>(null);
   const [reports, setReports] = useState<Report[]>([]);
   const [news, setNews] = useState<NewsItem[]>([]);
@@ -102,9 +111,57 @@ export function StockData() {
   const [gstock, setGStock] = useState<GlobalStock | null>(null);  // 美股 / 港股
   const runIdRef = useRef(0);
 
-  const run = async () => {
-    const c = code.trim().toUpperCase();
+  // 自动搜索（debounce 300ms）
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    const q = code.trim();
+    if (!q || q.length < 1) { setSuggestions([]); setShowDrop(false); return; }
+    debounceRef.current = setTimeout(() => {
+      api.search(q).then(setSuggestions).catch(() => setSuggestions([]));
+    }, 300);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [code]);
+
+  // 点外部关闭下拉（portal 下拉也算"内部"）
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (inputRef.current?.contains(t)) return;
+      if (dropRef.current?.contains(t)) return;
+      setShowDrop(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  // 下拉打开时按输入框实际位置 fixed 定位，滚动 / 缩放时跟随
+  useEffect(() => {
+    if (!showDrop || !inputRef.current) return;
+    const update = () => {
+      const r = inputRef.current!.getBoundingClientRect();
+      setDropPos({ top: r.bottom + 4, left: r.left, width: Math.max(r.width, 320) });
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [showDrop]);
+
+  const pick = (s: SearchResult) => {
+    setCode(s.code);
+    setShowDrop(false);
+    setHlIdx(-1);
+    // 选完直接触发查询
+    setTimeout(() => run(s.code), 0);
+  };
+
+  const run = async (overrideCode?: string) => {
+    const c = (overrideCode || code).trim().toUpperCase();
     if (!c) { setErr("请输入代码"); return; }
+    setShowDrop(false);
     const rid = ++runIdRef.current;
     setLoading(true); setErr(null); setDepNote(null); setVal(null); setReports([]); setNews([]); setPctl(null); setFin(null); setAnns([]);
     setMargin([]); setBlockT([]); setHolders([]); setDividend([]); setFundFlow([]); setDt(null); setLockup(null); setBlocks(null); setHotCon([]); setQa([]);
@@ -208,17 +265,56 @@ export function StockData() {
         )}
       />
 
-      {/* 查询框 */}
-      <div className="mb-5 flex gap-2">
-        <input
-          value={code}
-          onChange={(e) => setCode(e.target.value.replace(/[^a-zA-Z0-9.]/g, "").toUpperCase().slice(0, 12))}
-          onKeyDown={(e) => e.key === "Enter" && run()}
-          placeholder="A 股 6 位代码，或美股/港股/韩股（AAPL / 00700 / 005930.KS）"
-          className="w-80 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
-        />
+      {/* 查询框（带自动提示） */}
+      <div className="relative mb-5 flex gap-2">
+        <div className="relative" ref={inputRef}>
+          <input
+            value={code}
+            onChange={(e) => { setCode(e.target.value); setShowDrop(true); setHlIdx(-1); }}
+            onFocus={() => suggestions.length > 0 && setShowDrop(true)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                if (hlIdx >= 0 && hlIdx < suggestions.length) pick(suggestions[hlIdx]);
+                else run();
+              } else if (e.key === "ArrowDown") {
+                e.preventDefault(); setHlIdx((i) => Math.min(i + 1, suggestions.length - 1));
+              } else if (e.key === "ArrowUp") {
+                e.preventDefault(); setHlIdx((i) => Math.max(i - 1, -1));
+              } else if (e.key === "Escape") {
+                setShowDrop(false); setHlIdx(-1);
+              }
+            }}
+            placeholder="代码 / 中文 / 拼音首字母，如 600519、茅台、MT、AAPL"
+            className="w-80 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
+          />
+          {/* 自动提示下拉（portal 到 body，跳出父级 stacking context 防遮挡） */}
+          {showDrop && suggestions.length > 0 && createPortal(
+            <div
+              ref={dropRef}
+              style={{ position: "fixed", top: dropPos.top, left: dropPos.left, width: dropPos.width, zIndex: 9999 }}
+              className="rounded-lg border border-border bg-background shadow-lg"
+            >
+              {suggestions.map((s, i) => (
+                <button
+                  key={s.code}
+                  onClick={() => pick(s)}
+                  onMouseEnter={() => setHlIdx(i)}
+                  className={cn(
+                    "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted/50",
+                    i === hlIdx && "bg-muted/50",
+                  )}
+                >
+                  <span className="font-mono text-xs text-muted-foreground">{s.code}</span>
+                  <span className="flex-1 truncate">{s.name}</span>
+                  <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">{s.market}</span>
+                </button>
+              ))}
+            </div>,
+            document.body,
+          )}
+        </div>
         <button
-          onClick={run}
+          onClick={() => run()}
           disabled={loading}
           className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50"
         >

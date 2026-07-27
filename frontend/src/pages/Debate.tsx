@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Disclaimer } from "@/components/ui/Disclaimer";
+import { StockSearchInput } from "@/components/ui/StockSearchInput";
 import { debateStream, type DebateStage } from "@/lib/agents";
 import { addNote } from "@/lib/notes";
 import { ApiError } from "@/lib/api";
@@ -101,13 +102,13 @@ export function Debate() {
         <div className="flex flex-wrap items-end gap-3">
           <div>
             <label className="mb-1 block text-xs text-muted-foreground">股票代码</label>
-            <input
+            <StockSearchInput
               value={code}
-              onChange={(e) => setCode(e.target.value.replace(/[^\d]/g, "").slice(0, 6))}
-              onKeyDown={(e) => { if (e.key === "Enter" && !running) start(); }}
-              placeholder="6 位代码，如 600519"
+              onChange={setCode}
+              onPick={(c) => { setCode(c); setError(""); }}
+              placeholder="代码 / 中文 / 首字母，如 600519、茅台、MT"
               disabled={running}
-              className="w-44 rounded-lg border border-border/60 bg-background/60 px-3 py-2 font-mono text-sm outline-none focus:border-primary/60"
+              className="w-44"
             />
           </div>
           <div>

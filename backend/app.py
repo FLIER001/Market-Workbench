@@ -629,6 +629,59 @@ def blocks(code: str = Query(...)):
         raise HTTPException(502, f"板块归属异常：{e}") from e
 
 
+# ---------------------------------------------------------------------------
+# 搜索（东财 suggest，支持代码 / 中文 / 拼音首字母）
+# ---------------------------------------------------------------------------
+
+_SEARCH_MKT = {
+    0: ("", "SZ"),      # 深市
+    1: ("", "SH"),      # 沪市
+    105: (".O", "NASDAQ"), 106: (".N", "NYSE"), 107: (".O", "US"),
+    116: (".HK", "HK"),
+    177: (".KS", "KR"),
+}
+
+
+@app.get("/api/search")
+def search(q: str = Query(..., min_length=1, max_length=30)):
+    """个股搜索：代码 / 中文名 / 拼音首字母。返回匹配列表（最多 8 条）。"""
+    q = q.strip()
+    if not q:
+        return {"data": []}
+    try:
+        r = astock.em_get(
+            "https://searchapi.eastmoney.com/api/suggest/get",
+            params={"input": q, "type": 14,
+                    "token": "D43BF722C8E33BDC906FB84D85E326E8", "count": 20},
+            headers={"User-Agent": astock.UA}, timeout=8,
+        )
+        rows = (r.json().get("QuotationCodeTable") or {}).get("Data") or []
+    except Exception:
+        return {"data": []}
+
+    out = []
+    seen = set()
+    for s in rows:
+        try:
+            mkt = int(s.get("MktNum"))
+        except (TypeError, ValueError):
+            continue
+        if mkt not in _SEARCH_MKT:
+            continue
+        suffix, market = _SEARCH_MKT[mkt]
+        code = s.get("Code", "")
+        name = s.get("Name", "")
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        # A股给 6 位纯代码；美/港/韩给带后缀代码
+        full_code = f"{code}{suffix}" if suffix else code
+        out.append({"code": full_code, "name": name, "market": market})
+        if len(out) >= 8:
+            break
+    return {"data": out}
+
+
 @app.get("/api/hot-concepts")
 def hot_concepts(code: str = Query(...)):
     """个股当下被市场归到哪些概念在炒（东财热门概念命中）。缓存 15 分钟。"""
