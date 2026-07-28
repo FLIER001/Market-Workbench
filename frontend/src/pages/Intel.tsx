@@ -1,17 +1,17 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { TrendingUp, FileText, Newspaper, Rss, RefreshCw, Loader2, ExternalLink, AlertCircle, Sparkles, Lightbulb, Star } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { Disclaimer } from "@/components/ui/Disclaimer";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import { api, ApiError, type RadarData, type Industry, type Announcement, type NewsItem } from "@/lib/api";
 import { loadWatch } from "@/lib/watchlist";
 import { hasLlm, chatStream } from "@/lib/llm";
 import { storageGet, storageSet } from "@/lib/storage";
 import { cn } from "@/lib/utils";
+import { startBackgroundTask, updateBackgroundTask, useBackgroundTask } from "@/lib/backgroundTasks";
 
 const TABS = [
   { key: "events", label: "事件概率", icon: TrendingUp, integrated: false, desc: "全球宏观预期概率（公开数据、免登录只读），后续接入" },
@@ -24,16 +24,43 @@ interface Digest {
   loading?: boolean; text?: string; err?: string; needKey?: boolean;
   analysisLoading?: boolean; analysis?: string; analysisErr?: string;
 }
+interface IntelTaskData {
+  digests: Record<string, Digest>;
+  bulk: { running: boolean; done: number; total: number };
+}
 
 // 持久化 digests 到 localStorage，使切换页面再回来仍保留提炼结果。
 const DIGEST_KEY = "vr-intel-digests";
 const RADAR_KEY = "vr-intel-radar";
+const INTEL_TASK_KEY = "intel:analysis";
+const EMPTY_BULK = { running: false, done: 0, total: 0 };
 
 function loadDigests(): Record<string, Digest> {
-  try { return JSON.parse(storageGet(DIGEST_KEY) || "{}"); } catch { return {}; }
+  try {
+    const saved = JSON.parse(storageGet(DIGEST_KEY) || "{}") as Record<string, Digest>;
+    return Object.fromEntries(
+      Object.entries(saved)
+        .map(([key, digest]) => {
+          const { loading: _loading, analysisLoading: _analysisLoading, ...stable } = digest || {};
+          return [key, stable] as const;
+        })
+        .filter(([, digest]) => digest.text || digest.err || digest.needKey || digest.analysis || digest.analysisErr),
+    );
+  } catch {
+    return {};
+  }
 }
 function saveDigests(d: Record<string, Digest>) {
-  storageSet(DIGEST_KEY, JSON.stringify(d));
+  // loading 属于当前请求的瞬时状态；持久化后刷新页面会恢复成一个永远无法结束的“假请求”。
+  const stable = Object.fromEntries(
+    Object.entries(d)
+      .map(([key, digest]) => {
+        const { loading: _loading, analysisLoading: _analysisLoading, ...rest } = digest;
+        return [key, rest] as const;
+      })
+      .filter(([, digest]) => digest.text || digest.err || digest.needKey || digest.analysis || digest.analysisErr),
+  );
+  storageSet(DIGEST_KEY, JSON.stringify(stable));
 }
 
 function InvestmentNewsPanel() {
@@ -41,10 +68,8 @@ function InvestmentNewsPanel() {
   const [err, setErr] = useState<string | null>(null);
   const [active, setActive] = useState("ai");
   const [refreshing, setRefreshing] = useState(false);
-  const [digests, setDigests] = useState<Record<string, Digest>>(loadDigests);
-  const [bulk, setBulk] = useState<{ running: boolean; done: number; total: number }>({ running: false, done: 0, total: 0 });
-  // 防止刷新→自动提炼 与 手动一键提炼 同时跑
-  const bulkRunning = useRef(false);
+  const intelTask = useBackgroundTask<IntelTaskData>(INTEL_TASK_KEY, { digests: loadDigests(), bulk: EMPTY_BULK });
+  const { digests, bulk } = intelTask.data;
 
   useEffect(() => {
     // 优先从 localStorage 恢复缓存的 radar 数据，避免每次进页面都白屏等待
@@ -78,20 +103,23 @@ function InvestmentNewsPanel() {
   const cur = industries.find((i) => i.key === active) || industries[0];
   const hasData = !!data?.generated_at;
 
-  const genDigest = async (ind: Industry) => {
-    if (!hasLlm()) { setDigests((d) => ({ ...d, [ind.key]: { needKey: true } })); return; }
-    setDigests((d) => ({ ...d, [ind.key]: { loading: true } }));
+  const runDigest = async (
+    ind: Industry,
+    update: (updater: (data: IntelTaskData) => IntelTaskData) => void,
+    signal: AbortSignal,
+  ) => {
+    update((state) => ({ ...state, digests: { ...state.digests, [ind.key]: { loading: true } } }));
     const items = ind.items.slice(0, 25);
     // 给资讯编号 [0]..[24]，AI 引用时标注，渲染时替换为可点击链接
     const ctx = items.map((it, i) => `[${i}] [${it.time}] ${it.source}｜${it.zh || it.title}`).join("\n");
     const prompt =
       `以下是「${ind.name}」赛道近期资讯（每条以 [编号] 开头）。请提炼「今日要点」：
 ` +
-      `1. 严格分为「## 国内」和「## 国外」两个小节（某侧无内容就写「无重要更新」）；
+      `1. 严格分为「## 国内」和「## 国外」两个小节，国内外合计通常 5-10 条；按实际重要信息量增减，宁缺毋滥，不为凑数收录一般性资讯；
 ` +
-      `2. 每小节 2-4 条，每条一句话（≤40 字），用「- 」列点；
+      `2. 不要求国内外数量均分；只挑影响范围大、时效性强、信息增量高的事件，去掉重复报道，并按重要性从高到低排列；某侧确无重要更新就写「无重要更新」；
 ` +
-      `3. 每条结尾必须标注来源编号，格式 [^编号]（如 [^3]），可标多个如 [^1][^4]；
+      `3. 每条用「- 」列点，一句话说清主体、事件及关键变化（≤40 字）；每条结尾必须标注来源编号，格式 [^编号]（如 [^3]），可标多个如 [^1][^4]；
 ` +
       `4. 只客观陈述事件 / 趋势，不推荐标的、不预测涨跌、不构成建议；
 ` +
@@ -101,26 +129,46 @@ ${ctx}`;
     try {
       let acc = "";
       // 120 秒超时兜底：网络断开或 LLM 无响应时不至于永远转圈
-      const timeout = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("请求超时（120 秒），请检查网络或 AI 服务状态")), 120_000)
-      );
-      await Promise.race([
-        chatStream([{ role: "user", content: prompt }], `${ind.name}赛道资讯`, {
-          onDelta: (t) => { acc += t; setDigests((d) => ({ ...d, [ind.key]: { text: acc } })); },
-        }),
-        timeout,
-      ]);
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const timeout = new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error("请求超时（120 秒），请检查网络或 AI 服务状态")), 120_000);
+        });
+        const result = await Promise.race([
+          chatStream([{ role: "user", content: prompt }], `${ind.name}赛道资讯`, {
+            onDelta: (t) => {
+              acc += t;
+              update((state) => ({ ...state, digests: { ...state.digests, [ind.key]: { text: acc } } }));
+            },
+          }, signal),
+          timeout,
+        ]);
+        const text = (acc || result.content).trim();
+        if (!text) throw new Error("AI 返回了空内容，请检查模型配置后重试");
+        update((state) => ({ ...state, digests: { ...state.digests, [ind.key]: { text } } }));
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+      }
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : "生成失败";
-      setDigests((d) => ({ ...d, [ind.key]: { err: msg } }));
+      update((state) => ({ ...state, digests: { ...state.digests, [ind.key]: { err: msg } } }));
     }
   };
 
+  const genDigest = (ind: Industry) => {
+    if (!hasLlm()) {
+      updateBackgroundTask<IntelTaskData>(INTEL_TASK_KEY, { digests, bulk }, (state) => ({
+        ...state, digests: { ...state.digests, [ind.key]: { needKey: true } },
+      }));
+      return;
+    }
+    startBackgroundTask(INTEL_TASK_KEY, { digests, bulk }, (update, signal) => runDigest(ind, update, signal));
+  };
+
   // 深入分析：基于已提炼的要点，逐条分析影响 + 对投资的影响
-  const genAnalysis = async (ind: Industry) => {
+  const genAnalysis = (ind: Industry) => {
     const dg = digests[ind.key];
     if (!hasLlm() || !dg?.text) return;
-    setDigests((d) => ({ ...d, [ind.key]: { ...d[ind.key], analysisLoading: true, analysisErr: undefined } }));
     const items = ind.items.slice(0, 25);
     const ctx = items.map((it, i) => `[${i}] [${it.time}] ${it.source}｜${it.zh || it.title}`).join("\n");
     const prompt =
@@ -141,39 +189,68 @@ ${dg.text}
 
 资讯列表：
 ${ctx}`;
-    try {
-      let acc = "";
-      const timeout = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("请求超时（120 秒），请检查网络或 AI 服务状态")), 120_000)
-      );
-      await Promise.race([
-        chatStream([{ role: "user", content: prompt }], `${ind.name}深入分析`, {
-          onDelta: (t) => { acc += t; setDigests((d) => ({ ...d, [ind.key]: { ...d[ind.key], analysis: acc, analysisLoading: true } })); },
-        }),
-        timeout,
-      ]);
-      setDigests((d) => ({ ...d, [ind.key]: { ...d[ind.key], analysis: acc, analysisLoading: false } }));
-    } catch (e) {
-      const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : "分析失败";
-      setDigests((d) => ({ ...d, [ind.key]: { ...d[ind.key], analysisLoading: false, analysisErr: msg } }));
-    }
+    startBackgroundTask(INTEL_TASK_KEY, { digests, bulk }, async (update, signal) => {
+      update((state) => ({
+        ...state,
+        digests: { ...state.digests, [ind.key]: { ...state.digests[ind.key], analysisLoading: true, analysisErr: undefined } },
+      }));
+      try {
+        let acc = "";
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const timeout = new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error("请求超时（120 秒），请检查网络或 AI 服务状态")), 120_000);
+          });
+          const result = await Promise.race([
+            chatStream([{ role: "user", content: prompt }], `${ind.name}深入分析`, {
+              onDelta: (t) => {
+                acc += t;
+                update((state) => ({
+                  ...state,
+                  digests: { ...state.digests, [ind.key]: { ...state.digests[ind.key], analysis: acc, analysisLoading: true } },
+                }));
+              },
+            }, signal),
+            timeout,
+          ]);
+          const analysis = (acc || result.content).trim();
+          if (!analysis) throw new Error("AI 返回了空内容，请检查模型配置后重试");
+          update((state) => ({
+            ...state,
+            digests: { ...state.digests, [ind.key]: { ...state.digests[ind.key], analysis, analysisLoading: false } },
+          }));
+        } finally {
+          if (timeoutId) clearTimeout(timeoutId);
+        }
+      } catch (e) {
+        const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : "分析失败";
+        update((state) => ({
+          ...state,
+          digests: { ...state.digests, [ind.key]: { ...state.digests[ind.key], analysisLoading: false, analysisErr: msg } },
+        }));
+      }
+    });
   };
 
   // 一键提炼全部赛道要点（串行，带进度；单赛道按需的按钮仍保留）
-  const genAll = async (override?: RadarData) => {
-    if (bulkRunning.current) return;
-    if (!hasLlm()) { if (cur) setDigests((d) => ({ ...d, [cur.key]: { needKey: true } })); return; }
+  const genAll = (override?: RadarData) => {
+    if (intelTask.status === "running") return;
+    if (!hasLlm()) {
+      if (cur) updateBackgroundTask<IntelTaskData>(INTEL_TASK_KEY, { digests, bulk }, (state) => ({
+        ...state, digests: { ...state.digests, [cur.key]: { needKey: true } },
+      }));
+      return;
+    }
     const base = override || data;
     const targets = (base?.industries || []).filter((i) => i.items.length > 0);
     if (!targets.length) return;
-    bulkRunning.current = true;
-    setBulk({ running: true, done: 0, total: targets.length });
-    for (const ind of targets) {
-      try { await genDigest(ind); } catch { /* 单赛道失败不阻塞整体 */ }
-      setBulk((b) => ({ ...b, done: b.done + 1 }));
-    }
-    setBulk((b) => ({ ...b, running: false }));
-    bulkRunning.current = false;
+    startBackgroundTask(INTEL_TASK_KEY, { digests, bulk: { running: true, done: 0, total: targets.length } }, async (update, signal) => {
+      for (const ind of targets) {
+        await runDigest(ind, update, signal);
+        update((state) => ({ ...state, bulk: { ...state.bulk, done: state.bulk.done + 1 } }));
+      }
+      update((state) => ({ ...state, bulk: { ...state.bulk, running: false } }));
+    });
   };
 
   const dg = cur ? digests[cur.key] : undefined;
@@ -183,24 +260,36 @@ ${ctx}`;
   const DigestBody = ({ text, items }: { text: string; items: Industry["items"] }) => {
     const lines = text.split("\n");
     return (
-      <div className="prose prose-sm prose-invert max-w-none text-foreground">
+      <div className="space-y-0.5 text-sm leading-snug text-foreground">
         {lines.map((line, li) => {
           const refs = Array.from(line.matchAll(/\[\^(\d+)\]/g)).map((m) => Number(m[1]));
-          const clean = line.replace(/\s*\[\^\d+\]/g, "");
+          const clean = line.replace(/\s*\[\^\d+\]/g, "").trim();
           if (!clean.trim()) return null;
           const chips = refs.filter((n) => items[n]).map((n) => (
             <a key={n} href={items[n].url} target="_blank" rel="noreferrer"
               title={`${items[n].source}｜${items[n].zh || items[n].title}`}
-              className="ml-1 inline-flex items-center gap-0.5 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary no-underline hover:bg-primary/25">
+              className="ml-1 inline-flex items-center gap-0.5 rounded bg-primary/10 px-1 py-0.5 text-[10px] leading-none text-primary no-underline hover:bg-primary/25">
               {items[n].source}<ExternalLink className="h-2.5 w-2.5" />
             </a>
           ));
+          const heading = clean.match(/^##\s+(.+)$/);
+          if (heading) {
+            return (
+              <div key={li} className={cn("text-xs font-semibold text-primary/90", li > 0 && "pt-1.5")}>
+                {heading[1]}
+              </div>
+            );
+          }
+          const bullet = clean.replace(/^[-*]\s+/, "");
           return (
-            <div key={li} className="my-0.5 flex flex-wrap items-baseline">
-              <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ p: ({ children }) => <span>{children}</span>, li: ({ children }) => <span>{children}</span> }}>
-                {clean}
-              </ReactMarkdown>
-              {chips}
+            <div key={li} className="flex items-start gap-1.5">
+              {/^[-*]\s+/.test(clean) && <span className="mt-[0.42em] h-1 w-1 shrink-0 rounded-full bg-primary/70" />}
+              <span className="min-w-0 flex-1">
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ p: ({ children }) => <span>{children}</span> }}>
+                  {bullet}
+                </ReactMarkdown>
+                {chips}
+              </span>
             </div>
           );
         })}
@@ -261,8 +350,8 @@ ${ctx}`;
           {cur && (
             <>
               {/* 今日要点总结框（暖橙框） */}
-              <div className="mb-4 rounded-xl border border-primary/30 bg-primary/5 p-4">
-                <div className="mb-2 flex items-center justify-between">
+              <div className="mb-3 rounded-xl border border-primary/30 bg-primary/5 p-3">
+                <div className="mb-1.5 flex items-center justify-between">
                   <span className="flex items-center gap-1.5 text-sm font-semibold text-primary">
                     <Lightbulb className="h-4 w-4" /> 今日要点 · {cur.name}
                   </span>
@@ -504,7 +593,6 @@ export function Intel() {
       <p className="mt-3 text-[11px] text-muted-foreground/60">
         只做公开信息聚合、不做推荐、不预测涨跌。公告 / 新闻均来自你关注列表里个股的公开披露与公开源；赛道资讯已按合规词表过滤。今日要点由你自己配置的 AI 提炼。
       </p>
-      <Disclaimer />
     </div>
   );
 }

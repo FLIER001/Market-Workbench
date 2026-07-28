@@ -27,6 +27,7 @@ import portfolio as pf
 import market
 import myreports as mr
 import reflection as reflect_layer
+import sector_scores as sector_scores_layer
 
 app = FastAPI(title="Vibe-Research API", version="0.2.2")
 
@@ -318,6 +319,19 @@ def market_overview():
         return {"data": market.get_overview()}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"市场总览异常：{e}") from e
+
+
+@app.get("/api/sector-scores")
+def sector_scores(refresh: bool = Query(False)):
+    """板块评分：申万一级行业的估值、盈利景气、资本活跃和集中风险。
+
+    首次构建读取申万 2021 版分类启用后的月报，并叠加最新交易日日频数据；
+    之后读取 1 小时本地缓存。refresh=true 会强制刷新当前评分。
+    """
+    try:
+        return {"data": sector_scores_layer.get_sector_scores(force=refresh)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"板块评分异常：{e}") from e
 
 
 @app.get("/api/market/emotion")

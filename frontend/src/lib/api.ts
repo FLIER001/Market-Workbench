@@ -212,6 +212,68 @@ export interface QaRow { company: string; question: string; answer: string | nul
 export interface IndustryRow { rank: number; name: string; change_pct: number; code: string; up_count: number; down_count: number }
 export interface IndustryData { top: IndustryRow[]; bottom: IndustryRow[]; total: number }
 
+export interface SectorScoreRow {
+  code: string;
+  name: string;
+  score: number | null;
+  phase: "综合占优" | "赔率观察" | "集中风险" | "相对偏弱" | "中性观察";
+  latest_return: number | null;
+  valuation: {
+    score: number | null;
+    pe: number | null;
+    pe_percentile: number | null;
+    pb: number | null;
+    pb_percentile: number | null;
+    history_samples: number;
+  };
+  prosperity: {
+    score: number | null;
+    earnings_3m: number | null;
+    earnings_yoy: number | null;
+  };
+  attention: {
+    score: number | null;
+    turnover_rate: number | null;
+    turnover_rate_percentile: number | null;
+    turnover_share: number | null;
+    turnover_share_percentile: number | null;
+    daily_history_samples: number;
+  };
+  crowding: {
+    risk: number | null;
+    penalty: number;
+  };
+  data_quality: {
+    history_samples: number;
+    missing: string[];
+  };
+}
+
+export interface SectorScoresData {
+  schema_version: number;
+  as_of: string;
+  current_frequency: "daily" | "monthly";
+  monthly_as_of: string;
+  daily_history_samples: number;
+  daily_error?: string | null;
+  history_start: string;
+  history_samples: number;
+  history_requested?: number;
+  history_partial?: boolean;
+  generated_at: string;
+  stale: boolean;
+  refresh_error?: string;
+  industries: SectorScoreRow[];
+  methodology: {
+    classification: string;
+    frequency: string;
+    weights: { valuation: number; prosperity: number; attention: number };
+    penalty: string;
+    definitions: string[];
+    sources: { label: string; url: string | null }[];
+  };
+}
+
 // 全球市场（美股 / 港股，移植自 global-stock-data · 东财域内源）
 export interface GlobalIndex {
   key: string; name: string; region: string;
@@ -272,6 +334,8 @@ export const api = {
   hotConcepts: (code: string) => get<HotConcept[]>(`/hot-concepts?code=${code}`),
   investorQa: (code: string) => get<QaRow[]>(`/investor-qa?code=${code}`),
   industry: (top = 20) => get<IndustryData>(`/industry?top=${top}`),
+  sectorScores: (refresh = false) =>
+    get<SectorScoresData>(`/sector-scores${refresh ? "?refresh=true" : ""}`),
   search: (q: string) => get<SearchResult[]>(`/search?q=${encodeURIComponent(q)}`),
   myReports: () => get<MyReport[]>("/myreports"),
   uploadReport: (name: string, contentB64: string) =>

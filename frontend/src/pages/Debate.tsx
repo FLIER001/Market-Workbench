@@ -1,14 +1,13 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { Swords, Play, Square, Save, CheckCircle2, Circle, AlertTriangle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { Disclaimer } from "@/components/ui/Disclaimer";
 import { StockSearchInput } from "@/components/ui/StockSearchInput";
 import { debateStream, type DebateStage } from "@/lib/agents";
 import { addNote } from "@/lib/notes";
-import { ApiError } from "@/lib/api";
+import { cancelBackgroundTask, startBackgroundTask, updateBackgroundTask, useBackgroundTask } from "@/lib/backgroundTasks";
 
 interface StageBox {
   stage: DebateStage;
@@ -16,6 +15,20 @@ interface StageBox {
   content: string;
   done: boolean;
 }
+interface DebateTaskData {
+  code: string;
+  rounds: number;
+  status: string;
+  progress: { title: string; ok: boolean }[];
+  missing: string[];
+  stages: StageBox[];
+  error: string;
+  saved: boolean;
+}
+const DEBATE_TASK_KEY = "debate:current";
+const EMPTY_DEBATE: DebateTaskData = {
+  code: "", rounds: 1, status: "", progress: [], missing: [], stages: [], error: "", saved: false,
+};
 
 // 多方用品牌橙、空方用蓝灰、主持用中性——刻意不用红绿，
 // 免得和 A 股「红涨绿跌」撞车被读成涨跌信号。
@@ -32,61 +45,49 @@ const DOSSIER_HINT = "多空双方拿到的是同一份接口实时拉取的数�
 export function Debate() {
   const [code, setCode] = useState("");
   const [rounds, setRounds] = useState(1);
-  const [running, setRunning] = useState(false);
-  const [status, setStatus] = useState("");
-  const [progress, setProgress] = useState<{ title: string; ok: boolean }[]>([]);
-  const [missing, setMissing] = useState<string[]>([]);
-  const [stages, setStages] = useState<StageBox[]>([]);
-  const [error, setError] = useState("");
-  const [saved, setSaved] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
-
-  const reset = () => {
-    setStatus(""); setProgress([]); setMissing([]); setStages([]); setError(""); setSaved(false);
-  };
+  const debateTask = useBackgroundTask<DebateTaskData>(DEBATE_TASK_KEY, EMPTY_DEBATE);
+  const running = debateTask.status === "running";
+  const { status, progress, missing, stages, saved } = debateTask.data;
+  const error = debateTask.data.error || (debateTask.status === "error" ? debateTask.error || "" : "");
 
   async function start() {
     const c = code.trim();
-    if (!/^\d{6}$/.test(c)) { setError("请输入 6 位 A 股代码"); return; }
-    reset();
-    setRunning(true);
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
-    try {
-      await debateStream(c, rounds, {
-        onStatus: setStatus,
-        onDossierProgress: (title, ok, loaded, total) => {
-          setStatus(`正在拉取客观事实底稿… ${loaded}/${total}`);
-          setProgress((p) => [...p, { title, ok }]);
-        },
-        onDossierReady: (_sections, miss) => { setMissing(miss); setStatus("底稿就绪，辩论开始"); },
-        onStageStart: (stage, label) =>
-          setStages((s) => [...s, { stage, label, content: "", done: false }]),
-        onDelta: (stage, text) =>
-          setStages((s) => s.map((b) => (b.stage === stage && !b.done ? { ...b, content: b.content + text } : b))),
-        onStageDone: (stage, _label, content) =>
-          setStages((s) => s.map((b) => (b.stage === stage && !b.done ? { ...b, content, done: true } : b))),
-        onError: (message, stage) => setError(stage ? `${stage}：${message}` : message),
-      }, ctrl.signal);
-      setStatus("辩论完成");
-    } catch (e) {
-      if (e instanceof DOMException && e.name === "AbortError") setStatus("已中止");
-      else setError(e instanceof ApiError ? e.message : String(e));
-    } finally {
-      setRunning(false);
-      abortRef.current = null;
+    if (!/^\d{6}$/.test(c)) {
+      startBackgroundTask(DEBATE_TASK_KEY, { ...EMPTY_DEBATE, error: "请输入 6 位 A 股代码" }, async () => {});
+      return;
     }
+    const initial: DebateTaskData = { ...EMPTY_DEBATE, code: c, rounds };
+    startBackgroundTask(DEBATE_TASK_KEY, initial, async (update, signal) => {
+      await debateStream(c, rounds, {
+        onStatus: (next) => update((data) => ({ ...data, status: next })),
+        onDossierProgress: (title, ok, loaded, total) => {
+          update((data) => ({
+            ...data,
+            status: `正在拉取客观事实底稿… ${loaded}/${total}`,
+            progress: [...data.progress, { title, ok }],
+          }));
+        },
+        onDossierReady: (_sections, miss) => update((data) => ({ ...data, missing: miss, status: "底稿就绪，辩论开始" })),
+        onStageStart: (stage, label) =>
+          update((data) => ({ ...data, stages: [...data.stages, { stage, label, content: "", done: false }] })),
+        onDelta: (stage, text) =>
+          update((data) => ({ ...data, stages: data.stages.map((b) => (b.stage === stage && !b.done ? { ...b, content: b.content + text } : b)) })),
+        onStageDone: (stage, _label, content) =>
+          update((data) => ({ ...data, stages: data.stages.map((b) => (b.stage === stage && !b.done ? { ...b, content, done: true } : b)) })),
+        onError: (message, stage) => update((data) => ({ ...data, error: stage ? `${stage}：${message}` : message })),
+      }, signal);
+      update((data) => ({ ...data, status: "辩论完成" }));
+    });
   }
 
   function stop() {
-    abortRef.current?.abort();
-    setRunning(false);
+    cancelBackgroundTask(DEBATE_TASK_KEY);
   }
 
   function save() {
     const body = stages.map((s) => `## ${s.label}\n\n${s.content}`).join("\n\n---\n\n");
-    addNote("多空辩论", `多空辩论 · ${code.trim()}`, body);
-    setSaved(true);
+    addNote("多空辩论", `多空辩论 · ${debateTask.data.code}`, body);
+    updateBackgroundTask(DEBATE_TASK_KEY, EMPTY_DEBATE, (data) => ({ ...data, saved: true }));
   }
 
   const finished = stages.length > 0 && stages.every((s) => s.done);
@@ -105,7 +106,10 @@ export function Debate() {
             <StockSearchInput
               value={code}
               onChange={setCode}
-              onPick={(c) => { setCode(c); setError(""); }}
+              onPick={(c) => {
+                setCode(c);
+                updateBackgroundTask(DEBATE_TASK_KEY, EMPTY_DEBATE, (data) => ({ ...data, error: "" }));
+              }}
               placeholder="代码 / 中文 / 首字母，如 600519、茅台、MT"
               disabled={running}
               className="w-44"
@@ -207,7 +211,6 @@ export function Debate() {
         </GlassCard>
       )}
 
-      <Disclaimer />
     </div>
   );
 }

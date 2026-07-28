@@ -3,7 +3,7 @@ import { Link, Outlet, useLocation } from "react-router-dom";
 import {
   Activity, Radar, LayoutGrid, Wallet, Settings, Search, NotebookPen,
   Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github, UserRound,
-  Cog, Cpu, Database, Cable, Rocket, FlaskConical, Star, FileText, Swords,
+  Star, FileText, Swords, Gauge,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
@@ -19,23 +19,13 @@ const NAV = [
   { to: "/daily-review", icon: Activity, label: "每日复盘" },
   { to: "/intel", icon: Radar, label: "资讯雷达" },
   { to: "/sectors", icon: LayoutGrid, label: "板块中心" },
+  { to: "/sector-scores", icon: Gauge, label: "板块评分" },
   { to: "/stock-data", icon: Search, label: "个股数据" },
   { to: "/debate", icon: Swords, label: "多空辩论" },
-  { to: "/watchlist", icon: Star, label: "自选股" },
+  { to: "/watchlist", icon: Star, label: "自选" },
   { to: "/portfolio", icon: Wallet, label: "我的持仓" },
   { to: "/my-reports", icon: FileText, label: "我的研报" },
   { to: "/notes", icon: NotebookPen, label: "研究记录" },
-  { to: "/settings", icon: Settings, label: "接入 AI" },
-];
-
-// 常看的板块，作为「板块中心」下的快捷入口（缩进显示）。
-const SECTOR_LINKS = [
-  { to: "/sectors/humanoid", icon: Cog, label: "人形机器人" },
-  { to: "/sectors/ai-computing", icon: Cpu, label: "AI 算力" },
-  { to: "/sectors/hbm", icon: Database, label: "HBM" },
-  { to: "/sectors/cpo", icon: Cable, label: "光互联" },
-  { to: "/sectors/business-space", icon: Rocket, label: "商业航天" },
-  { to: "/sectors/ai-pharma", icon: FlaskConical, label: "生物医药" },
 ];
 
 export function Layout() {
@@ -88,31 +78,6 @@ export function Layout() {
                   {!collapsed && label}
                 </Link>
 
-                {/* 板块中心下方：常看板块的快捷入口（缩进） */}
-                {to === "/sectors" && (
-                  <div className={cn("mt-1 space-y-0.5", !collapsed && "ml-4 border-l border-border/40 pl-1.5")}>
-                    {SECTOR_LINKS.map(({ to: st, icon: SIcon, label: slabel }) => {
-                      const sactive = pathname === st;
-                      return (
-                        <Link
-                          key={st}
-                          to={st}
-                          title={collapsed ? slabel : undefined}
-                          className={cn(
-                            "flex items-center rounded-lg transition-colors",
-                            collapsed ? "justify-center p-2" : "gap-2 px-2.5 py-1.5 text-[13px]",
-                            sactive
-                              ? "bg-primary/10 font-medium text-primary"
-                              : "text-muted-foreground/80 hover:bg-muted/40 hover:text-foreground",
-                          )}
-                        >
-                          <SIcon className="h-3.5 w-3.5 shrink-0" />
-                          {!collapsed && slabel}
-                        </Link>
-                      );
-                    })}
-                  </div>
-                )}
               </div>
             );
           })}
@@ -122,6 +87,16 @@ export function Layout() {
         <div className={cn("border-t border-border/50", collapsed ? "flex flex-col items-center gap-2 p-2" : "space-y-2 p-3")}>
           {collapsed ? (
             <>
+              <Link
+                to="/settings"
+                className={cn(
+                  "rounded p-1.5 transition-colors",
+                  pathname === "/settings" ? "bg-primary/15 text-primary shadow-glow" : "text-muted-foreground hover:text-foreground",
+                )}
+                title="接入 AI"
+              >
+                <Settings className="h-4 w-4" />
+              </Link>
               <button onClick={toggle} className="rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground" title={dark ? "亮色" : "暗色"}>
                 {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
               </button>
@@ -140,6 +115,16 @@ export function Layout() {
                   {dark ? "亮色" : "暗色"}
                 </button>
                 <div className="flex items-center gap-2">
+                  <Link
+                    to="/settings"
+                    className={cn(
+                      "rounded p-1 transition-colors",
+                      pathname === "/settings" ? "bg-primary/15 text-primary shadow-glow" : "text-muted-foreground hover:text-foreground",
+                    )}
+                    title="接入 AI"
+                  >
+                    <Settings className="h-3.5 w-3.5" />
+                  </Link>
                   <a href={X_URL} target="_blank" rel="noreferrer" className="text-muted-foreground transition-colors hover:text-foreground" title="联系作者 · X @linsizhen">
                     <UserRound className="h-3.5 w-3.5" />
                   </a>

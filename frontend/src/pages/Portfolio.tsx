@@ -4,7 +4,6 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { StockSearchInput } from "@/components/ui/StockSearchInput";
-import { Disclaimer } from "@/components/ui/Disclaimer";
 import { api, ApiError, type PortfolioData } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -106,7 +105,7 @@ export function Portfolio() {
         actions={
           <div className="flex items-center gap-2">
             {holdings.length > 0 && (
-              <AskAiButton context={aiContext} label="让 AI 看我的持仓"
+              <AskAiButton context={aiContext} taskId="portfolio" label="让 AI 看我的持仓"
                 suggestions={["我的持仓集中在哪些方向", "结构上有什么风险", "帮我梳理一下"]} />
             )}
             <button onClick={() => load(true)} disabled={refreshing}
@@ -299,7 +298,6 @@ export function Portfolio() {
         )}
       </GlassCard>
 
-      <Disclaimer />
     </div>
   );
 }

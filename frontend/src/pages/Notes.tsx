@@ -1,13 +1,12 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { Trash2, ChevronDown, ChevronRight, NotebookPen, ScanSearch, Save } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { Disclaimer } from "@/components/ui/Disclaimer";
 import { loadNotes, deleteNote, clearNotes, addNote, type Note } from "@/lib/notes";
 import { reflectStream } from "@/lib/agents";
-import { ApiError } from "@/lib/api";
+import { startBackgroundTask, updateBackgroundTask, useBackgroundTask } from "@/lib/backgroundTasks";
 
 const KIND_COLOR: Record<string, string> = {
   复盘: "bg-primary/15 text-primary",
@@ -16,40 +15,35 @@ const KIND_COLOR: Record<string, string> = {
   多空辩论: "bg-sky-500/15 text-sky-400",
   反思审计: "bg-violet-500/15 text-violet-400",
 };
+interface ReflectTaskData {
+  noteId: string | null;
+  text: string;
+  error: string;
+  saved: boolean;
+}
+const REFLECT_TASK_KEY = "notes:reflection";
+const EMPTY_REFLECT: ReflectTaskData = { noteId: null, text: "", error: "", saved: false };
 
 export function Notes() {
   const [notes, setNotes] = useState<Note[]>(loadNotes);
   const [openId, setOpenId] = useState<string | null>(null);
-  // 反思：对某条记录做推理审计。只保留「当前这条」的结果，避免一堆长文同时挂在页面上。
-  const [reflectId, setReflectId] = useState<string | null>(null);
-  const [reflectText, setReflectText] = useState("");
-  const [reflectErr, setReflectErr] = useState("");
-  const [reflecting, setReflecting] = useState(false);
-  const [reflectSaved, setReflectSaved] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
+  const reflectTask = useBackgroundTask<ReflectTaskData>(REFLECT_TASK_KEY, EMPTY_REFLECT);
+  const { noteId: reflectId, text: reflectText, saved: reflectSaved } = reflectTask.data;
+  const reflecting = reflectTask.status === "running";
+  const reflectErr = reflectTask.data.error || (reflectTask.status === "error" ? reflectTask.error || "" : "");
 
   async function runReflect(n: Note) {
-    abortRef.current?.abort();
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
-    setReflectId(n.id); setReflectText(""); setReflectErr(""); setReflectSaved(false); setReflecting(true);
-    try {
+    startBackgroundTask(REFLECT_TASK_KEY, { noteId: n.id, text: "", error: "", saved: false }, async (update, signal) => {
       await reflectStream(n.content, n.title, {
-        onDelta: (t) => setReflectText((s) => s + t),
-        onError: setReflectErr,
-      }, ctrl.signal);
-    } catch (e) {
-      if (!(e instanceof DOMException && e.name === "AbortError")) {
-        setReflectErr(e instanceof ApiError ? e.message : String(e));
-      }
-    } finally {
-      setReflecting(false);
-    }
+        onDelta: (t) => update((data) => ({ ...data, text: data.text + t })),
+        onError: (error) => update((data) => ({ ...data, error })),
+      }, signal);
+    });
   }
 
   function saveReflection(n: Note) {
     setNotes(addNote("反思审计", `反思 · ${n.title}`, reflectText));
-    setReflectSaved(true);
+    updateBackgroundTask(REFLECT_TASK_KEY, EMPTY_REFLECT, (data) => ({ ...data, saved: true }));
   }
 
   const fmt = (ts: number) => new Date(ts).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
@@ -135,7 +129,6 @@ export function Notes() {
         </div>
       )}
 
-      <Disclaimer />
     </div>
   );
 }

@@ -8,7 +8,6 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { EarningsSnapshot } from "@/components/ui/EarningsSnapshot";
-import { Disclaimer } from "@/components/ui/Disclaimer";
 import {
   api, ApiError, type Valuation, type Report, type NewsItem, type ValPercentile, type ValMetric,
   type Financials, type Announcement, type MarginRow, type BlockTradeRow, type HolderRow,
@@ -80,6 +79,11 @@ function ValBand({ label, m }: { label: string; m: ValMetric }) {
 
 export function StockData() {
   const [code, setCode] = useState("");
+  const initialCodeRef = useRef(
+    typeof window === "undefined"
+      ? ""
+      : new URLSearchParams(window.location.search).get("code")?.trim().toUpperCase() || "",
+  );
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // 自动提示
@@ -221,6 +225,15 @@ export function StockData() {
     }
   };
 
+  // 从板块核心环节点击企业进入时，直接带代码查询，不让用户再手输一次。
+  useEffect(() => {
+    const initialCode = initialCodeRef.current;
+    if (!initialCode) return;
+    initialCodeRef.current = "";
+    setCode(initialCode);
+    void run(initialCode);
+  }, []);
+
   const metrics = val ? [
     { k: "现价", v: fmt(val.price) },
     { k: "PE(TTM)", v: fmt(val.pe_ttm) },
@@ -257,6 +270,7 @@ export function StockData() {
         actions={(val || gstock) && (
           <AskAiButton
             context={gstock ? gAiContext : aiContext}
+            taskId={`stock:${gstock?.code || val?.code || code}`}
             label="让 AI 读这些数据"
             suggestions={gstock
               ? ["这家公司基本面怎么样", "盈利能力如何", "有什么风险"]
@@ -652,7 +666,6 @@ export function StockData() {
         </GlassCard>
       )}
 
-      <Disclaimer />
     </div>
   );
 }

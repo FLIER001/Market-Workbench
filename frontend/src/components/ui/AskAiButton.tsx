@@ -3,14 +3,15 @@ import { Link } from "react-router-dom";
 import { Sparkles, X, Settings, Send, Loader2, Wrench, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { hasLlm, chatStream, type ChatMsg } from "@/lib/llm";
-import { ApiError } from "@/lib/api";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
+import { backgroundTaskKey, startBackgroundTask, useBackgroundTask } from "@/lib/backgroundTasks";
 
 interface Props {
   // 本分栏/本页要喂给用户 AI 的上下文，作为对话的系统上下文。
   context: string;
   suggestions?: string[];
   label?: string;
+  taskId?: string;
 }
 
 const TOOL_LABEL: Record<string, string> = {
@@ -28,30 +29,26 @@ const argStr = (a: Record<string, unknown>): string => {
 };
 
 interface ToolUse { name: string; arg: string }
+interface AskTaskData { msgs: (ChatMsg & { tools?: ToolUse[] })[] }
 
 // 「问 AI」入口 —— 把当前分栏内容作为上下文，调用户自己配置的模型；
 // AI 可自行调 A股数据工具作答。结论由用户模型给出，本产品不校准、不负责。
-export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Props) {
+export function AskAiButton({ context, suggestions = [], label = "问 AI", taskId }: Props) {
   const [open, setOpen] = useState(false);
   const [configured, setConfigured] = useState(false);
-  const [msgs, setMsgs] = useState<(ChatMsg & { tools?: ToolUse[] })[]>([]);
   const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  // 在跑的流式请求：关面板/换问题时中止，省用户的订阅/API 额度，也防迟到 chunk 写进新气泡
-  const abortRef = useRef<AbortController | null>(null);
+  const taskKey = backgroundTaskKey("ask-ai", taskId || `${label}\n${context}`);
+  const task = useBackgroundTask<AskTaskData>(taskKey, { msgs: [] });
+  const msgs = task.data.msgs;
+  const loading = task.status === "running";
+  const err = task.status === "error" ? task.error : null;
 
   useEffect(() => {
     if (open) setConfigured(hasLlm());
   }, [open]);
 
-  useEffect(() => () => abortRef.current?.abort(), []); // 组件卸载兜底
-
   const close = () => {
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setLoading(false);
     setOpen(false);
   };
 
@@ -63,34 +60,27 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Pro
     const q = text.trim();
     if (!q || loading) return;
     setInput("");
-    setErr(null);
     const history: ChatMsg[] = [...msgs.map(({ role, content }) => ({ role, content })), { role: "user", content: q }];
-    // 先放用户气泡 + 一个空的 assistant 气泡，流式往里填。
-    setMsgs((m) => [...m, { role: "user", content: q }, { role: "assistant", content: "", tools: [] }]);
-    setLoading(true);
-    // 更新「最后一条 assistant 气泡」（不可变）。
-    const patchLast = (fn: (msg: ChatMsg & { tools?: ToolUse[] }) => ChatMsg & { tools?: ToolUse[] }) =>
-      setMsgs((m) => m.map((msg, i) => (i === m.length - 1 && msg.role === "assistant" ? fn(msg) : msg)));
-    abortRef.current?.abort();
-    const ac = new AbortController();
-    abortRef.current = ac;
-    // 只有仍是「当前这次请求」才允许写 UI——旧请求的迟到 chunk 直接丢弃
-    const alive = () => abortRef.current === ac && !ac.signal.aborted;
-    try {
-      await chatStream(history, context, {
-        onTool: (tool, args) => { if (alive()) patchLast((msg) => ({ ...msg, tools: [...(msg.tools || []), { name: tool, arg: argStr(args) }] })); },
-        onDelta: (t) => { if (alive()) patchLast((msg) => ({ ...msg, content: msg.content + t })); },
-      }, ac.signal);
-    } catch (e) {
-      // 出错/中止：去掉尾部空 assistant 气泡；主动中止不算错误，不提示
-      setMsgs((m) => m.filter((msg, i) => !(i === m.length - 1 && msg.role === "assistant" && !msg.content)));
-      if (!ac.signal.aborted) setErr(e instanceof ApiError ? e.message : "对话失败");
-    } finally {
-      if (abortRef.current === ac) {
-        abortRef.current = null;
-        setLoading(false);
+    const initial: AskTaskData = {
+      msgs: [...msgs, { role: "user", content: q }, { role: "assistant", content: "", tools: [] }],
+    };
+    startBackgroundTask(taskKey, initial, async (update, signal) => {
+      const patchLast = (fn: (msg: ChatMsg & { tools?: ToolUse[] }) => ChatMsg & { tools?: ToolUse[] }) =>
+        update((data) => ({
+          msgs: data.msgs.map((msg, i) => (i === data.msgs.length - 1 && msg.role === "assistant" ? fn(msg) : msg)),
+        }));
+      try {
+        await chatStream(history, context, {
+          onTool: (tool, args) => patchLast((msg) => ({ ...msg, tools: [...(msg.tools || []), { name: tool, arg: argStr(args) }] })),
+          onDelta: (t) => patchLast((msg) => ({ ...msg, content: msg.content + t })),
+        }, signal);
+      } catch (e) {
+        update((data) => ({
+          msgs: data.msgs.filter((msg, i) => !(i === data.msgs.length - 1 && msg.role === "assistant" && !msg.content)),
+        }));
+        throw e;
       }
-    }
+    });
   };
 
   return (
@@ -99,8 +89,8 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI" }: Pro
         onClick={() => setOpen(true)}
         className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary shadow-glow transition-colors hover:bg-primary/25"
       >
-        <Sparkles className="h-4 w-4" />
-        {label}
+        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+        {loading ? "AI 处理中…" : label}
       </button>
 
       {open && (

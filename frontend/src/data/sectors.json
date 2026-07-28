@@ -1,5 +1,5 @@
 {
-  "_comment": "板块·环节骨架（开源版单一来源）。零具体标的：nodes 只有产业链环节名。verified=true 者环节已核实（来自做透的板块）；false 者为占位，待实时核实补全（禁止靠模型记忆编）。用户可在本地 my-watchlist.json 挂自己的标的，不进仓库。",
+  "_comment": "板块入口骨架。产业链节点、代表企业、事件观察点与政策证据见 sectorResearch.ts；企业仅作产业链位置研究入口，不是推荐清单。",
   "indices": {
     "aShare": ["上证指数", "深证成指", "创业板指", "沪深300"],
     "us": ["道琼斯", "纳斯达克", "标普500"]
@@ -37,6 +37,7 @@
     { "key": "ai-application", "label": "AI 应用", "tagline": "大模型落地的应用与 Agent", "hot": true, "verified": false, "nodes": [] },
     { "key": "ai-hardware", "label": "AI 硬件", "tagline": "端侧、AI 眼镜与消费终端", "hot": true, "verified": false, "nodes": [] },
     { "key": "energy-storage", "label": "储能", "tagline": "电化学储能与电网侧调峰", "hot": false, "verified": false, "nodes": [] },
-    { "key": "data-element", "label": "数据要素", "tagline": "数据确权、交易与流通基建", "hot": false, "verified": false, "nodes": [] }
+    { "key": "data-element", "label": "数据要素", "tagline": "数据确权、交易与流通基建", "hot": false, "verified": false, "nodes": [] },
+    { "key": "gaming", "label": "游戏与内容", "tagline": "研发、发行、出海与内容生态", "hot": true, "verified": false, "nodes": [] }
   ]
 }

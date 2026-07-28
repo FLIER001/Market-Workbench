@@ -7,12 +7,12 @@ import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
-import { Disclaimer } from "@/components/ui/Disclaimer";
-import { api, ApiError, type IndexQuote, type Quote, type MarketOverview, type ShortTermEmotion, type TurnoverTop, type GlobalIndex, type SearchResult } from "@/lib/api";
+import { api, type IndexQuote, type Quote, type MarketOverview, type ShortTermEmotion, type TurnoverTop, type GlobalIndex, type SearchResult } from "@/lib/api";
 import { hasLlm, chatStream } from "@/lib/llm";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import { loadWatch, saveWatch, addCodes } from "@/lib/watchlist";
 import { cn } from "@/lib/utils";
+import { startBackgroundTask, useBackgroundTask } from "@/lib/backgroundTasks";
 
 // A股红涨绿跌。全球市场（美股/港股指数）**也沿用红涨**——与整个看板及东财等中国平台一致，
 // 对中国用户最不易看错（Simon 2026-07-05 确认；非国际绿涨惯例，是有意选择，勿改）。
@@ -23,10 +23,12 @@ const yi = (v: number | null) => (v == null ? "—" : `${fmt(v / 1e8)} 亿`); //
 export function DailyReview() {
   const [indices, setIndices] = useState<IndexQuote[]>([]);
   const [idxErr, setIdxErr] = useState(false);
-  const [review, setReview] = useState("");
-  const [reviewLoading, setReviewLoading] = useState(false);
-  const [reviewErr, setReviewErr] = useState<string | null>(null);
   const [needConfig, setNeedConfig] = useState(false);
+  const reviewKey = `daily-review:${new Date().toISOString().slice(0, 10)}`;
+  const reviewTask = useBackgroundTask<{ text: string }>(reviewKey, { text: "" });
+  const review = reviewTask.data.text;
+  const reviewLoading = reviewTask.status === "running";
+  const reviewErr = reviewTask.status === "error" ? reviewTask.error : null;
   const [overview, setOverview] = useState<MarketOverview | null>(null);
   const [emotion, setEmotion] = useState<ShortTermEmotion | null>(null);
   const [turnover, setTurnover] = useState<TurnoverTop | null>(null);
@@ -146,24 +148,17 @@ export function DailyReview() {
     : "（指数数据未取到）";
 
   const runReview = async () => {
-    setReviewErr(null);
     setNeedConfig(false);
     if (!hasLlm()) { setNeedConfig(true); return; }
-    setReviewLoading(true);
-    setReview("");
     const prompt =
       `以下是今天 A 股大盘的客观数据：\n${dataSummary}\n\n` +
       "请用中文做一段当天大盘复盘：整体涨跌、主要指数表现、盘面值得注意的点。" +
       "只做客观陈述与多视角分析，不预测涨跌、不推荐任何标的、不构成投资建议。";
-    try {
+    startBackgroundTask(reviewKey, { text: "" }, async (update, signal) => {
       await chatStream([{ role: "user", content: prompt }], `今日大盘数据：${dataSummary}`, {
-        onDelta: (t) => setReview((r) => r + t),
-      });
-    } catch (e) {
-      setReviewErr(e instanceof ApiError ? e.message : "复盘失败");
-    } finally {
-      setReviewLoading(false);
-    }
+        onDelta: (t) => update((data) => ({ text: data.text + t })),
+      }, signal);
+    });
   };
 
   const sentiment = overview?.sentiment;
@@ -187,6 +182,7 @@ export function DailyReview() {
         actions={
           <AskAiButton
             context={`今日大盘数据：${dataSummary}`}
+            taskId={reviewKey}
             label="问 AI"
             suggestions={["今天大盘怎么走", "哪些指数领涨领跌", "盘面有什么值得注意"]}
           />
@@ -568,7 +564,6 @@ export function DailyReview() {
         ))}
       </div>
 
-      <Disclaimer />
     </div>
   );
 }
