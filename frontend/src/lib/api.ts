@@ -121,6 +121,24 @@ export interface Financials {
   gross_margin: string | null; net_margin: string | null; op_cf_ps: string | null;
 }
 
+export interface KLineRow {
+  date: string;
+  open: number;
+  close: number;
+  high: number;
+  low: number;
+  volume: number;
+}
+
+export interface KLineData {
+  code: string;
+  period: "day" | "week" | "month";
+  adjustment: string;
+  source: string;
+  as_of: string | null;
+  rows: KLineRow[];
+}
+
 export interface NewsItem {
   新闻标题?: string; 发布时间?: string; 文章来源?: string; 新闻链接?: string;
 }
@@ -253,6 +271,16 @@ export interface SectorScoresData {
   schema_version: number;
   as_of: string;
   current_frequency: "daily" | "monthly";
+  current_source?: "tencent_constituent_aggregate" | "sws_daily_fallback" | "sws_monthly_fallback";
+  current_source_label?: string;
+  quote_time?: string | null;
+  classification_as_of?: string | null;
+  official_anchor_as_of?: string | null;
+  component_count?: number | null;
+  quoted_component_count?: number | null;
+  coverage_pct?: number | null;
+  calculation_method?: string | null;
+  is_intraday?: boolean;
   monthly_as_of: string;
   daily_history_samples: number;
   daily_error?: string | null;
@@ -263,6 +291,8 @@ export interface SectorScoresData {
   generated_at: string;
   stale: boolean;
   refresh_error?: string;
+  aggregate_error?: string | null;
+  classification_error?: string | null;
   industries: SectorScoreRow[];
   methodology: {
     classification: string;
@@ -317,6 +347,8 @@ export const api = {
     request<PortfolioData>("/portfolio/close", "POST", { code, date, price, shares, cost }),
   removeClosed: (index: number) => request<PortfolioData>(`/portfolio/close?index=${index}`, "DELETE"),
   valuation: (code: string) => get<Valuation>(`/valuation?code=${code}`),
+  kline: (code: string, period: KLineData["period"], count = 250) =>
+    get<KLineData>(`/kline/chart?code=${encodeURIComponent(code)}&period=${period}&count=${count}`),
   percentile: (code: string) => get<ValPercentile>(`/valuation/percentile?code=${code}`),
   financials: (code: string) => get<Financials>(`/financials?code=${code}`),
   announcements: (code: string) => get<Announcement[]>(`/announcements?code=${code}`),
@@ -334,6 +366,7 @@ export const api = {
   hotConcepts: (code: string) => get<HotConcept[]>(`/hot-concepts?code=${code}`),
   investorQa: (code: string) => get<QaRow[]>(`/investor-qa?code=${code}`),
   industry: (top = 20) => get<IndustryData>(`/industry?top=${top}`),
+  sectorScoresCache: () => get<SectorScoresData | null>("/sector-scores/cache"),
   sectorScores: (refresh = false) =>
     get<SectorScoresData>(`/sector-scores${refresh ? "?refresh=true" : ""}`),
   search: (q: string) => get<SearchResult[]>(`/search?q=${encodeURIComponent(q)}`),

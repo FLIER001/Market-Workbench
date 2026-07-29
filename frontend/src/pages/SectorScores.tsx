@@ -14,6 +14,24 @@ import { api, type SectorScoreRow, type SectorScoresData } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type SortKey = "score" | "valuation" | "prosperity" | "attention" | "crowding";
+const LOCAL_CACHE_KEY = "vr-sector-scores-cache-v1";
+
+const loadLocalCache = (): SectorScoresData | null => {
+  try {
+    const cached = JSON.parse(localStorage.getItem(LOCAL_CACHE_KEY) || "null");
+    return cached?.industries?.length > 0 ? cached as SectorScoresData : null;
+  } catch {
+    return null;
+  }
+};
+
+const saveLocalCache = (data: SectorScoresData) => {
+  try {
+    localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(data));
+  } catch {
+    /* 浏览器存储不可用时仍可使用本次会话结果 */
+  }
+};
 
 const scoreValue = (row: SectorScoreRow, key: SortKey) => {
   if (key === "score") return row.score;
@@ -30,6 +48,11 @@ const signed = (value: number | null | undefined, suffix: string) =>
   value == null || !Number.isFinite(value)
     ? "—"
     : `${value > 0 ? "+" : ""}${value.toFixed(1)}${suffix}`;
+
+const shortDate = (value: string) => {
+  const parts = value.split("-");
+  return parts.length === 3 ? `${Number(parts[1])}月${Number(parts[2])}日` : value;
+};
 
 const changeTone = (value: number | null | undefined) =>
   value == null ? "text-muted-foreground" : value > 0 ? "text-danger" : value < 0 ? "text-success" : "text-muted-foreground";
@@ -82,7 +105,7 @@ function MetricCard({
 }
 
 export function SectorScores() {
-  const [data, setData] = useState<SectorScoresData | null>(null);
+  const [data, setData] = useState<SectorScoresData | null>(loadLocalCache);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -93,7 +116,9 @@ export function SectorScores() {
     setLoading(true);
     setError(null);
     try {
-      setData(await api.sectorScores(refresh));
+      const next = await api.sectorScores(refresh);
+      setData(next);
+      saveLocalCache(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : "板块评分加载失败");
     } finally {
@@ -102,7 +127,27 @@ export function SectorScores() {
   }, []);
 
   useEffect(() => {
-    void load(false);
+    let cancelled = false;
+    const start = async () => {
+      if (!data) {
+        try {
+          const cached = await api.sectorScoresCache();
+          if (!cancelled && cached) {
+            setData(cached);
+            saveLocalCache(cached);
+          }
+        } catch {
+          /* 没有后端缓存时继续进行正常首次计算 */
+        }
+      }
+      if (!cancelled) await load(false);
+    };
+    void start();
+    return () => {
+      cancelled = true;
+    };
+    // 仅在页面首次进入时执行；data 是启动瞬间的缓存快照。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [load]);
 
   const phases = useMemo(() => {
@@ -170,6 +215,12 @@ export function SectorScores() {
         </GlassCard>
       ) : data ? (
         <>
+          {loading && (
+            <div className="mb-3 flex items-center gap-2 rounded-lg border border-primary/25 bg-primary/10 px-3 py-2 text-xs text-primary">
+              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+              正在后台读取最新数据，当前先显示缓存；完成后会自动更新。
+            </div>
+          )}
           {(data.stale || data.refresh_error) && (
             <div className="mb-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
               当前展示上次成功缓存；本次刷新失败：{data.refresh_error || "数据源暂不可用"}
@@ -180,13 +231,41 @@ export function SectorScores() {
               最新日频数据暂不可用，当前退回月报口径：{data.daily_error || "日频数据源未返回完整样本"}
             </div>
           )}
+          <div className="mb-3 rounded-lg border border-primary/25 bg-primary/10 px-3 py-2.5 text-xs">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="font-semibold text-primary">
+                数据截至 {shortDate(data.as_of)}{data.quote_time ? ` ${data.quote_time}` : ""}
+              </span>
+              <span>{data.current_source_label || "申万数据"}</span>
+              {data.is_intraday && <span className="rounded bg-warning/15 px-1.5 py-0.5 text-warning">盘中动态值</span>}
+              {data.coverage_pct != null && (
+                <span className="text-muted-foreground">
+                  成分行情覆盖 {data.quoted_component_count}/{data.component_count}（{format(data.coverage_pct, "%")}）
+                </span>
+              )}
+            </div>
+            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+              {data.calculation_method || data.methodology.frequency}
+              {data.classification_as_of && ` · 申万分类更新 ${data.classification_as_of}`}
+            </p>
+          </div>
+          {data.is_intraday && (
+            <div className="mb-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+              当前为盘中快照，成交与换手尚未形成完整交易日，资本活跃和综合评分会随行情继续变化；收盘后重新计算得到完整日值。
+            </div>
+          )}
+          {data.current_source !== "tencent_constituent_aggregate" && data.aggregate_error && (
+            <div className="mb-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+              腾讯成分聚合暂不可用，已回退申万备用源：{data.aggregate_error}
+            </div>
+          )}
 
           <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
             <MetricCard
               icon={Gauge}
               label="评分覆盖"
               value={`${data.industries.length} 个申万一级行业`}
-              note={`${data.current_frequency === "daily" ? "最新交易日" : "月报截止"} ${data.as_of}`}
+              note={`${data.is_intraday ? "盘中" : data.current_frequency === "daily" ? "交易日" : "月报"} ${data.as_of}${data.quote_time ? ` ${data.quote_time}` : ""}`}
             />
             <MetricCard
               icon={BookOpen}
@@ -198,7 +277,7 @@ export function SectorScores() {
                   : `${data.history_start} 至 ${data.monthly_as_of}`
               }
             />
-            <MetricCard icon={TrendingUp} label="景气权重" value={`${data.methodology.weights.prosperity}%`} note="12 月变化 70% + 3 月变化 30%" />
+            <MetricCard icon={TrendingUp} label="景气权重" value={`${data.methodology.weights.prosperity}%`} note="较12个月前 70% + 较3个月前 30%" />
             <MetricCard
               icon={CircleDollarSign}
               label="估值 / 活跃"
@@ -258,7 +337,7 @@ export function SectorScores() {
                           <div className="flex items-center gap-1.5 text-[10px]">
                             <span className="font-mono text-muted-foreground/60">{row.code}</span>
                             <span className={changeTone(row.latest_return)}>
-                              {data.current_frequency === "daily" ? "日" : "月"} {signed(row.latest_return, "%")}
+                              {shortDate(data.as_of)} {signed(row.latest_return, "%")}
                             </span>
                           </div>
                         </td>
@@ -278,8 +357,8 @@ export function SectorScores() {
                         <td className="px-3 py-2.5">
                           <ScoreBar value={row.prosperity.score} />
                           <div className="mt-1 whitespace-nowrap text-[10px] text-muted-foreground">
-                            3月 <span className={changeTone(row.prosperity.earnings_3m)}>{signed(row.prosperity.earnings_3m, "%")}</span>
-                            {" · "}12月 <span className={changeTone(row.prosperity.earnings_yoy)}>{signed(row.prosperity.earnings_yoy, "%")}</span>
+                            较3个月前 <span className={changeTone(row.prosperity.earnings_3m)}>{signed(row.prosperity.earnings_3m, "%")}</span>
+                            {" · "}较12个月前 <span className={changeTone(row.prosperity.earnings_yoy)}>{signed(row.prosperity.earnings_yoy, "%")}</span>
                           </div>
                         </td>
                         <td className="px-3 py-2.5">

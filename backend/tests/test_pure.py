@@ -33,8 +33,11 @@ def _gtimg_line(**overrides) -> str:
     parts = ["0"] * 55
     parts[1] = overrides.get("name", "贵州茅台")
     parts[3] = overrides.get("price", "1194.45")
+    parts[30] = overrides.get("quote_stamp", "20260729100530")
+    parts[36] = overrides.get("volume_lot", "12345")
     parts[39] = overrides.get("pe_ttm", "18.05")
-    parts[44] = overrides.get("mcap", "15000")
+    parts[44] = overrides.get("float_mcap", "12000")
+    parts[45] = overrides.get("mcap", "15000")
     parts[46] = overrides.get("pb", "6.41")
     return 'v_sh600519="' + "~".join(parts) + '";'
 
@@ -45,12 +48,43 @@ def test_parse_gtimg():
     q = out["600519"]
     assert q["name"] == "贵州茅台"
     assert q["price"] == 1194.45
+    assert q["quote_date"] == "2026-07-29"
+    assert q["quote_time"] == "10:05:30"
+    assert q["volume_lot"] == 12345
     assert q["pe_ttm"] == 18.05
     assert q["pb"] == 6.41
     assert q["mcap_yi"] == 15000
+    assert q["float_mcap_yi"] == 12000
 
 
 def test_parse_gtimg_bad_line_ignored():
     # 字段不足 / 无引号的行应被安全跳过，不抛异常。
     assert astock._parse_gtimg("garbage;no_quotes_here;") == {}
     assert astock._parse_gtimg("") == {}
+
+
+def test_parse_tencent_kline_skips_bad_rows():
+    payload = {
+        "data": {
+            "sh600519": {
+                "qfqday": [
+                    ["2026-07-28", "1299.00", "1320.00", "1320.00", "1289.52", "53135"],
+                    ["bad"],
+                    ["2026-07-29", "1333.83", "1334.01", "1343.48", "1312.06", "41492"],
+                ],
+            },
+        },
+    }
+
+    rows = astock._parse_tencent_kline(payload, "sh600519", "day")
+
+    assert len(rows) == 2
+    assert rows[0] == {
+        "date": "2026-07-28",
+        "open": 1299.0,
+        "close": 1320.0,
+        "high": 1320.0,
+        "low": 1289.52,
+        "volume": 53135.0,
+    }
+    assert rows[-1]["close"] == 1334.01

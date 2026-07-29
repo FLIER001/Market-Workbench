@@ -11,7 +11,7 @@ python3 -m venv .venv
 ```
 
 > 行情 + 研报只需 `fastapi / uvicorn / requests`（秒装、必可用）。
-> 一致预期 / 新闻 / 公告需 `akshare`，K线 / 财务需 `mootdx`；未装时对应端点返回 501 + 安装提示，不影响其余功能。
+> 一致预期 / 新闻 / 公告需 `akshare`，财务及旧版原始 K 线接口需 `mootdx`；图表 K 线默认使用腾讯前复权数据，主源失败时才降级到 `mootdx`。
 
 ## 1. HTTP API（给网页前端 + 系统 AI）
 
@@ -31,11 +31,12 @@ python3 -m venv .venv
 | `GET /api/announcements?code=600519` | 近期公告（东财） | requests |
 | `GET /api/news?code=600519` | 个股新闻 | akshare |
 | `GET /api/kline?code=600519` | K线 | mootdx |
+| `GET /api/kline/chart?code=600519&period=day&count=250` | 图表 OHLCV（日/周/月，前复权主源） | 腾讯 / mootdx 备用 |
 | — | *（AI 工具层走腾讯 K 线，mootdx 仅作备份：mootdx 是 TCP 7709，部分网络连不通要等十几秒超时）* | — |
 | `GET /api/finance?code=600519` | 季报财务快照（mootdx，前端未用 / 备用） | mootdx |
 | **资金面·筹码·信号（v3.3）** | `/api/margin` · `/block-trade` · `/holders` · `/dividend` · `/fund-flow` · `/dragon-tiger` · `/lockup` · `/blocks` · `/hot-concepts` · `/investor-qa` · `/industry` | requests |
 | `GET /api/market/overview` · `/api/radar` | 市场情绪+板块资金 · 资讯雷达 | akshare / stdlib |
-| `GET /api/sector-scores` | 申万一级行业每日评分：最新交易日状态 + 月度历史锚 | 申万宏源研究指数分析 |
+| `GET /api/sector-scores` | 申万一级行业评分：申万成分分类 × 腾讯个股行情聚合当前值 + 申万月度历史锚；申万日频备用 | 申万宏源研究、腾讯财经 |
 | `POST /api/chat` | 系统 AI 对话（function calling，AI 自己调数据工具） | requests |
 | `POST /api/debate` | **多空辩论**（多 agent，流式 NDJSON）：事实底稿 → 多方 / 空方 →（可选反驳）→ 中立主持 | requests |
 | `POST /api/reflect` | **反思审计**（流式 NDJSON）：对一段已写好的分析做推理审计 | requests |

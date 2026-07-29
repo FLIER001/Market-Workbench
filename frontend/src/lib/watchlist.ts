@@ -6,6 +6,8 @@ const STORAGE_KEYS: Record<WatchCollection, { flat: string; groups: string }> = 
   stock: { flat: "vr-watchlist", groups: "vr-watchlist-groups" },
   etf: { flat: "vr-etf-watchlist", groups: "vr-etf-watchlist-groups" },
 };
+const STOCK_NOTES_KEY = "vr-watchlist-notes";
+export const WATCH_NOTE_MAX_LENGTH = 120;
 export const DEFAULT_WATCH_GROUP_ID = "default";
 
 export interface WatchGroup {
@@ -13,6 +15,8 @@ export interface WatchGroup {
   name: string;
   codes: string[];
 }
+
+export type WatchNotes = Record<string, string>;
 
 const validCodes = (value: unknown): string[] =>
   Array.isArray(value)
@@ -111,6 +115,29 @@ export function saveWatch(codes: string[], collection: WatchCollection = "stock"
     if (!assigned.has(code)) defaultGroup.codes.push(code);
   }
   saveWatchGroups(groups, collection);
+}
+
+export function loadWatchNotes(): WatchNotes {
+  try {
+    const payload = JSON.parse(localStorage.getItem(STOCK_NOTES_KEY) || "{}");
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return {};
+    return Object.fromEntries(
+      Object.entries(payload)
+        .filter(([code, note]) => /^\d{6}$/.test(code) && typeof note === "string")
+        .map(([code, note]) => [code, (note as string).trim().slice(0, WATCH_NOTE_MAX_LENGTH)])
+        .filter(([, note]) => note.length > 0),
+    );
+  } catch {
+    return {};
+  }
+}
+
+export function saveWatchNotes(notes: WatchNotes) {
+  try {
+    localStorage.setItem(STOCK_NOTES_KEY, JSON.stringify(notes));
+  } catch {
+    /* 存储不可用时，本次页面状态仍可继续使用 */
+  }
 }
 
 // 从任意文本里抽取 6 位 A 股代码（逗号 / 空格 / 换行 / 顿号分隔都行，方便一次粘贴一串）。

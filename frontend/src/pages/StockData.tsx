@@ -1,8 +1,8 @@
-import { useRef, useState, useEffect } from "react";
+import { lazy, Suspense, useRef, useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import {
   Search, FileText, Newspaper, Loader2, AlertCircle, LineChart, BarChart3, Megaphone,
-  Wallet, Trophy, CalendarClock, Boxes, MessageSquare,
+  Wallet, Trophy, CalendarClock, Boxes, MessageSquare, Star, Check,
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -14,7 +14,16 @@ import {
   type DividendRow, type FundFlowRow, type DragonTiger, type Lockup, type Blocks, type HotConcept, type QaRow,
   type GlobalStock, type SearchResult,
 } from "@/lib/api";
+import {
+  assignCodesToGroup,
+  DEFAULT_WATCH_GROUP_ID,
+  flattenWatchGroups,
+  loadWatchGroups,
+  saveWatchGroups,
+} from "@/lib/watchlist";
 import { cn } from "@/lib/utils";
+
+const StockKLineChart = lazy(() => import("@/components/ui/StockKLineChart"));
 
 // 金额格式化（后端资金单位：元 / 万元）
 const yi = (v: number) => `${(v / 1e8).toFixed(2)} 亿`;
@@ -113,7 +122,24 @@ export function StockData() {
   const [hotCon, setHotCon] = useState<HotConcept[]>([]);
   const [qa, setQa] = useState<QaRow[]>([]);
   const [gstock, setGStock] = useState<GlobalStock | null>(null);  // 美股 / 港股
+  const [inWatchlist, setInWatchlist] = useState(false);
   const runIdRef = useRef(0);
+
+  useEffect(() => {
+    if (!val?.code) {
+      setInWatchlist(false);
+      return;
+    }
+    setInWatchlist(flattenWatchGroups(loadWatchGroups("stock")).includes(val.code));
+  }, [val?.code]);
+
+  const addToWatchlist = () => {
+    if (!val || inWatchlist) return;
+    const groups = loadWatchGroups("stock");
+    const result = assignCodesToGroup(groups, DEFAULT_WATCH_GROUP_ID, val.code);
+    saveWatchGroups(result.next, "stock");
+    setInWatchlist(true);
+  };
 
   // 自动搜索（debounce 300ms）
   useEffect(() => {
@@ -268,14 +294,32 @@ export function StockData() {
         title="个股数据"
         subtitle="行情 · 估值 · 研报 · 新闻 —— 客观数据配齐，判断交给你的 AI"
         actions={(val || gstock) && (
-          <AskAiButton
-            context={gstock ? gAiContext : aiContext}
-            taskId={`stock:${gstock?.code || val?.code || code}`}
-            label="让 AI 读这些数据"
-            suggestions={gstock
-              ? ["这家公司基本面怎么样", "盈利能力如何", "有什么风险"]
-              : ["这个估值贵不贵", "机构一致预期怎么看", "近期研报的分歧点", "有什么风险"]}
-          />
+          <div className="flex items-center gap-2">
+            {val && (
+              <button
+                onClick={addToWatchlist}
+                disabled={inWatchlist}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs transition-colors",
+                  inWatchlist
+                    ? "border-primary/30 bg-primary/10 text-primary"
+                    : "border-border/60 text-muted-foreground hover:border-primary/40 hover:text-primary",
+                )}
+                title={inWatchlist ? "这只股票已在自选股中" : "添加到自选股的未分组"}
+              >
+                {inWatchlist ? <Check className="h-3.5 w-3.5" /> : <Star className="h-3.5 w-3.5" />}
+                {inWatchlist ? "已在自选" : "添加自选"}
+              </button>
+            )}
+            <AskAiButton
+              context={gstock ? gAiContext : aiContext}
+              taskId={`stock:${gstock?.code || val?.code || code}`}
+              label="让 AI 读这些数据"
+              suggestions={gstock
+                ? ["这家公司基本面怎么样", "盈利能力如何", "有什么风险"]
+                : ["这个估值贵不贵", "机构一致预期怎么看", "近期研报的分歧点", "有什么风险"]}
+            />
+          </div>
         )}
       />
 
@@ -427,6 +471,16 @@ export function StockData() {
               <p className="mt-3 text-xs text-warning">{val.forecast_note}</p>
             )}
           </GlassCard>
+
+          <Suspense
+            fallback={
+              <GlassCard className="mb-4 flex h-[180px] items-center justify-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin text-primary" /> 正在加载图表组件…
+              </GlassCard>
+            }
+          >
+            <StockKLineChart code={val.code} name={val.name} />
+          </Suspense>
 
           {/* 财报速览（结论先行摘要，借鉴 equity-research 的结构纪律，剔除评级/目标价） */}
           <EarningsSnapshot val={val} fin={fin} pctl={pctl} />

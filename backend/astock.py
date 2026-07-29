@@ -11,11 +11,13 @@
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import random
 import re
 import time
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -64,21 +66,36 @@ def _parse_gtimg(data: str) -> dict[str, dict]:
             except (ValueError, IndexError):
                 return 0.0
 
+        quote_stamp = vals[30].strip() if len(vals) > 30 else ""
+        quote_date = (
+            f"{quote_stamp[:4]}-{quote_stamp[4:6]}-{quote_stamp[6:8]}"
+            if len(quote_stamp) >= 8 and quote_stamp[:8].isdigit()
+            else ""
+        )
+        quote_time = (
+            f"{quote_stamp[8:10]}:{quote_stamp[10:12]}:{quote_stamp[12:14]}"
+            if len(quote_stamp) >= 14 and quote_stamp[:14].isdigit()
+            else ""
+        )
         result[code] = {
             "name": vals[1],
             "price": num(3),
             "last_close": num(4),
             "open": num(5),
+            "quote_date": quote_date,
+            "quote_time": quote_time,
             "change_amt": num(31),
             "change_pct": num(32),
             "high": num(33),
             "low": num(34),
+            "volume_lot": num(36),
             "amount_wan": num(37),
             "turnover_pct": num(38),
             "pe_ttm": num(39),
             "amplitude_pct": num(43),
-            "mcap_yi": num(44),
-            "float_mcap_yi": num(45),
+            # 腾讯字段 44=流通市值、45=总市值；单位均为亿元。
+            "float_mcap_yi": num(44),
+            "mcap_yi": num(45),
             "pb": num(46),
             "limit_up": num(47),
             "limit_down": num(48),
@@ -265,6 +282,90 @@ def kline(code: str, category: int = 4, offset: int = 60) -> list[dict]:
     client = _mootdx_client()
     df = client.bars(symbol=code, category=category, offset=offset)
     return df.to_dict("records") if df is not None and not df.empty else []
+
+
+_TENCENT_KLINE = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+
+
+def _parse_tencent_kline(payload: dict, symbol: str, period: str) -> list[dict]:
+    data = (payload.get("data") or {}).get(symbol) or {}
+    raw = data.get(f"qfq{period}") or data.get(period) or []
+    rows: list[dict] = []
+    for item in raw:
+        if not isinstance(item, list) or len(item) < 6:
+            continue
+        try:
+            rows.append({
+                "date": str(item[0])[:10],
+                "open": float(item[1]),
+                "close": float(item[2]),
+                "high": float(item[3]),
+                "low": float(item[4]),
+                "volume": float(item[5]),
+            })
+        except (TypeError, ValueError):
+            continue
+    return rows
+
+
+def tencent_kline(code: str, period: str = "day", count: int = 250) -> list[dict]:
+    """腾讯前复权 K 线；HTTP、零鉴权，作为页面图表主源。"""
+    if period not in {"day", "week", "month"}:
+        raise ValueError("period 必须是 day/week/month")
+    symbol = f"{get_prefix(code)}{code}"
+    query = urllib.parse.urlencode({"param": f"{symbol},{period},,,{count},qfq"})
+    request = urllib.request.Request(
+        f"{_TENCENT_KLINE}?{query}",
+        headers={"User-Agent": UA, "Referer": "https://gu.qq.com/"},
+    )
+    with urllib.request.urlopen(request, timeout=12) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return _parse_tencent_kline(payload, symbol, period)
+
+
+def chart_kline(code: str, period: str = "day", count: int = 250) -> dict:
+    """供前端绘图的标准 OHLCV：腾讯前复权主源，mootdx 不复权备用。"""
+    rows: list[dict] = []
+    source = "腾讯财经"
+    adjustment = "前复权"
+    try:
+        rows = tencent_kline(code, period=period, count=count)
+    except Exception:  # noqa: BLE001 — 主源失败后按既定顺序降级
+        rows = []
+
+    if not rows:
+        category = {"day": 4, "week": 5, "month": 6}[period]
+        raw = kline(code, category=category, offset=count)
+        source = "通达信"
+        adjustment = "不复权"
+        for item in raw:
+            raw_date = item.get("date") or item.get("datetime")
+            if hasattr(raw_date, "strftime"):
+                raw_date = raw_date.strftime("%Y-%m-%d")
+            try:
+                rows.append({
+                    "date": str(raw_date)[:10],
+                    "open": float(item["open"]),
+                    "close": float(item["close"]),
+                    "high": float(item["high"]),
+                    "low": float(item["low"]),
+                    "volume": float(item.get("volume") or item.get("vol") or 0),
+                })
+            except (KeyError, TypeError, ValueError):
+                continue
+
+    rows = sorted(
+        {row["date"]: row for row in rows if row.get("date")}.values(),
+        key=lambda row: row["date"],
+    )[-count:]
+    return {
+        "code": code,
+        "period": period,
+        "adjustment": adjustment,
+        "source": source,
+        "as_of": rows[-1]["date"] if rows else None,
+        "rows": rows,
+    }
 
 
 def finance(code: str) -> dict:

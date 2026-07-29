@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   Check,
   FolderPlus,
   GripVertical,
+  NotebookPen,
   Pencil,
   Plus,
   RefreshCw,
@@ -20,10 +22,14 @@ import {
   flattenWatchGroups,
   isEtfCode,
   loadWatchGroups,
+  loadWatchNotes,
   parseCodes,
   saveWatchGroups,
+  saveWatchNotes,
+  WATCH_NOTE_MAX_LENGTH,
   type WatchCollection,
   type WatchGroup,
+  type WatchNotes,
 } from "@/lib/watchlist";
 import { useLiveQuotes, isTradingHours } from "@/hooks/useLiveQuotes";
 import { cn } from "@/lib/utils";
@@ -72,6 +78,9 @@ export function Watchlist() {
   const [draggingGroupId, setDraggingGroupId] = useState<string | null>(null);
   const [dragOverGroupId, setDragOverGroupId] = useState<string | null>(null);
   const [live, setLive] = useState(loadLive);
+  const [stockNotes, setStockNotes] = useState<WatchNotes>(loadWatchNotes);
+  const [openNoteCode, setOpenNoteCode] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState("");
 
   const groups = collection === "stock" ? stockGroups : etfGroups;
   const stockCount = useMemo(() => flattenWatchGroups(stockGroups).length, [stockGroups]);
@@ -104,6 +113,8 @@ export function Watchlist() {
     setDragOverGroupId(null);
     setInput("");
     setHint(null);
+    setOpenNoteCode(null);
+    setNoteDraft("");
   };
 
   const selectGroup = (id: string) => {
@@ -211,6 +222,38 @@ export function Watchlist() {
       ...group,
       codes: group.codes.filter((item) => item !== code),
     })));
+    if (collection === "stock" && stockNotes[code]) {
+      const nextNotes = { ...stockNotes };
+      delete nextNotes[code];
+      setStockNotes(nextNotes);
+      saveWatchNotes(nextNotes);
+    }
+    if (openNoteCode === code) {
+      setOpenNoteCode(null);
+      setNoteDraft("");
+    }
+  };
+
+  const toggleNote = (code: string) => {
+    if (openNoteCode === code) {
+      setOpenNoteCode(null);
+      setNoteDraft("");
+      return;
+    }
+    setOpenNoteCode(code);
+    setNoteDraft(stockNotes[code] || "");
+  };
+
+  const persistNote = (code: string) => {
+    const note = noteDraft.trim().slice(0, WATCH_NOTE_MAX_LENGTH);
+    const nextNotes = { ...stockNotes };
+    if (note) nextNotes[code] = note;
+    else delete nextNotes[code];
+    setStockNotes(nextNotes);
+    saveWatchNotes(nextNotes);
+    setOpenNoteCode(null);
+    setNoteDraft("");
+    setHint(note ? "备注已保存" : "备注已清除");
   };
 
   const toggleLive = () => {
@@ -228,13 +271,15 @@ export function Watchlist() {
     return `我的分组${itemLabel}（本地）：\n` + populated.map((group) => {
       const rows = group.codes.map((code) => {
         const quote = quotes[code];
-        return quote
+        const row = quote
           ? `${quote.name}(${code}) 现价${quote.price} ${pct(quote.change_pct)} PE(TTM)${quote.pe_ttm ?? "—"} 换手${quote.turnover_pct ?? "—"}%`
           : `${code}（行情未取到）`;
+        const note = collection === "stock" ? stockNotes[code] : "";
+        return note ? `${row} 备注：${note}` : row;
       });
       return `【${group.name}】\n${rows.join("\n")}`;
     }).join("\n");
-  }, [collection, groups, quotes]);
+  }, [collection, groups, quotes, stockNotes]);
 
   const activeLabel = activeGroupId === ALL_GROUPS ? "全部自选" : activeGroup?.name || "未分组";
 
@@ -496,33 +541,55 @@ export function Watchlist() {
                 {visibleCodes.map((code) => {
                   const quote = quotes[code];
                   return (
-                    <tr key={code} className="border-b border-border/30">
-                      <td className="px-2 py-2.5 font-medium">{quote?.name || "—"}</td>
-                      <td className="px-2 py-2.5 font-mono text-xs text-muted-foreground">{code}</td>
-                      <td className={cn("px-2 py-2.5 font-mono", color(quote?.change_pct))}>{quote ? quote.price : "—"}</td>
-                      <td className={cn("px-2 py-2.5 font-mono", color(quote?.change_pct))}>{quote ? pct(quote.change_pct) : "—"}</td>
-                      <td className="px-2 py-2.5 font-mono text-muted-foreground">{quote?.pe_ttm ?? "—"}</td>
-                      <td className="px-2 py-2.5 font-mono text-muted-foreground">{quote?.pb ?? "—"}</td>
-                      <td className="px-2 py-2.5 font-mono text-muted-foreground">{quote?.turnover_pct ?? "—"}</td>
-                      <td className="px-2 py-2.5">
-                        <select
-                          value={groupByCode.get(code) || DEFAULT_WATCH_GROUP_ID}
-                          onChange={(event) => moveCode(code, event.target.value)}
-                          className="h-7 max-w-28 rounded-md border border-border/50 bg-background/30 px-1.5 text-xs outline-none hover:border-primary/50"
-                        >
-                          {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
-                        </select>
-                      </td>
-                      <td className="px-2 py-2.5">
-                        <button
-                          onClick={() => removeCode(code)}
-                          className="text-muted-foreground/50 hover:text-destructive"
-                          title={`移出${collection === "stock" ? "自选股" : "自选 ETF"}`}
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
-                      </td>
-                    </tr>
+                      <tr key={code} className={cn("border-b border-border/30", openNoteCode === code && "bg-primary/[0.035]")}>
+                        <td className="px-2 py-2.5 font-medium">
+                          <Link
+                            to={`/stock-data?code=${code}`}
+                            className="underline-offset-4 transition-colors hover:text-primary hover:underline"
+                            title={`打开 ${quote?.name || code} 的个股数据`}
+                          >
+                            {quote?.name || "—"}
+                          </Link>
+                        </td>
+                        <td className="px-2 py-2.5 font-mono text-xs text-muted-foreground">{code}</td>
+                        <td className={cn("px-2 py-2.5 font-mono", color(quote?.change_pct))}>{quote ? quote.price : "—"}</td>
+                        <td className={cn("px-2 py-2.5 font-mono", color(quote?.change_pct))}>{quote ? pct(quote.change_pct) : "—"}</td>
+                        <td className="px-2 py-2.5 font-mono text-muted-foreground">{quote?.pe_ttm ?? "—"}</td>
+                        <td className="px-2 py-2.5 font-mono text-muted-foreground">{quote?.pb ?? "—"}</td>
+                        <td className="px-2 py-2.5 font-mono text-muted-foreground">{quote?.turnover_pct ?? "—"}</td>
+                        <td className="px-2 py-2.5">
+                          <select
+                            value={groupByCode.get(code) || DEFAULT_WATCH_GROUP_ID}
+                            onChange={(event) => moveCode(code, event.target.value)}
+                            className="h-7 max-w-28 rounded-md border border-border/50 bg-background/30 px-1.5 text-xs outline-none hover:border-primary/50"
+                          >
+                            {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                          </select>
+                        </td>
+                        <td className="px-2 py-2.5">
+                          <div className="flex items-center gap-8">
+                            {collection === "stock" && (
+                              <button
+                                onClick={() => toggleNote(code)}
+                                className={cn(
+                                  "transition-colors hover:text-primary",
+                                  stockNotes[code] || openNoteCode === code ? "text-primary" : "text-muted-foreground/50",
+                                )}
+                                title={stockNotes[code] ? `备注：${stockNotes[code]}` : "添加备注"}
+                              >
+                                <NotebookPen className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                            <button
+                              onClick={() => removeCode(code)}
+                              className="text-muted-foreground/50 hover:text-destructive"
+                              title={`移出${collection === "stock" ? "自选股" : "自选 ETF"}`}
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
                   );
                 })}
               </tbody>
@@ -530,6 +597,73 @@ export function Watchlist() {
           </div>
         )}
       </GlassCard>
+
+      {collection === "stock" && openNoteCode && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) toggleNote(openNoteCode);
+          }}
+          role="presentation"
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="watch-note-title"
+            className="w-full max-w-lg rounded-2xl border border-border/70 bg-background/95 p-5 shadow-2xl"
+          >
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <h3 id="watch-note-title" className="text-base font-semibold">自选股笔记</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {quotes[openNoteCode]?.name || "股票"} · <span className="font-mono">{openNoteCode}</span>
+                </p>
+              </div>
+              <button
+                onClick={() => toggleNote(openNoteCode)}
+                className="rounded-md p-1 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                title="关闭"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <textarea
+              autoFocus
+              rows={5}
+              maxLength={WATCH_NOTE_MAX_LENGTH}
+              value={noteDraft}
+              onChange={(event) => setNoteDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === "Enter") persistNote(openNoteCode);
+                if (event.key === "Escape") toggleNote(openNoteCode);
+              }}
+              placeholder="输入简短备注，例如：等待业绩拐点验证"
+              className="w-full resize-none rounded-xl border border-border/70 bg-muted/20 px-3 py-2.5 text-sm leading-6 outline-none transition-colors placeholder:text-muted-foreground/45 focus:border-primary/60 focus:ring-2 focus:ring-primary/10"
+            />
+
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <span className="text-[11px] text-muted-foreground/60">
+                {noteDraft.length}/{WATCH_NOTE_MAX_LENGTH} · ⌘/Ctrl + Enter 保存
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => toggleNote(openNoteCode)}
+                  className="h-8 rounded-lg px-3 text-xs text-muted-foreground hover:bg-muted/50"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={() => persistNote(openNoteCode)}
+                  className="h-8 rounded-lg bg-primary/15 px-4 text-xs font-medium text-primary hover:bg-primary/25"
+                >
+                  保存
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

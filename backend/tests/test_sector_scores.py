@@ -63,7 +63,7 @@ def test_build_scores_uses_sw_monthly_history():
     rows = {row["code"]: row for row in data["industries"]}
     agriculture = rows["801010"]
 
-    assert data["schema_version"] == 4
+    assert data["schema_version"] == 5
     assert data["current_frequency"] == "monthly"
     assert data["methodology"]["classification"] == "申万一级行业（2021版，31个行业）"
     assert data["history_samples"] == 13

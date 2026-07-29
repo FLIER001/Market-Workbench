@@ -325,13 +325,20 @@ def market_overview():
 def sector_scores(refresh: bool = Query(False)):
     """板块评分：申万一级行业的估值、盈利景气、资本活跃和集中风险。
 
-    首次构建读取申万 2021 版分类启用后的月报，并叠加最新交易日日频数据；
-    之后读取 1 小时本地缓存。refresh=true 会强制刷新当前评分。
+    首次构建读取申万 2021 版分类启用后的月报，并以申万成分分类叠加
+    a-stock-data 腾讯个股行情聚合当前值；盘中缓存 5 分钟、其他时段 1 小时。
+    申万日频只作备用，refresh=true 会强制刷新当前评分。
     """
     try:
         return {"data": sector_scores_layer.get_sector_scores(force=refresh)}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"板块评分异常：{e}") from e
+
+
+@app.get("/api/sector-scores/cache")
+def sector_scores_cache():
+    """板块评分最近一次成功缓存；供前端在后台刷新期间即时展示。"""
+    return {"data": sector_scores_layer.get_cached_sector_scores()}
 
 
 @app.get("/api/market/emotion")
@@ -528,6 +535,25 @@ def kline(code: str = Query(...), category: int = Query(4), offset: int = Query(
         return {"data": astock.kline(code, category=category, offset=offset)}
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"K线源异常：{e}") from e
+
+
+@app.get("/api/kline/chart")
+def kline_chart(
+    code: str = Query(...),
+    period: str = Query("day", pattern="^(day|week|month)$"),
+    count: int = Query(250, ge=20, le=800),
+):
+    """图表标准 OHLCV：腾讯前复权主源，mootdx 不复权备用。"""
+    code = _validate(code)
+    try:
+        data = astock.chart_kline(code, period=period, count=count)
+        if not data["rows"]:
+            raise HTTPException(502, "K线数据源当前无返回")
+        return {"data": data}
+    except HTTPException:
+        raise
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"K线源异常：{e}") from e
 
