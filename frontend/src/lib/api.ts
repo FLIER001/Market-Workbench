@@ -85,7 +85,7 @@ const get = <T>(path: string) => request<T>(path, "GET");
 export interface Quote {
   name: string; price: number; last_close: number; change_pct: number;
   pe_ttm: number; pb: number; mcap_yi: number; turnover_pct: number;
-  limit_up: number; limit_down: number;
+  limit_up: number; limit_down: number; vol_ratio?: number;
 }
 
 export interface Valuation {
@@ -325,6 +325,45 @@ export interface GlobalStock {
   quote: GlobalQuote; metrics: GlobalMetrics | null;
 }
 
+
+// 资金供给（独立页面 · 国内 / 国外美国，含历史趋势 + 美联储利率 + 加息概率）
+export interface HistPoint { date: string; v: number }
+export interface LiquidityUsItem {
+  label: string; unit: string; value: number; date: string; chg: number | null; hist: HistPoint[];
+}
+export interface IndexFlow {
+  name: string; hist: HistPoint[]; latest: HistPoint;
+}
+export interface LiquidityCn {
+  date?: string;
+  rzye_yi?: number; rzye_chg_yi?: number | null;
+  rzrqye_yi?: number; rzrqye_chg_yi?: number | null;
+  rzjme_yi?: number;
+  total_main_net_yi?: number;
+  rzrqye_hist?: HistPoint[]; rzjme_hist?: HistPoint[];
+  index_flows?: Record<string, IndexFlow>;
+}
+export interface FedOddsStrike { strike: number; prob: number }
+export interface FedOdds {
+  event: string; meeting: string; likely_upper: string;
+  strikes: FedOddsStrike[];
+}
+export interface CompositeIndex {
+  value: number; label: string; desc: string; date: string;
+  hist: HistPoint[]; interpretation: string;
+}
+export interface LiquidityData {
+  cn: LiquidityCn;
+  cn_indices?: Record<string, CompositeIndex>;
+  us: Record<string, LiquidityUsItem>;
+  fed_odds?: FedOdds;
+  updated: string;
+}
+
+// 分时图（当日分钟级）
+export interface MinutePoint { time: string; price: number; volume: number }
+export interface MinuteKline { date: string; prev_close: number; points: MinutePoint[] }
+
 export interface SearchResult {
   code: string; name: string; market: string;
 }
@@ -333,6 +372,7 @@ export const api = {
   health: () => get<{ ok: boolean }>("/health"),
   indices: () => get<IndexQuote[]>("/indices"),
   marketOverview: () => get<MarketOverview>("/market/overview"),
+  liquidity: () => get<LiquidityData>("/market/liquidity"),
   emotion: () => get<ShortTermEmotion>("/market/emotion"),
   turnoverTop: () => get<TurnoverTop>("/market/turnover-top"),
   globalIndices: () => get<GlobalIndex[]>("/global/indices"),
@@ -347,6 +387,7 @@ export const api = {
     request<PortfolioData>("/portfolio/close", "POST", { code, date, price, shares, cost }),
   removeClosed: (index: number) => request<PortfolioData>(`/portfolio/close?index=${index}`, "DELETE"),
   valuation: (code: string) => get<Valuation>(`/valuation?code=${code}`),
+  minuteKline: (code: string) => get<MinuteKline>(`/kline/minute?code=${encodeURIComponent(code)}`),
   kline: (code: string, period: KLineData["period"], count = 250) =>
     get<KLineData>(`/kline/chart?code=${encodeURIComponent(code)}&period=${period}&count=${count}`),
   percentile: (code: string) => get<ValPercentile>(`/valuation/percentile?code=${code}`),

@@ -21,13 +21,32 @@ _UA_H = {"User-Agent": astock.UA}
 _GS_HOSTS = ("push2.eastmoney.com", "push2delay.eastmoney.com")
 _gs_host = [0]  # 当前可用主机下标；首次 push2 掉连后 latch 到 push2delay
 
-# 全球指数（东财 push2 secid）—— A 股看隔夜外围脸色的核心几个，均已实测。
+# 全球指数（东财 push2 secid）—— A 股看隔夜外围脸色 + 主要经济体指数，均已实测。
 _INDICES = (
-    {"key": "dji", "name": "道琼斯", "secid": "100.DJIA", "region": "美股"},
+    # 美股
     {"key": "spx", "name": "标普500", "secid": "100.SPX", "region": "美股"},
     {"key": "ndx", "name": "纳斯达克", "secid": "100.NDX", "region": "美股"},
+    # 港股
     {"key": "hsi", "name": "恒生指数", "secid": "100.HSI", "region": "港股"},
     {"key": "hstech", "name": "恒生科技", "secid": "124.HSTECH", "region": "港股"},
+    # 亚太
+    {"key": "n225", "name": "日经225", "secid": "100.N225", "region": "亚太"},
+    {"key": "ks11", "name": "韩国KOSPI", "secid": "100.KS11", "region": "亚太"},
+    {"key": "twii", "name": "台湾加权", "secid": "100.TWII", "region": "亚太"},
+    {"key": "aord", "name": "澳大利亚普通股", "secid": "100.AORD", "region": "亚太"},
+    {"key": "set", "name": "泰国SET", "secid": "100.SET", "region": "亚太"},
+    {"key": "jkse", "name": "印尼雅加达综合", "secid": "100.JKSE", "region": "亚太"},
+    {"key": "klse", "name": "马来西亚KLCI", "secid": "100.KLSE", "region": "亚太"},
+    {"key": "vnindex", "name": "越南胡志明", "secid": "100.VNINDEX", "region": "亚太"},
+    # 欧洲
+    {"key": "gdaxi", "name": "德国DAX30", "secid": "100.GDAXI", "region": "欧洲"},
+    {"key": "ftse", "name": "英国富时100", "secid": "100.FTSE", "region": "欧洲"},
+    {"key": "fchi", "name": "法国CAC40", "secid": "100.FCHI", "region": "欧洲"},
+    {"key": "aex", "name": "荷兰AEX", "secid": "100.AEX", "region": "欧洲"},
+    {"key": "ssmi", "name": "瑞士SMI", "secid": "100.SSMI", "region": "欧洲"},
+    {"key": "ibex", "name": "西班牙IBEX35", "secid": "100.IBEX", "region": "欧洲"},
+    # 南亚
+    {"key": "sensex", "name": "印度SENSEX", "secid": "100.SENSEX", "region": "南亚"},
 )
 
 # 搜索返回的 MktNum → (secucode 后缀, 市场名)

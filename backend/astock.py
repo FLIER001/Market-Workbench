@@ -112,7 +112,7 @@ def tencent_quote(codes: list[str]) -> dict[str, dict]:
 
 
 # A股大盘指数（前缀规则与个股不同，固定带前缀代码）
-A_INDICES = ["sh000001", "sz399001", "sz399006", "sh000300"]
+A_INDICES = ["sh000001", "sz399001", "sz399006", "sh000300", "sh000688", "bj899050"]
 
 
 def index_quote() -> list[dict]:
@@ -321,6 +321,46 @@ def tencent_kline(code: str, period: str = "day", count: int = 250) -> list[dict
     with urllib.request.urlopen(request, timeout=12) as response:
         payload = json.loads(response.read().decode("utf-8"))
     return _parse_tencent_kline(payload, symbol, period)
+
+
+def minute_kline(code: str) -> dict:
+    """分时图（当日分钟级）：腾讯 web.ifzq.gtimg.cn minute/query 接口，零鉴权。"""
+    symbol = f"{get_prefix(code)}{code}"
+    url = f"https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={symbol}"
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Referer": "https://gu.qq.com/"})
+    with urllib.request.urlopen(req, timeout=12) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    data = (payload.get("data") or {}).get(symbol, {}).get("data", {})
+    rows = data.get("data", [])
+    date = data.get("date", "")
+    # 昨收
+    qt = (payload.get("data") or {}).get(symbol, {}).get("qt", {})
+    qt_data = qt.get(symbol, []) if isinstance(qt, dict) else []
+    prev_close = 0.0
+    if isinstance(qt_data, list) and len(qt_data) > 4:
+        try:
+            prev_close = float(qt_data[4])
+        except (ValueError, IndexError):
+            pass
+
+    points = []
+    for line in rows:
+        parts = str(line).split(" ")
+        if len(parts) < 2:
+            continue
+        try:
+            t = parts[0]
+            # 只保留盘中交易时段 09:30-15:00，过滤收盘后集合竞价重复数据
+            if t < "0930" or t > "1500":
+                continue
+            points.append({
+                "time": t,
+                "price": float(parts[1]),
+                "volume": int(parts[2]) if len(parts) > 2 else 0,
+            })
+        except (ValueError, IndexError):
+            continue
+    return {"date": date, "prev_close": prev_close, "points": points}
 
 
 def chart_kline(code: str, period: str = "day", count: int = 250) -> dict:

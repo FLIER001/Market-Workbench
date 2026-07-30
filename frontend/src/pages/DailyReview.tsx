@@ -1,16 +1,15 @@
-import { useState, useEffect, useRef } from "react";
-import { createPortal } from "react-dom";
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Sparkles, Loader2, AlertCircle, RefreshCw, Gauge, ArrowDownUp, TrendingUp, TrendingDown, Plus, X, Flame, BarChart3, Globe } from "lucide-react";
+import { Sparkles, Loader2, AlertCircle, RefreshCw, Gauge, ArrowDownUp, TrendingUp, TrendingDown, Flame, BarChart3, Globe } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
-import { api, type IndexQuote, type Quote, type MarketOverview, type ShortTermEmotion, type TurnoverTop, type GlobalIndex, type SearchResult } from "@/lib/api";
+import { api, type IndexQuote, type MarketOverview, type ShortTermEmotion, type TurnoverTop, type GlobalIndex } from "@/lib/api";
 import { hasLlm, chatStream } from "@/lib/llm";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
-import { loadWatch, saveWatch, addCodes } from "@/lib/watchlist";
+import { storageGet, storageSet } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 import { startBackgroundTask, useBackgroundTask } from "@/lib/backgroundTasks";
 
@@ -32,21 +31,12 @@ export function DailyReview() {
   const [overview, setOverview] = useState<MarketOverview | null>(null);
   const [emotion, setEmotion] = useState<ShortTermEmotion | null>(null);
   const [turnover, setTurnover] = useState<TurnoverTop | null>(null);
-  const [globalIdx, setGlobalIdx] = useState<GlobalIndex[]>([]);
-  // 关注股票（自选，存本地）
-  const [watchCodes, setWatchCodes] = useState<string[]>(loadWatch);
-  const [watchQuotes, setWatchQuotes] = useState<Record<string, Quote>>({});
-  const [watchInput, setWatchInput] = useState("");
-  const [watchLoading, setWatchLoading] = useState(false);
-  // 自动提示
-  const [watchSuggestions, setWatchSuggestions] = useState<SearchResult[]>([]);
-  const [showWatchDrop, setShowWatchDrop] = useState(false);
-  const [watchHlIdx, setWatchHlIdx] = useState(-1);
-  const watchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const watchWrapRef = useRef<HTMLDivElement>(null);
-  const watchInputRef = useRef<HTMLInputElement>(null);
-  const watchDropRef = useRef<HTMLDivElement>(null);
-  const [watchDropPos, setWatchDropPos] = useState({ top: 0, left: 0, width: 240 });
+  const [globalIdx, setGlobalIdx] = useState<GlobalIndex[]>(() => {
+    try {
+      const cached = storageGet("vr-daily-global-idx");
+      return cached ? JSON.parse(cached) as GlobalIndex[] : [];
+    } catch { return []; }
+  });
 
   // 各数据块请求是否已结束：区分「加载中」与「数据源暂不可用」（非交易时段/被限流时后端返回空）
   const [ovDone, setOvDone] = useState(false);
@@ -55,7 +45,7 @@ export function DailyReview() {
 
   const loadIndices = () => {
     api.indices().then(setIndices).catch(() => setIdxErr(true));
-    api.globalIndices().then(setGlobalIdx).catch(() => {});
+    api.globalIndices().then((d) => { setGlobalIdx(d); storageSet("vr-daily-global-idx", JSON.stringify(d)); }).catch(() => {});
     api.marketOverview().then(setOverview).catch(() => {}).finally(() => setOvDone(true));
     api.emotion().then(setEmotion).catch(() => {}).finally(() => setEmoDone(true));
     api.turnoverTop().then(setTurnover).catch(() => {}).finally(() => setToDone(true));
@@ -68,78 +58,12 @@ export function DailyReview() {
     </p>
   );
 
-  const refreshWatch = (codes: string[]) => {
-    if (!codes.length) { setWatchQuotes({}); return; }
-    setWatchLoading(true);
-    api.quote(codes.join(",")).then(setWatchQuotes).catch(() => {}).finally(() => setWatchLoading(false));
-  };
 
   useEffect(() => {
     loadIndices();
-    refreshWatch(loadWatch());
   }, []);
 
-  // 自动搜索（debounce 300ms）
-  useEffect(() => {
-    if (watchDebounceRef.current) clearTimeout(watchDebounceRef.current);
-    const q = watchInput.trim();
-    if (!q) { setWatchSuggestions([]); setShowWatchDrop(false); return; }
-    watchDebounceRef.current = setTimeout(() => {
-      api.search(q).then(setWatchSuggestions).catch(() => setWatchSuggestions([]));
-    }, 300);
-    return () => { if (watchDebounceRef.current) clearTimeout(watchDebounceRef.current); };
-  }, [watchInput]);
 
-  // 点外部关闭下拉（portal 下拉也算"内部"）
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (watchWrapRef.current?.contains(t)) return;
-      if (watchDropRef.current?.contains(t)) return;
-      setShowWatchDrop(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
-
-  // 下拉打开时按输入框实际位置 fixed 定位，滚动 / 缩放时跟随
-  useEffect(() => {
-    if (!showWatchDrop || !watchInputRef.current) return;
-    const update = () => {
-      const r = watchInputRef.current!.getBoundingClientRect();
-      setWatchDropPos({ top: r.bottom + 4, left: r.left, width: Math.max(r.width, 240) });
-    };
-    update();
-    window.addEventListener("scroll", update, true);
-    window.addEventListener("resize", update);
-    return () => {
-      window.removeEventListener("scroll", update, true);
-      window.removeEventListener("resize", update);
-    };
-  }, [showWatchDrop]);
-
-  const pickWatch = (s: SearchResult) => {
-    setWatchInput(s.code);
-    setShowWatchDrop(false);
-    setWatchHlIdx(-1);
-    // 直接添加
-    const { next, added } = addCodes(watchCodes, s.code);
-    if (added) { setWatchCodes(next); saveWatch(next); refreshWatch(next); }
-    setTimeout(() => setWatchInput(""), 100);
-  };
-
-  const addWatch = () => {
-    // 支持一次粘贴多只（逗号 / 空格分隔）；全部无效或重复则清空输入、无副作用。
-    const { next, added } = addCodes(watchCodes, watchInput);
-    setWatchInput("");
-    if (!added) return;
-    setWatchCodes(next); saveWatch(next); refreshWatch(next);
-  };
-
-  const removeWatch = (c: string) => {
-    const next = watchCodes.filter((x) => x !== c);
-    setWatchCodes(next); saveWatch(next); refreshWatch(next);
-  };
 
   const today = new Date().toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
 
@@ -194,9 +118,9 @@ export function DailyReview() {
         <h3 className="text-sm font-semibold text-muted-foreground">大盘指数</h3>
         <button onClick={loadIndices} className="text-muted-foreground hover:text-primary" title="刷新"><RefreshCw className="h-3.5 w-3.5" /></button>
       </div>
-      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {indices.length === 0
-          ? [1, 2, 3, 4].map((i) => (
+          ? [1, 2, 3, 4, 5, 6].map((i) => (
               <GlassCard key={i} className="p-3">
                 <p className="text-xs text-muted-foreground">{idxErr ? "行情未接通" : "加载中…"}</p>
                 <p className="mt-1 font-mono text-lg font-bold text-muted-foreground/40">—</p>
@@ -211,112 +135,43 @@ export function DailyReview() {
             ))}
       </div>
 
-      {/* 1b. 全球市场（隔夜外围脸色：A 股常看美股 / 港股） */}
+      {/* 1b. 全球市场（隔夜外围 + 主要经济体指数） */}
       {globalIdx.length > 0 && (
         <>
           <div className="mb-3 flex items-center gap-2">
             <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><Globe className="h-4 w-4" /> 全球市场</h3>
-            <span className="text-[11px] text-muted-foreground/50">隔夜外围 · A 股常看美股 / 港股脸色</span>
+            <span className="text-[11px] text-muted-foreground/50">美股 · 港股 · 亚太 · 欧洲 · 南亚</span>
           </div>
-          <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-5">
-            {globalIdx.map((g) => (
-              <GlassCard key={g.key} className="p-3">
-                <p className="truncate text-xs text-muted-foreground">{g.name} <span className="text-muted-foreground/40">{g.region}</span></p>
-                <p className={cn("mt-1 font-mono text-lg font-bold", g.change_pct == null ? "text-foreground" : pctColor(g.change_pct))}>{g.price ?? "—"}</p>
-                <p className={cn("text-xs", g.change_pct == null ? "text-muted-foreground" : pctColor(g.change_pct))}>
-                  {g.change_pct == null ? "—" : `${g.change_pct > 0 ? "+" : ""}${g.change_pct}%`}
-                </p>
-              </GlassCard>
-            ))}
-          </div>
-        </>
-      )}
-
-      {/* 2. 关注股票（自选） */}
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-muted-foreground">关注股票</h3>
-        {watchCodes.length > 0 && (
-          <button onClick={() => refreshWatch(watchCodes)} className="text-muted-foreground hover:text-primary" title="刷新价格">
-            {watchLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-          </button>
-        )}
-      </div>
-      <GlassCard className="mb-6">
-        <div className="mb-3 flex gap-2">
-          <div className="relative" ref={watchWrapRef}>
-            <input
-              ref={watchInputRef}
-              value={watchInput}
-              onChange={(e) => { setWatchInput(e.target.value); setShowWatchDrop(true); setWatchHlIdx(-1); }}
-              onFocus={() => watchSuggestions.length > 0 && setShowWatchDrop(true)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  if (watchHlIdx >= 0 && watchHlIdx < watchSuggestions.length) pickWatch(watchSuggestions[watchHlIdx]);
-                  else addWatch();
-                } else if (e.key === "ArrowDown") {
-                  e.preventDefault(); setWatchHlIdx((i) => Math.min(i + 1, watchSuggestions.length - 1));
-                } else if (e.key === "ArrowUp") {
-                  e.preventDefault(); setWatchHlIdx((i) => Math.max(i - 1, -1));
-                } else if (e.key === "Escape") {
-                  setShowWatchDrop(false); setWatchHlIdx(-1);
-                }
-              }}
-              placeholder="加自选：代码 / 中文 / 首字母，如 600519、茅台、MT"
-              className="w-60 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
-            />
-            {showWatchDrop && watchSuggestions.length > 0 && createPortal(
-              <div
-                ref={watchDropRef}
-                style={{ position: "fixed", top: watchDropPos.top, left: watchDropPos.left, width: watchDropPos.width, zIndex: 9999 }}
-                className="rounded-lg border border-border bg-background shadow-lg"
-              >
-                {watchSuggestions.map((s, i) => (
-                  <button
-                    key={s.code}
-                    onClick={() => pickWatch(s)}
-                    onMouseEnter={() => setWatchHlIdx(i)}
-                    className={cn(
-                      "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted/50",
-                      i === watchHlIdx && "bg-muted/50",
-                    )}
-                  >
-                    <span className="font-mono text-xs text-muted-foreground">{s.code}</span>
-                    <span className="flex-1 truncate">{s.name}</span>
-                    <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">{s.market}</span>
-                  </button>
-                ))}
-              </div>,
-              document.body,
-            )}
-          </div>
-          <button onClick={addWatch}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25">
-            <Plus className="h-4 w-4" /> 增加
-          </button>
-        </div>
-        {watchCodes.length === 0 ? (
-          <p className="text-sm text-muted-foreground/60">加上你关注的股票，随时看它们的实时价格与涨跌。数据存本地，不上传。</p>
-        ) : (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-            {watchCodes.map((c) => {
-              const q = watchQuotes[c];
+          {(() => {
+            const regionOrder = ["美股", "港股", "亚太", "欧洲", "南亚"];
+            const grouped = new Map<string, typeof globalIdx>();
+            for (const g of globalIdx) {
+              if (!grouped.has(g.region)) grouped.set(g.region, []);
+              grouped.get(g.region)!.push(g);
+            }
+            return regionOrder.map((region) => {
+              const items = grouped.get(region);
+              if (!items || items.length === 0) return null;
               return (
-                <div key={c} className="group relative rounded-lg bg-muted/25 p-3">
-                  <button onClick={() => removeWatch(c)} title="移除"
-                    className="absolute right-1.5 top-1.5 text-muted-foreground/40 opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100">
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                  <p className="truncate text-xs text-muted-foreground">{q?.name || c}</p>
-                  <p className={cn("mt-1 font-mono text-lg font-bold", q ? pctColor(q.change_pct) : "text-muted-foreground/40")}>{q ? q.price : "—"}</p>
-                  <p className={cn("text-xs", q ? pctColor(q.change_pct) : "text-muted-foreground/40")}>
-                    {q ? `${q.change_pct > 0 ? "+" : ""}${q.change_pct}%` : c}
-                  </p>
+                <div key={region} className="mb-4">
+                  <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/60">{region}</p>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                    {items.map((g) => (
+                      <GlassCard key={g.key} className="p-3">
+                        <p className="truncate text-xs text-muted-foreground">{g.name}</p>
+                        <p className={cn("mt-1 font-mono text-lg font-bold", g.change_pct == null ? "text-foreground" : pctColor(g.change_pct))}>{g.price ?? "—"}</p>
+                        <p className={cn("text-xs", g.change_pct == null ? "text-muted-foreground" : pctColor(g.change_pct))}>
+                          {g.change_pct == null ? "—" : `${g.change_pct > 0 ? "+" : ""}${g.change_pct}%`}
+                        </p>
+                      </GlassCard>
+                    ))}
+                  </div>
                 </div>
               );
-            })}
-          </div>
-        )}
-      </GlassCard>
+            });
+          })()}
+        </>
+      )}
 
       {/* 3. AI 当日复盘 */}
       <GlassCard glow className="mb-6">
@@ -349,7 +204,7 @@ export function DailyReview() {
         ) : null}
       </GlassCard>
 
-      {/* 4. 市场情绪 */}
+      {/* 3b. 市场情绪 */}
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><Gauge className="h-4 w-4" /> 市场情绪</h3>
         {sentiment?.date && <span className="text-[11px] text-muted-foreground/50">{sentiment.date}</span>}
@@ -383,7 +238,72 @@ export function DailyReview() {
         )}
       </GlassCard>
 
-      {/* 4b. 短线情绪（连板梯队 / 打板情绪，聚合口径零个股名） */}
+      {/* 4. 板块资金趋势榜（行业） */}
+      <div className="mb-3 flex items-center gap-2">
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><TrendingUp className="h-4 w-4" /> 板块资金趋势榜</h3>
+        <span className="text-[11px] text-muted-foreground/50">行业 · 按今日净流入排序</span>
+      </div>
+      <GlassCard className="mb-6">
+        {sectors.length === 0 ? (
+          pending(ovDone)
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
+                  {["行业", "涨跌%", "今日净流入", "流入", "流出", "家数"].map((h) => (
+                    <th key={h} className="whitespace-nowrap px-2 py-2 font-medium">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sectors.slice(0, 15).map((s) => (
+                  <tr key={s.name} className="border-b border-border/30">
+                    <td className="px-2 py-2 font-medium">{s.name}</td>
+                    <td className={cn("px-2 py-2 font-mono", pctColor(s.pct))}>{s.pct > 0 ? "+" : ""}{s.pct}%</td>
+                    <td className={cn("px-2 py-2 font-mono", pctColor(s.net))}>{s.net > 0 ? "+" : ""}{fmt(s.net)} 亿</td>
+                    <td className="px-2 py-2 font-mono text-muted-foreground">{fmt(s.inflow)}</td>
+                    <td className="px-2 py-2 font-mono text-muted-foreground">{fmt(s.outflow)}</td>
+                    <td className="px-2 py-2 font-mono text-muted-foreground">{s.firms}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </GlassCard>
+
+      {/* 5. 资金轮动 */}
+      <div className="mb-3 flex items-center gap-2">
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><ArrowDownUp className="h-4 w-4" /> 资金轮动</h3>
+        <span className="text-[11px] text-muted-foreground/50">板块级净流入 / 流出</span>
+      </div>
+      <div className="mb-2 grid gap-4 md:grid-cols-2">
+        {[
+          { title: "流入 Top", icon: TrendingUp, color: "text-danger", rows: sectors.slice(0, 6) },
+          { title: "流出 Top", icon: TrendingDown, color: "text-success", rows: [...sectors].slice(-6).reverse() },
+        ].map((col) => (
+          <GlassCard key={col.title}>
+            <h4 className={cn("mb-3 flex items-center gap-1.5 text-sm font-semibold", col.color)}><col.icon className="h-4 w-4" /> {col.title}</h4>
+            {col.rows.length === 0 ? (
+              pending(ovDone)
+            ) : (
+              <div className="space-y-1.5">
+                {col.rows.map((s, i) => (
+                  <div key={s.name} className="flex items-center gap-3 border-b border-border/30 pb-1.5 text-sm last:border-0">
+                    <span className="w-5 text-xs text-muted-foreground/50">{i + 1}</span>
+                    <span className="flex-1 truncate">{s.name}</span>
+                    <span className={cn("font-mono text-xs", pctColor(s.pct))}>{s.pct > 0 ? "+" : ""}{s.pct}%</span>
+                    <span className={cn("w-20 text-right font-mono text-xs", pctColor(s.net))}>{s.net > 0 ? "+" : ""}{fmt(s.net)} 亿</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </GlassCard>
+        ))}
+      </div>
+
+      {/* 6. 短线情绪（连板梯队 / 打板情绪，聚合口径零个股名） */}
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><Flame className="h-4 w-4" /> 短线情绪</h3>
         <span className="text-[11px] text-muted-foreground/50">连板股 · 打板情绪 · 客观公开榜单</span>
@@ -460,7 +380,7 @@ export function DailyReview() {
         )}
       </GlassCard>
 
-      {/* 4c. 全市场成交额 TOP20（客观公开榜单） */}
+      {/* 7. 全市场成交额 TOP20（客观公开榜单） */}
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><BarChart3 className="h-4 w-4" /> 全市场成交额 TOP20</h3>
         <span className="text-[11px] text-muted-foreground/50">客观公开榜单，非推荐 / 非预测 / 不构成投资建议</span>
@@ -499,70 +419,6 @@ export function DailyReview() {
         )}
       </GlassCard>
 
-      {/* 5. 板块资金趋势榜（行业） */}
-      <div className="mb-3 flex items-center gap-2">
-        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><TrendingUp className="h-4 w-4" /> 板块资金趋势榜</h3>
-        <span className="text-[11px] text-muted-foreground/50">行业 · 按今日净流入排序</span>
-      </div>
-      <GlassCard className="mb-6">
-        {sectors.length === 0 ? (
-          pending(ovDone)
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
-                  {["行业", "涨跌%", "今日净流入", "流入", "流出", "家数"].map((h) => (
-                    <th key={h} className="whitespace-nowrap px-2 py-2 font-medium">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {sectors.slice(0, 15).map((s) => (
-                  <tr key={s.name} className="border-b border-border/30">
-                    <td className="px-2 py-2 font-medium">{s.name}</td>
-                    <td className={cn("px-2 py-2 font-mono", pctColor(s.pct))}>{s.pct > 0 ? "+" : ""}{s.pct}%</td>
-                    <td className={cn("px-2 py-2 font-mono", pctColor(s.net))}>{s.net > 0 ? "+" : ""}{fmt(s.net)} 亿</td>
-                    <td className="px-2 py-2 font-mono text-muted-foreground">{fmt(s.inflow)}</td>
-                    <td className="px-2 py-2 font-mono text-muted-foreground">{fmt(s.outflow)}</td>
-                    <td className="px-2 py-2 font-mono text-muted-foreground">{s.firms}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </GlassCard>
-
-      {/* 6. 资金轮动 */}
-      <div className="mb-3 flex items-center gap-2">
-        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><ArrowDownUp className="h-4 w-4" /> 资金轮动</h3>
-        <span className="text-[11px] text-muted-foreground/50">板块级净流入 / 流出</span>
-      </div>
-      <div className="mb-2 grid gap-4 md:grid-cols-2">
-        {[
-          { title: "流入 Top", icon: TrendingUp, color: "text-danger", rows: sectors.slice(0, 6) },
-          { title: "流出 Top", icon: TrendingDown, color: "text-success", rows: [...sectors].slice(-6).reverse() },
-        ].map((col) => (
-          <GlassCard key={col.title}>
-            <h4 className={cn("mb-3 flex items-center gap-1.5 text-sm font-semibold", col.color)}><col.icon className="h-4 w-4" /> {col.title}</h4>
-            {col.rows.length === 0 ? (
-              pending(ovDone)
-            ) : (
-              <div className="space-y-1.5">
-                {col.rows.map((s, i) => (
-                  <div key={s.name} className="flex items-center gap-3 border-b border-border/30 pb-1.5 text-sm last:border-0">
-                    <span className="w-5 text-xs text-muted-foreground/50">{i + 1}</span>
-                    <span className="flex-1 truncate">{s.name}</span>
-                    <span className={cn("font-mono text-xs", pctColor(s.pct))}>{s.pct > 0 ? "+" : ""}{s.pct}%</span>
-                    <span className={cn("w-20 text-right font-mono text-xs", pctColor(s.net))}>{s.net > 0 ? "+" : ""}{fmt(s.net)} 亿</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </GlassCard>
-        ))}
-      </div>
 
     </div>
   );

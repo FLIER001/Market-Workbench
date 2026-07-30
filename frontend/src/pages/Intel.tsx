@@ -11,7 +11,7 @@ import { loadWatch } from "@/lib/watchlist";
 import { hasLlm, chatStream } from "@/lib/llm";
 import { storageGet, storageSet } from "@/lib/storage";
 import { cn } from "@/lib/utils";
-import { startBackgroundTask, updateBackgroundTask, useBackgroundTask } from "@/lib/backgroundTasks";
+import { cancelBackgroundTask, startBackgroundTask, updateBackgroundTask, useBackgroundTask } from "@/lib/backgroundTasks";
 
 const TABS = [
   { key: "events", label: "事件概率", icon: TrendingUp, integrated: false, desc: "全球宏观预期概率（公开数据、免登录只读），后续接入" },
@@ -162,7 +162,16 @@ ${ctx}`;
       }));
       return;
     }
-    startBackgroundTask(INTEL_TASK_KEY, { digests, bulk }, (update, signal) => runDigest(ind, update, signal));
+    startBackgroundTask(
+      INTEL_TASK_KEY,
+      { digests, bulk: { ...bulk, running: false } },
+      (update, signal) => runDigest(ind, update, signal),
+    );
+  };
+
+  const retryDigest = (ind: Industry) => {
+    cancelBackgroundTask(INTEL_TASK_KEY);
+    genDigest(ind);
   };
 
   // 深入分析：基于已提炼的要点，逐条分析影响 + 对投资的影响
@@ -246,10 +255,14 @@ ${ctx}`;
     if (!targets.length) return;
     startBackgroundTask(INTEL_TASK_KEY, { digests, bulk: { running: true, done: 0, total: targets.length } }, async (update, signal) => {
       for (const ind of targets) {
+        if (signal.aborted) break;
         await runDigest(ind, update, signal);
+        if (signal.aborted) break;
         update((state) => ({ ...state, bulk: { ...state.bulk, done: state.bulk.done + 1 } }));
       }
-      update((state) => ({ ...state, bulk: { ...state.bulk, running: false } }));
+      if (!signal.aborted) {
+        update((state) => ({ ...state, bulk: { ...state.bulk, running: false } }));
+      }
     });
   };
 
@@ -360,7 +373,18 @@ ${ctx}`;
                   )}
                 </div>
                 {dg?.loading ? (
-                  <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" /> AI 正在读这个赛道的资讯…</p>
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" /> AI 正在读这个赛道的资讯…
+                    </p>
+                    <button
+                      onClick={() => retryDigest(cur)}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border/60 px-2.5 py-1 text-xs text-muted-foreground hover:border-primary/50 hover:text-primary"
+                      title="中止当前请求并重新提炼这个赛道"
+                    >
+                      <RefreshCw className="h-3 w-3" /> 重试
+                    </button>
+                  </div>
                 ) : dg?.text ? (
                   <>
                     <DigestBody text={dg.text} items={cur.items.slice(0, 25)} />

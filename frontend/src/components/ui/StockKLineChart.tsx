@@ -15,9 +15,10 @@ import {
 import { init, use, type ECharts, type EChartsCoreOption } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
 import { AlertCircle, ChartCandlestick, Loader2, RefreshCw } from "lucide-react";
-import { api, type KLineData, type KLineRow } from "@/lib/api";
+import { api, type KLineData, type KLineRow, type MinuteKline } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { GlassCard } from "./GlassCard";
+import { MinuteChart } from "./MinuteChart";
 
 use([
   EChartsCandlestickChart,
@@ -32,15 +33,17 @@ use([
   CanvasRenderer,
 ]);
 
-type Period = KLineData["period"];
+type Period = KLineData["period"] | "minute";
 
 const PERIODS: { id: Period; label: string; count: number; visible: number }[] = [
+  { id: "minute", label: "分时", count: 1, visible: 1 },
   { id: "day", label: "日K", count: 250, visible: 250 },
   { id: "week", label: "周K", count: 200, visible: 80 },
   { id: "month", label: "月K", count: 120, visible: 60 },
 ];
 
 const memoryCache = new Map<string, KLineData>();
+const minuteCache = new Map<string, MinuteKline>();
 
 const movingAverage = (rows: KLineRow[], days: number): (number | "-")[] =>
   rows.map((_, index) => {
@@ -84,7 +87,7 @@ function chartOption(data: KLineData, visibleCount: number): EChartsCoreOption {
       itemWidth: 14,
       itemHeight: 2,
       textStyle: { color: mutedForeground, fontSize: 11 },
-      data: ["MA5", "MA10", "MA20"],
+      data: ["MA20", "MA200"],
     },
     tooltip: {
       trigger: "axis",
@@ -204,28 +207,20 @@ function chartOption(data: KLineData, visibleCount: number): EChartsCoreOption {
         },
       },
       {
-        name: "MA5",
-        type: "line",
-        data: movingAverage(rows, 5),
-        showSymbol: false,
-        smooth: false,
-        lineStyle: { width: 1.1 },
-      },
-      {
-        name: "MA10",
-        type: "line",
-        data: movingAverage(rows, 10),
-        showSymbol: false,
-        smooth: false,
-        lineStyle: { width: 1.1 },
-      },
-      {
         name: "MA20",
         type: "line",
         data: movingAverage(rows, 20),
         showSymbol: false,
         smooth: false,
-        lineStyle: { width: 1.1 },
+        lineStyle: { width: 1.1, color: "#f6c453" },
+      },
+      {
+        name: "MA200",
+        type: "line",
+        data: movingAverage(rows, 200),
+        showSymbol: false,
+        smooth: false,
+        lineStyle: { width: 1.1, color: "#b08cff" },
       },
       {
         name: "成交量",
@@ -242,23 +237,44 @@ function chartOption(data: KLineData, visibleCount: number): EChartsCoreOption {
   };
 }
 
-export function StockKLineChart({ code, name }: { code: string; name: string }) {
+export function StockKLineChart({ code, name, volRatio }: { code: string; name: string; volRatio?: number }) {
   const [period, setPeriod] = useState<Period>("day");
   const [data, setData] = useState<KLineData | null>(null);
+  const [minuteData, setMinuteData] = useState<MinuteKline | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const chartRef = useRef<HTMLDivElement>(null);
   const requestIdRef = useRef(0);
 
   const load = (nextPeriod: Period, force = false) => {
-    const config = PERIODS.find((item) => item.id === nextPeriod)!;
     const cacheKey = `${code}:${nextPeriod}`;
-    const cached = memoryCache.get(cacheKey);
-    if (cached && !force) setData(cached);
     const requestId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
-    api.kline(code, nextPeriod, config.count)
+
+    if (nextPeriod === "minute") {
+      const cached = minuteCache.get(cacheKey);
+      if (cached && !force) setMinuteData(cached);
+      api.minuteKline(code)
+        .then((next) => {
+          if (requestId !== requestIdRef.current) return;
+          minuteCache.set(cacheKey, next);
+          setMinuteData(next);
+        })
+        .catch((reason) => {
+          if (requestId !== requestIdRef.current) return;
+          setError(reason instanceof Error ? reason.message : "分时数据加载失败");
+        })
+        .finally(() => {
+          if (requestId === requestIdRef.current) setLoading(false);
+        });
+      return;
+    }
+
+    const config = PERIODS.find((item) => item.id === nextPeriod)!;
+    const cached = memoryCache.get(cacheKey);
+    if (cached && !force) setData(cached);
+    api.kline(code, nextPeriod as KLineData["period"], config.count)
       .then((next) => {
         if (requestId !== requestIdRef.current) return;
         memoryCache.set(cacheKey, next);
@@ -274,14 +290,18 @@ export function StockKLineChart({ code, name }: { code: string; name: string }) 
   };
 
   useEffect(() => {
-    setData(memoryCache.get(`${code}:${period}`) || null);
+    if (period === "minute") {
+      setMinuteData(minuteCache.get(`${code}:${period}`) || null);
+    } else {
+      setData(memoryCache.get(`${code}:${period}`) || null);
+    }
     load(period);
     // code 切换后重新读取，period 由按钮事件更新。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code, period]);
 
   useEffect(() => {
-    if (!chartRef.current || !data?.rows.length) return;
+    if (!chartRef.current || period === "minute" || !data?.rows.length) return;
     const chart: ECharts = init(chartRef.current);
     const config = PERIODS.find((item) => item.id === period)!;
     chart.setOption(chartOption(data, config.visible), true);
@@ -304,7 +324,9 @@ export function StockKLineChart({ code, name }: { code: string; name: string }) 
             {name} K线
           </h3>
           <p className="mt-1 text-[11px] text-muted-foreground/65">
-            {data ? `${data.adjustment} · ${data.source} · ${data.rows.length} 个观察点${data.as_of ? ` · 截至 ${data.as_of}` : ""}` : "价格与成交量"}
+            {period === "minute"
+              ? minuteData ? `${minuteData.date} · ${minuteData.points.length} 分钟点 · 昨收 ${minuteData.prev_close}` : "分时图（当日分钟级）"
+              : data ? `${data.adjustment} · ${data.source} · ${data.rows.length} 个观察点${data.as_of ? ` · 截至 ${data.as_of}` : ""}` : "价格与成交量"}
           </p>
         </div>
         <div className="flex items-center gap-1">
@@ -333,7 +355,28 @@ export function StockKLineChart({ code, name }: { code: string; name: string }) 
         </div>
       </div>
 
-      {error && !data ? (
+      {period === "minute" ? (
+        error && !minuteData ? (
+          <div className="flex h-[420px] items-center justify-center gap-2 px-4 text-sm text-warning">
+            <AlertCircle className="h-4 w-4" />
+            {error}
+          </div>
+        ) : !minuteData ? (
+          <div className="flex h-[420px] items-center justify-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin text-primary" />
+            正在读取分时数据…
+          </div>
+        ) : (
+          <>
+            {error && (
+              <div className="mx-4 mt-3 flex items-center gap-1.5 rounded-md bg-warning/10 px-2.5 py-1.5 text-[11px] text-warning">
+                <AlertCircle className="h-3 w-3" /> 刷新失败：{error}
+              </div>
+            )}
+            <MinuteChart data={minuteData} height={460} volRatio={volRatio} />
+          </>
+        )
+      ) : error && !data ? (
         <div className="flex h-[420px] items-center justify-center gap-2 px-4 text-sm text-warning">
           <AlertCircle className="h-4 w-4" />
           {error}
@@ -357,7 +400,7 @@ export function StockKLineChart({ code, name }: { code: string; name: string }) 
             ref={chartRef}
             className="h-[460px] w-full"
             role="img"
-            aria-label={`${name}的${data.adjustment}${period === "day" ? "日" : period === "week" ? "周" : "月"}K线与成交量`}
+            aria-label={`${name}的${data!.adjustment}${period === "day" ? "日" : period === "week" ? "周" : "月"}K线与成交量`}
           />
           {latest && (
             <p className="border-t border-border/40 px-4 py-2 text-[10px] text-muted-foreground/55">

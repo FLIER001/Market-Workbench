@@ -8,6 +8,7 @@ import { SectorScores } from "@/pages/SectorScores";
 import { Debate } from "@/pages/Debate";
 import { Portfolio } from "@/pages/Portfolio";
 import { StockData } from "@/pages/StockData";
+import { Liquidity } from "@/pages/Liquidity";
 import { Watchlist } from "@/pages/Watchlist";
 import { MyReports } from "@/pages/MyReports";
 import { Notes } from "@/pages/Notes";
@@ -25,6 +26,7 @@ export const router = createBrowserRouter([
       { path: "/sector-scores", element: <SectorScores /> },
       { path: "/portfolio", element: <Portfolio /> },
       { path: "/stock-data", element: <StockData /> },
+      { path: "/liquidity", element: <Liquidity /> },
       { path: "/debate", element: <Debate /> },
       { path: "/watchlist", element: <Watchlist /> },
       { path: "/my-reports", element: <MyReports /> },

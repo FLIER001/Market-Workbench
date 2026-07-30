@@ -117,7 +117,19 @@ export function updateBackgroundTask<T>(key: string, initialData: T, updater: Up
 }
 
 export function cancelBackgroundTask(key: string) {
-  controllers.get(key)?.abort();
+  const controller = controllers.get(key);
+  if (!controller) return;
+  controller.abort();
+  controllers.delete(key);
+  const latest = records.get(key);
+  if (latest?.status === "running") {
+    setTask(key, {
+      ...latest,
+      status: "cancelled",
+      error: "任务已中止",
+      updatedAt: Date.now(),
+    });
+  }
 }
 
 export function backgroundTaskKey(scope: string, identity: string): string {

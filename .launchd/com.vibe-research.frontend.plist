@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.vibe-research.frontend</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/npm</string>
+    <string>run</string>
+    <string>dev</string>
+    <string>--</string>
+    <string>--host</string>
+    <string>127.0.0.1</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/k/Vibe-Research/frontend</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>KeepAlive</key>
+  <true/>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/private/tmp/vibe-research-frontend.log</string>
+  <key>StandardErrorPath</key>
+  <string>/private/tmp/vibe-research-frontend.log</string>
+</dict>
+</plist>

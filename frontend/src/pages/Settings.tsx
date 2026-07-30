@@ -16,7 +16,11 @@ export function Settings() {
   const [cliId, setCliId] = useState(existing && existingIsCli ? existing.model : "");
   // API：选中的模型 id + 可编辑的 baseURL / model / key
   const firstApi = apiModels[0];
-  const [apiId, setApiId] = useState(existing && !existingIsCli ? existing.model : firstApi.id);
+  // 如果保存的 model 不在 apiModels 列表里（自定义/豆包 ep-xxx），select 回显 "custom"
+  const savedApiId = existing && !existingIsCli
+    ? (apiModels.some((m) => m.id === existing.model) ? existing.model : "custom")
+    : firstApi.id;
+  const [apiId, setApiId] = useState(savedApiId);
   const [baseURL, setBaseURL] = useState(existing && !existingIsCli ? existing.baseURL : (PROVIDER_BASE[firstApi.provider] || ""));
   const [modelName, setModelName] = useState(existing && !existingIsCli ? existing.model : firstApi.id);
   const [apiKey, setApiKey] = useState(existing && !existingIsCli ? existing.apiKey : "");
@@ -29,7 +33,10 @@ export function Settings() {
     const m = apiModels.find((x) => x.id === id);
     if (!m) return;
     setApiId(id);
-    setModelName(id);
+    // "custom" 不覆盖 modelName，保留用户手动填的值
+    if (id !== "custom") {
+      setModelName(id);
+    }
     setBaseURL(PROVIDER_BASE[m.provider] || "");
   };
 

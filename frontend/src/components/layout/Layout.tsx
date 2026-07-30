@@ -3,7 +3,7 @@ import { Link, Outlet, useLocation } from "react-router-dom";
 import {
   Activity, Radar, LayoutGrid, Wallet, Settings, Search, NotebookPen,
   Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github, UserRound,
-  Star, FileText, Swords, Gauge,
+  Star, FileText, Swords, Gauge, Droplets,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
@@ -20,6 +20,7 @@ const NAV = [
   { to: "/intel", icon: Radar, label: "资讯雷达" },
   { to: "/sectors", icon: LayoutGrid, label: "板块中心" },
   { to: "/sector-scores", icon: Gauge, label: "板块评分" },
+  { to: "/liquidity", icon: Droplets, label: "资金供给" },
   { to: "/stock-data", icon: Search, label: "个股数据" },
   { to: "/debate", icon: Swords, label: "多空辩论" },
   { to: "/watchlist", icon: Star, label: "自选" },

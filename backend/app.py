@@ -363,6 +363,15 @@ def market_turnover_top():
         raise HTTPException(502, f"成交额榜异常：{e}") from e
 
 
+@app.get("/api/market/liquidity")
+def market_liquidity():
+    """资金供给重要指标（国内：两融 / 主力净流入；国外：美债 10Y / 5Y / 3M 与 10Y-3M 利差）。缓存 5 分钟。"""
+    try:
+        return {"data": market.get_liquidity()}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"资金供给指标异常：{e}") from e
+
+
 @app.get("/api/global/indices")
 def global_indices():
     """全球指数快照（道指 / 标普500 / 纳斯达克 / 恒生 / 恒生科技）—— A 股看隔夜外围脸色。缓存 5 分钟。"""
@@ -556,6 +565,21 @@ def kline_chart(
         raise
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"K线源异常：{e}") from e
+
+
+@app.get("/api/kline/minute")
+def kline_minute(code: str = Query(...)):
+    """分时图（当日分钟级）：腾讯 minute/query 接口。"""
+    code = _validate(code)
+    try:
+        data = astock.minute_kline(code)
+        if not data["points"]:
+            raise HTTPException(502, "分时数据源当前无返回")
+        return {"data": data}
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"分时源异常：{e}") from e
 
 
 @app.get("/api/finance")

@@ -6,7 +6,6 @@ import {
   GripVertical,
   NotebookPen,
   Pencil,
-  Plus,
   RefreshCw,
   Star,
   Trash2,
@@ -477,7 +476,7 @@ export function Watchlist() {
           >
             {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
           </select>
-          —— 输入代码 / 中文 / 拼音首字母，回车或点击添加
+          —— 输入代码 / 中文 / 拼音首字母，回车添加
         </label>
         <div className="flex gap-2">
           <StockSearchInput
@@ -487,12 +486,7 @@ export function Watchlist() {
             placeholder={collection === "stock" ? "如：600519、茅台、MT" : "如：510300、沪深300ETF"}
             className="flex-1"
           />
-          <button
-            onClick={() => addOne(input)}
-            className="inline-flex h-9 shrink-0 items-center gap-1.5 self-start rounded-lg bg-primary/15 px-4 text-sm font-medium text-primary shadow-glow hover:bg-primary/25"
-          >
-            <Plus className="h-4 w-4" /> 添加
-          </button>
+
         </div>
         {hint && <p className="mt-2 text-xs text-muted-foreground/70">{hint}</p>}
       </GlassCard>

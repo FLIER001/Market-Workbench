@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Plus, ShieldCheck, RefreshCw, Loader2, Trash2, AlertCircle } from "lucide-react";
+import { ShieldCheck, RefreshCw, Loader2, Trash2, AlertCircle } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
@@ -20,14 +20,14 @@ export function Portfolio() {
   const [code, setCode] = useState("");
   const [shares, setShares] = useState("");
   const [cost, setCost] = useState("");
-  const [adding, setAdding] = useState(false);
+  const [, setAdding] = useState(false);
   // 清仓录入
   const [cCode, setCCode] = useState("");
   const [cDate, setCDate] = useState("");
   const [cPrice, setCPrice] = useState("");
   const [cShares, setCShares] = useState("");
   const [cCost, setCCost] = useState("");
-  const [closing, setClosing] = useState(false);
+  const [, setClosing] = useState(false);
 
   const load = useCallback(async (manual = false) => {
     if (manual) setRefreshing(true);
@@ -157,10 +157,7 @@ export function Portfolio() {
             <input value={cost} onChange={(e) => setCost(e.target.value.replace(/[^\d.-]/g, "").replace(/(?!^)-/g, ""))} placeholder="如 12.5，可负"
               className="w-28 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
           </div>
-          <button onClick={() => add()} disabled={adding}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">
-            {adding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} 添加
-          </button>
+
         </div>
         <p className="mt-2 text-[11px] text-muted-foreground/60">同一代码再次添加会按加权平均成本合并（加仓）。</p>
       </GlassCard>
@@ -243,10 +240,7 @@ export function Portfolio() {
             <input value={cCost} onChange={(e) => setCCost(e.target.value.replace(/[^\d.-]/g, "").replace(/(?!^)-/g, ""))} placeholder="成本价，可负"
               className="w-24 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
           </div>
-          <button onClick={() => addClose()} disabled={closing}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">
-            {closing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} 记录
-          </button>
+
         </div>
       </GlassCard>
 

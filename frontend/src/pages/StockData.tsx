@@ -104,6 +104,7 @@ export function StockData() {
   const dropRef = useRef<HTMLDivElement>(null);
   const [dropPos, setDropPos] = useState({ top: 0, left: 0, width: 320 });
   const [val, setVal] = useState<Valuation | null>(null);
+  const [quoteVolRatio, setQuoteVolRatio] = useState<number | null>(null);
   const [reports, setReports] = useState<Report[]>([]);
   const [news, setNews] = useState<NewsItem[]>([]);
   const [pctl, setPctl] = useState<ValPercentile | null>(null);
@@ -224,15 +225,20 @@ export function StockData() {
     api.investorQa(c).then(ok(setQa)).catch(() => {});
     try {
       // 行情+估值+研报+历史分位+财务+公告（新闻单独降级）
-      const [v, r, p, f, a] = await Promise.all([
+      const [v, r, p, f, a, q] = await Promise.all([
         api.valuation(c),
         api.reports(c).catch(() => []),
         api.percentile(c).catch(() => null),
         api.financials(c).catch(() => null),
         api.announcements(c).catch(() => []),
+        api.quote(c).catch(() => null),
       ]);
       if (rid !== runIdRef.current) return;
       setVal(v);
+      if (q) {
+        const quote = Object.values(q)[0];
+        if (quote?.vol_ratio != null) setQuoteVolRatio(quote.vol_ratio);
+      }
       setReports(r);
       setPctl(p);
       setFin(f);
@@ -479,7 +485,7 @@ export function StockData() {
               </GlassCard>
             }
           >
-            <StockKLineChart code={val.code} name={val.name} />
+            <StockKLineChart code={val.code} name={val.name} volRatio={quoteVolRatio ?? undefined} />
           </Suspense>
 
           {/* 财报速览（结论先行摘要，借鉴 equity-research 的结构纪律，剔除评级/目标价） */}
