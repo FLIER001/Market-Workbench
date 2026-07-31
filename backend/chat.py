@@ -57,7 +57,7 @@ SYSTEM_PROMPT = f"""你是 Vibe-Research 里的投研助理。你可以调用工
 - 事件风险：query_announcements（公告）/ query_lockup（解禁）/ query_investor_qa（互动易）
 - 行业板块：query_concepts（板块归属与热门概念）/ query_industry_comparison（行业强弱）/ query_industry_reports
 - 市场层：query_market（scope=indices/global/emotion/turnover/overview）/ query_news_radar（赛道资讯）
-- 海外：query_global_stock（美股 AAPL / 港股 00700 / 韩股 005930.KS）
+- 海外：query_global_stock（美股 AAPL / 港股 00700 / 韩股 005930.KS）/ query_hk_cashflow（港股现金流量表，仅港股）
 
 用工具的方式：**先想清楚要回答什么，再挑最相关的 2-5 个工具**，不要一次把所有工具都调一遍。
 估值贵贱看 query_valuation_percentile，资金动向看 query_fund_flow，风险排查看 query_announcements + query_lockup。

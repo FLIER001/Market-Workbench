@@ -7,7 +7,7 @@ import { api, type LiquidityData, type LiquidityUsItem, type HistPoint, type Ind
 import { storageGet, storageSet } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 
-const CACHE_KEY = "vr-liquidity";
+const CACHE_KEY = "vr-liquidity-v2";
 
 const fmt = (v: number | null | undefined, suffix = "") =>
   v == null ? "—" : `${v.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}${suffix}`;

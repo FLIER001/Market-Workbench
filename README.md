@@ -84,7 +84,7 @@ Vibe-Research 把三套公开数据源**直接集成进仓库**——`git clone`
 
 ### A 股全栈数据 · AStockData
 
-- **就在本仓库的 [`a-stock-data/`](a-stock-data/) 文件夹里**（v3.5.1）。十层数据架构、44 个端点、15 个数据源，`a-stock-data/SKILL.md` **内嵌全部调用代码**，自包含、零第三方数据封装依赖，东财接口已内置限流防封，主源被封还能降级到备用源。
+- **就在本仓库的 [`a-stock-data/`](a-stock-data/) 文件夹里**（v3.6.0）。十层数据架构、47 个端点、15 个数据源，`a-stock-data/SKILL.md` **内嵌全部调用代码**，自包含、零第三方数据封装依赖，东财接口已内置限流防封，主源被封还能降级到备用源。
 - **覆盖**：行情 / K线 / 研报 / 一致预期 / 估值 / 历史分位 / 财务三表 / 公告 / 龙虎榜 / 融资融券 / 大宗交易 / 股东户数 / 分红 / 资金流 / 解禁 / 概念板块 / 打板情绪 / ETF 期权 / 互动易 / 全市场行业排名 …
 - **给 agent 用**：用 Claude Code 等 agent 跑本仓库时，要调 A 股数据就看 [`a-stock-data/SKILL.md`](a-stock-data/SKILL.md)——每个接口都有 copy-paste 即用的代码。Vibe-Research 后端的数据层（`backend/astock.py`）也是从它移植的。
 - **运行依赖**：`pip install mootdx requests pandas stockstats`（自包含，v3.0 起已移除 akshare 依赖）。
@@ -110,7 +110,7 @@ Vibe-Research 把三套公开数据源**直接集成进仓库**——`git clone`
 
 ```
 Vibe-Research/
-├── a-stock-data/      A 股全栈数据工具箱（数据源，v3.5.1，自带即用）
+├── a-stock-data/      A 股全栈数据工具箱（数据源，v3.6.0，自带即用）
 ├── global-stock-data/ 美股 / 港股数据工具箱（数据源，v2.0.3，自带即用）
 ├── backend/           FastAPI :8900
 │   ├── astock.py        A 股数据（移植自 a-stock-data）

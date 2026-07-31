@@ -3,6 +3,8 @@ import { Link } from "react-router-dom";
 import { Sparkles, X, Settings, Send, Loader2, Wrench, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { hasLlm, chatStream, type ChatMsg } from "@/lib/llm";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import { backgroundTaskKey, startBackgroundTask, useBackgroundTask } from "@/lib/backgroundTasks";
 
@@ -75,9 +77,15 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", taskI
           onDelta: (t) => patchLast((msg) => ({ ...msg, content: msg.content + t })),
         }, signal);
       } catch (e) {
-        update((data) => ({
-          msgs: data.msgs.filter((msg, i) => !(i === data.msgs.length - 1 && msg.role === "assistant" && !msg.content)),
-        }));
+        // 出错/中止：一个字都没收到的空气泡要**连同它的提问**整轮移除——
+        // 只删空气泡会留下孤立的 user，下一轮模型看到连续两条 user 会去答错的题。
+        update((data) => {
+          const m = data.msgs;
+          const last = m[m.length - 1];
+          if (!last || last.role !== "assistant" || last.content) return { msgs: m };
+          const dropUser = m[m.length - 2]?.role === "user";
+          return { msgs: m.slice(0, dropUser ? -2 : -1) };
+        });
         throw e;
       }
     });
@@ -149,7 +157,13 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", taskI
                             ))}
                           </div>
                         )}
-                        <p className="whitespace-pre-wrap">{m.content}</p>
+                        {m.role === "assistant" ? (
+                          <div className="prose prose-sm prose-invert max-w-none break-words text-foreground">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                          </div>
+                        ) : (
+                          <p className="whitespace-pre-wrap break-words">{m.content}</p>
+                        )}
                         {m.role === "assistant" && m.content && !(loading && i === msgs.length - 1) && (
                           <div className="mt-1.5"><SaveNoteButton kind="问AI" title={`问 AI · ${msgs[i - 1]?.content?.slice(0, 24) || "对话"}`} content={m.content} /></div>
                         )}

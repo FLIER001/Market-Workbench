@@ -33,7 +33,7 @@ export function DailyReview() {
   const [turnover, setTurnover] = useState<TurnoverTop | null>(null);
   const [globalIdx, setGlobalIdx] = useState<GlobalIndex[]>(() => {
     try {
-      const cached = storageGet("vr-daily-global-idx");
+      const cached = storageGet("vr-daily-global-idx-v2");
       return cached ? JSON.parse(cached) as GlobalIndex[] : [];
     } catch { return []; }
   });
@@ -45,7 +45,7 @@ export function DailyReview() {
 
   const loadIndices = () => {
     api.indices().then(setIndices).catch(() => setIdxErr(true));
-    api.globalIndices().then((d) => { setGlobalIdx(d); storageSet("vr-daily-global-idx", JSON.stringify(d)); }).catch(() => {});
+    api.globalIndices().then((d) => { setGlobalIdx(d); storageSet("vr-daily-global-idx-v2", JSON.stringify(d)); }).catch(() => {});
     api.marketOverview().then(setOverview).catch(() => {}).finally(() => setOvDone(true));
     api.emotion().then(setEmotion).catch(() => {}).finally(() => setEmoDone(true));
     api.turnoverTop().then(setTurnover).catch(() => {}).finally(() => setToDone(true));

@@ -581,7 +581,10 @@ def _cn_leverage_index(cn_margin: dict) -> dict:
 
 
 def _cn_momentum_index(cn_data: dict) -> dict:
-    """主力动量指数：融资净买入近 5 日均值分位 + 当日主力净流入，越高=增量资金越积极。"""
+    """主力动量指数：融资净买入近 5 日均值分位(60%) + 当日主力净流入分位(40%)，越高=增量资金越积极。
+
+    当日主力净流入是盘中实时值（东财 push2delay），融资净买入是 T+1。
+    """
     rzjme_hist = cn_data.get("rzjme_hist", [])
     if len(rzjme_hist) < 5:
         return {}
@@ -593,7 +596,16 @@ def _cn_momentum_index(cn_data: dict) -> dict:
     # 近 5 日均值
     recent5 = [h["v"] for h in rzjme_hist[-5:]]
     mean5 = sum(recent5) / len(recent5)
-    composite = _pct_rank(all_jme, mean5)
+    jme_pct = _pct_rank(all_jme, mean5)
+
+    # 当日主力净流入分位（用上证指数近 20 日 hist 做基准）
+    flow_pct = 50.0
+    sh_hist = flows.get("1.000001", {}).get("hist", [])
+    if len(sh_hist) >= 3:
+        sh_vals = [h["v"] for h in sh_hist]
+        # 用三指数合计替代单指数，更全
+        flow_pct = _pct_rank(sh_vals, total / 3)  # 除以 3 近似到单指数量级
+    composite = round(jme_pct * 0.6 + flow_pct * 0.4, 1)
 
     hist = []
     for i, h in enumerate(rzjme_hist):
@@ -601,6 +613,12 @@ def _cn_momentum_index(cn_data: dict) -> dict:
             window = [x["v"] for x in rzjme_hist[max(0, i-4):i+1]]
             m = sum(window) / len(window)
             hist.append({"date": h["date"], "v": round(_pct_rank(all_jme, m), 1)})
+    # 追加当日实时值（如果有主力净流入数据）
+    if flows:
+        from datetime import date as _date
+        today_str = _date.today().isoformat()
+        if not hist or hist[-1]["date"] != today_str:
+            hist.append({"date": today_str, "v": composite})
 
     return {
         "value": composite,

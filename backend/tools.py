@@ -106,6 +106,10 @@ TOOLS: list[dict] = [
        "查美股 / 港股 / 韩股个股：行情 + 关键财务指标（韩股仅行情）。美股用字母代码(AAPL)，港股用数字(00700)，韩股 6 位数字加 .KS(005930.KS)。",
        {"symbol": {"type": "string", "description": "美股字母代码 / 港股代码 / 韩股 XXXXXX.KS"}},
        ["symbol"]),
+    _t("query_hk_cashflow",
+       "查港股现金流量表：经营/投资/筹资活动现金流净额、现金及等价物净增加、期初/期末现金，多期、附同比。仅港股，代码用数字如 00700。",
+       {"symbol": {"type": "string", "description": "港股代码，如 00700"}},
+       ["symbol"]),
 ]
 
 TOOL_NAMES = [t["function"]["name"] for t in TOOLS]
@@ -361,6 +365,7 @@ _HANDLERS = {
     "query_market": _market,
     "query_news_radar": _radar,
     "query_global_stock": lambda a: gstock.us_hk_stock(str(a.get("symbol", ""))) or {"error": "未找到该美股/港股/韩股代码"},
+    "query_hk_cashflow": lambda a: gstock.hk_cashflow(str(a.get("symbol", ""))) or {"error": "未找到该港股现金流（仅港股支持）"},
 }
 
 
