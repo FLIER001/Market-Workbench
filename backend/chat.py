@@ -22,7 +22,7 @@ import cli_runtime
 import gstock
 import tools
 
-# 工具定义与执行统一由 tools.py 提供（chat / mcp_server / debate 共用一套）。
+# 工具定义与执行统一由 tools.py 提供（chat / mcp_server 共用一套）。
 # 这两个别名是历史入口，mcp_server 与既有测试仍按 chat.TOOLS / chat._exec_tool 取用。
 TOOLS = tools.TOOLS
 _exec_tool = tools.exec_tool
@@ -34,7 +34,7 @@ _TOOL_RESULT_CAP = 6000  # 单次工具结果注入上限（控 token）
 # 让弱模型也能输出结构化、覆盖全、不漏项的专业解读。焊进 SYSTEM_PROMPT，不做成 UI 选项——
 # 用户就问，给出的就是这套框架的结论。合规：框架只规定「怎么读数据」，每维只陈述事实与相对位置，
 # 最后不给买卖结论。
-ANALYSIS_FRAMEWORK = """【投研分析框架】当用户要你分析个股、给判断或下结论时，按下面五个维度依次组织分析，每维用一两句讲清数据事实与相对位置，最后只做客观归纳、不给买卖结论：
+ANALYSIS_FRAMEWORK = """【投研分析框架】当用户要你做完整个股分析、给综合判断或下结论时，按下面五个维度依次组织分析，每维用一两句讲清数据事实与相对位置，最后只做客观归纳、不给买卖结论。事件研判、摘要等已有明确输出格式的任务按任务要求作答，不套用本框架：
 1. 估值：PE / PB / PS 的绝对水平 + 处在历史区间的高 / 中 / 低位 + 同业对比 + 机构一致预期的前向估值。
 2. 资金面：主力资金流方向与强度 + 融资融券趋势 + 股东户数（筹码集中 / 分散）+ 龙虎榜 / 大宗异动。
 3. 财报质量：营收与扣非净利增速是否匹配 + 经营现金流含金量 + 毛利 / 净利率趋势 + 资产负债率。
@@ -57,6 +57,7 @@ SYSTEM_PROMPT = f"""你是 Vibe-Research 里的投研助理。你可以调用工
 - 事件风险：query_announcements（公告）/ query_lockup（解禁）/ query_investor_qa（互动易）
 - 行业板块：query_concepts（板块归属与热门概念）/ query_industry_comparison（行业强弱）/ query_industry_reports
 - 市场层：query_market（scope=indices/global/emotion/turnover/overview）/ query_news_radar（赛道资讯）
+- 联网核验：search_public_news（只在现有证据指向重大事件、仍需外部资料核实时调用一次；普通事件不要调用）
 - 海外：query_global_stock（美股 AAPL / 港股 00700 / 韩股 005930.KS）/ query_hk_cashflow（港股现金流量表，仅港股）
 
 用工具的方式：**先想清楚要回答什么，再挑最相关的 2-5 个工具**，不要一次把所有工具都调一遍。

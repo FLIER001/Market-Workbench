@@ -38,16 +38,11 @@ python3 -m venv .venv
 | `GET /api/market/overview` · `/api/radar` | 市场情绪+板块资金 · 资讯雷达 | akshare / stdlib |
 | `GET /api/sector-scores` | 申万一级行业评分：申万成分分类 × 腾讯个股行情聚合当前值 + 申万月度历史锚；申万日频备用 | 申万宏源研究、腾讯财经 |
 | `POST /api/chat` | 系统 AI 对话（function calling，AI 自己调数据工具） | requests |
-| `POST /api/debate` | **多空辩论**（多 agent，流式 NDJSON）：事实底稿 → 多方 / 空方 →（可选反驳）→ 中立主持 | requests |
 | `POST /api/reflect` | **反思审计**（流式 NDJSON）：对一段已写好的分析做推理审计 | requests |
-
-`/api/debate` 请求体：`{"code": "600519", "rounds": 1, "llm": {...}}`（`rounds=2` 加一轮交叉反驳）。
-事件类型：`status` · `dossier_progress`（底稿逐项进度）· `dossier` · `stage`（角色开始）·
-`delta`（增量文本）· `stage_done`（角色完成，失败时带 `failed: true`）· `done` · `error`。
 
 `/api/reflect` 请求体：`{"source": "待审的分析文本", "title": "可选标题", "llm": {...}}`。
 
-> 两个端点都**不产出买卖结论**：辩论终点是「分歧点 + 验证清单」，反思终点是「怎么继续验证」。
+> 两个端点都**不产出买卖结论**：AI 只负责读数据与审计推理，结论留给用户自己。
 
 > 上表为主要端点；完整路由清单见 `app.py`。要更全量的 A 股数据（打板 / ETF期权 / 全市场行业排名等），用根目录 [`a-stock-data/`](../a-stock-data/SKILL.md) 工具箱。
 

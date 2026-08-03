@@ -17,7 +17,7 @@ import sys
 
 import chat  # 复用 TOOLS 定义 + _exec_tool 执行逻辑（内含 astock）
 
-SERVER_INFO = {"name": "vibe-research", "version": "0.2.2"}
+SERVER_INFO = {"name": "vibe-research", "version": "0.3.0"}
 DEFAULT_PROTOCOL = "2024-11-05"
 
 # 把 chat.TOOLS（OpenAI 格式）转成 MCP 的 {name, description, inputSchema}

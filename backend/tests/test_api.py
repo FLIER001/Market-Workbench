@@ -29,6 +29,11 @@ def test_industry_top_range():
     assert client.get("/api/industry?top=999").status_code == 422  # le=50
 
 
+def test_public_news_search_validation():
+    assert client.get("/api/public-news-search?q=x").status_code == 422
+    assert client.get("/api/public-news-search?q=major&count=9").status_code == 422
+
+
 def test_chat_empty_messages_400():
     r = client.post("/api/chat", json={"messages": [], "llm": {"model": "x", "baseURL": "http://x", "apiKey": "k"}})
     assert r.status_code == 400

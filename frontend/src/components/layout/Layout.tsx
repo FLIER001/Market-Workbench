@@ -1,42 +1,113 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import {
-  Activity, Radar, LayoutGrid, Wallet, Settings, Search, NotebookPen,
-  Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github, UserRound,
-  Star, FileText, Swords, Gauge, Droplets,
+  Activity, Radar, LayoutGrid, Wallet, Settings, Search,
+  Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github,
+  Star, FileText, Droplets, Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import { storageGet, storageSet } from "@/lib/storage";
+import { loadUser, clearSession, auth } from "@/lib/auth";
+import { clearLocalUserData } from "@/lib/userData";
+import { api, type SearchResult } from "@/lib/api";
+import { useNavigate } from "react-router-dom";
+import { LogOut } from "lucide-react";
 
-const APP_VERSION = "v0.2.2";
-const REPO_URL = "https://github.com/simonlin1212/Vibe-Research";
-// 作者联系方式
-const X_URL = "https://x.com/linsizhen";
-const MAIL_URL = "mailto:simonlin0423@gmail.com";
+const APP_VERSION = "v0.3.1";
+const REPO_URL = "https://github.com/FLIER001/Vibe-Research";
 
 const NAV = [
-  { to: "/daily-review", icon: Activity, label: "每日复盘" },
-  { to: "/intel", icon: Radar, label: "资讯雷达" },
-  { to: "/sectors", icon: LayoutGrid, label: "板块中心" },
-  { to: "/sector-scores", icon: Gauge, label: "板块评分" },
-  { to: "/liquidity", icon: Droplets, label: "资金供给" },
-  { to: "/stock-data", icon: Search, label: "个股数据" },
-  { to: "/debate", icon: Swords, label: "多空辩论" },
+  { to: "/daily-review", icon: Activity, label: "市场全景" },
+  { to: "/liquidity", icon: Droplets, label: "资金面" },
+  { to: "/intel", icon: Radar, label: "资讯" },
+  { to: "/sectors", icon: LayoutGrid, label: "板块", match: "/sectors" },
   { to: "/watchlist", icon: Star, label: "自选" },
-  { to: "/portfolio", icon: Wallet, label: "我的持仓" },
-  { to: "/my-reports", icon: FileText, label: "我的研报" },
-  { to: "/notes", icon: NotebookPen, label: "研究记录" },
+  { to: "/portfolio", icon: Wallet, label: "持仓" },
+  { to: "/research", icon: FileText, label: "研究", match: "/research" },
 ];
 
 export function Layout() {
   const { pathname } = useLocation();
   const { dark, toggle } = useDarkMode();
+  const nav = useNavigate();
+  const user = loadUser();
   const [collapsed, setCollapsed] = useState(() => storageGet("vr-sidebar") === "collapsed");
+  const [stockCode, setStockCode] = useState("");
+  const [stockSuggestions, setStockSuggestions] = useState<SearchResult[]>([]);
+  const [showStockSuggestions, setShowStockSuggestions] = useState(false);
+  const [stockHighlight, setStockHighlight] = useState(-1);
+  const [stockSearching, setStockSearching] = useState(false);
+  const stockSearchRef = useRef<HTMLFormElement>(null);
+  const stockDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stockRequestRef = useRef(0);
+
+  const logout = () => {
+    auth.logout().catch(() => { /* 后端不在也允许本地登出 */ });
+    clearSession();
+    // 退出时清空本地缓存的用户数据，避免下一个账号读到这个账号的自选/笔记
+    clearLocalUserData();
+    nav("/login", { replace: true });
+  };
+
+  const pickStock = (stock: SearchResult) => {
+    nav(`/stock-data?code=${encodeURIComponent(stock.code)}`);
+    setStockCode("");
+    setStockSuggestions([]);
+    setShowStockSuggestions(false);
+    setStockHighlight(-1);
+  };
 
   useEffect(() => {
     storageSet("vr-sidebar", collapsed ? "collapsed" : "expanded");
   }, [collapsed]);
+
+  useEffect(() => {
+    if (stockDebounceRef.current) clearTimeout(stockDebounceRef.current);
+    const query = stockCode.trim();
+    if (!query) {
+      stockRequestRef.current += 1;
+      setStockSuggestions([]);
+      setShowStockSuggestions(false);
+      setStockSearching(false);
+      return;
+    }
+
+    stockDebounceRef.current = setTimeout(() => {
+      const requestId = ++stockRequestRef.current;
+      setStockSearching(true);
+      api.search(query)
+        .then((results) => {
+          if (requestId !== stockRequestRef.current) return;
+          setStockSuggestions(results);
+          setShowStockSuggestions(true);
+          setStockHighlight(-1);
+        })
+        .catch(() => {
+          if (requestId !== stockRequestRef.current) return;
+          setStockSuggestions([]);
+          setShowStockSuggestions(false);
+        })
+        .finally(() => {
+          if (requestId === stockRequestRef.current) setStockSearching(false);
+        });
+    }, 300);
+
+    return () => {
+      if (stockDebounceRef.current) clearTimeout(stockDebounceRef.current);
+    };
+  }, [stockCode]);
+
+  useEffect(() => {
+    const closeSuggestions = (event: MouseEvent) => {
+      if (!stockSearchRef.current?.contains(event.target as Node)) {
+        setShowStockSuggestions(false);
+        setStockHighlight(-1);
+      }
+    };
+    document.addEventListener("mousedown", closeSuggestions);
+    return () => document.removeEventListener("mousedown", closeSuggestions);
+  }, []);
 
   return (
     <div className="flex h-screen">
@@ -60,8 +131,8 @@ export function Layout() {
 
         {/* Nav */}
         <nav className={cn("flex-1 space-y-1 overflow-auto", collapsed ? "p-1.5" : "p-2.5")}>
-          {NAV.map(({ to, icon: Icon, label }) => {
-            const active = pathname === to;
+          {NAV.map(({ to, icon: Icon, label, match }) => {
+            const active = match ? pathname.startsWith(match) : pathname === to;
             return (
               <div key={to}>
                 <Link
@@ -101,9 +172,11 @@ export function Layout() {
               <button onClick={toggle} className="rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground" title={dark ? "亮色" : "暗色"}>
                 {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
               </button>
-              <a href={X_URL} target="_blank" rel="noreferrer" className="rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground" title="联系作者 · X @linsizhen">
-                <UserRound className="h-4 w-4" />
-              </a>
+              {user && (
+                <button onClick={logout} className="rounded p-1.5 text-muted-foreground transition-colors hover:text-danger" title={`${user.username} · 退出登录`}>
+                  <LogOut className="h-4 w-4" />
+                </button>
+              )}
               <button onClick={() => setCollapsed(false)} className="rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground" title="展开">
                 <ChevronsRight className="h-4 w-4" />
               </button>
@@ -111,11 +184,21 @@ export function Layout() {
           ) : (
             <>
               <div className="flex items-center justify-between">
-                <button onClick={toggle} className="flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground">
-                  {dark ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
-                  {dark ? "亮色" : "暗色"}
-                </button>
+                {user ? (
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/20 text-[10px] font-bold text-primary">
+                      {user.username.slice(0, 1).toUpperCase()}
+                    </span>
+                    <span className="max-w-20 truncate text-xs font-medium text-foreground">{user.username}</span>
+                    <button onClick={logout} className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:text-danger" title="退出登录">
+                      <LogOut className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ) : <span />}
                 <div className="flex items-center gap-2">
+                  <button onClick={toggle} className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground" title={dark ? "切换为亮色" : "切换为暗色"}>
+                    {dark ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+                  </button>
                   <Link
                     to="/settings"
                     className={cn(
@@ -126,9 +209,6 @@ export function Layout() {
                   >
                     <Settings className="h-3.5 w-3.5" />
                   </Link>
-                  <a href={X_URL} target="_blank" rel="noreferrer" className="text-muted-foreground transition-colors hover:text-foreground" title="联系作者 · X @linsizhen">
-                    <UserRound className="h-3.5 w-3.5" />
-                  </a>
                   <a href={REPO_URL} target="_blank" rel="noreferrer" className="text-muted-foreground transition-colors hover:text-foreground" title="GitHub">
                     <Github className="h-3.5 w-3.5" />
                   </a>
@@ -137,14 +217,8 @@ export function Layout() {
                   </button>
                 </div>
               </div>
-              <div className="flex items-center gap-1.5 text-[11px] text-primary/80">
-                <span className="text-muted-foreground/60">联系作者</span>
-                <a href={X_URL} target="_blank" rel="noreferrer" className="transition-colors hover:text-primary">X</a>
-                <span className="text-muted-foreground/40">·</span>
-                <a href={MAIL_URL} className="transition-colors hover:text-primary">Email</a>
-              </div>
               <p className="text-[11px] leading-relaxed text-muted-foreground/60">
-                {APP_VERSION} · 不荐股 · 不预测 · 无倾向
+                {APP_VERSION}
               </p>
             </>
           )}
@@ -153,7 +227,69 @@ export function Layout() {
 
       {/* Main */}
       <main className="flex-1 overflow-auto">
-        <div className="mx-auto max-w-6xl px-6 py-6">
+        <div className="relative mx-auto max-w-6xl px-6 py-6">
+          <div className="relative z-20 mb-4 flex justify-center md:pointer-events-none md:absolute md:left-1/2 md:top-6 md:mb-0 md:w-[260px] md:-translate-x-1/2 lg:w-[280px]">
+          <form
+            ref={stockSearchRef}
+            onSubmit={(event) => {
+              event.preventDefault();
+              const stock = stockHighlight >= 0
+                ? stockSuggestions[stockHighlight]
+                : stockSuggestions[0];
+              if (stock) pickStock(stock);
+            }}
+            className="glass pointer-events-auto relative flex w-full items-center gap-2 rounded-xl px-2.5 py-1.5 shadow-lg"
+          >
+            {stockSearching
+              ? <Loader2 className="ml-1 h-4 w-4 shrink-0 animate-spin text-primary" />
+              : <Search className="ml-1 h-4 w-4 shrink-0 text-muted-foreground" />}
+            <input
+              value={stockCode}
+              onChange={(event) => {
+                setStockCode(event.target.value);
+                setShowStockSuggestions(true);
+                setStockHighlight(-1);
+              }}
+              onFocus={() => stockSuggestions.length > 0 && setShowStockSuggestions(true)}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowDown") {
+                  event.preventDefault();
+                  setStockHighlight((index) => Math.min(index + 1, stockSuggestions.length - 1));
+                } else if (event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setStockHighlight((index) => Math.max(index - 1, -1));
+                } else if (event.key === "Escape") {
+                  setShowStockSuggestions(false);
+                  setStockHighlight(-1);
+                }
+              }}
+              placeholder="代码 / 中文 / 拼音，如 600519、茅台、MT、AAPL"
+              aria-label="搜索股票"
+              autoComplete="off"
+              className="min-w-0 flex-1 bg-transparent px-1 py-1.5 text-sm outline-none placeholder:text-muted-foreground/55"
+            />
+            {showStockSuggestions && stockSuggestions.length > 0 && (
+              <div className="absolute left-0 right-0 top-full mt-2 overflow-hidden rounded-xl border border-border bg-card py-1 shadow-xl">
+                {stockSuggestions.map((stock, index) => (
+                  <button
+                    key={`${stock.market}:${stock.code}`}
+                    type="button"
+                    onClick={() => pickStock(stock)}
+                    onMouseEnter={() => setStockHighlight(index)}
+                    className={cn(
+                      "flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-muted/60",
+                      index === stockHighlight && "bg-muted/60",
+                    )}
+                  >
+                    <span className="font-mono text-xs text-muted-foreground">{stock.code}</span>
+                    <span className="min-w-0 flex-1 truncate">{stock.name}</span>
+                    <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">{stock.market}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </form>
+          </div>
           <Outlet />
         </div>
       </main>

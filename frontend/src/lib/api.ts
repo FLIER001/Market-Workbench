@@ -192,10 +192,16 @@ export interface RadarData {
   generated_at: string | null; recent_days: number; industries: Industry[];
   stats: { industries: number; total_sources: number; failed_sources?: number };
 }
+export interface PublicNewsSearchResult {
+  title: string; url: string; snippet: string; published: string; source: string;
+}
+export interface PublicNewsSearchData {
+  query: string; results: PublicNewsSearchResult[];
+}
 
 export interface Holding {
   code: string; name: string; price: number; shares: number; cost: number;
-  market_value: number; pnl: number; pnl_pct: number;
+  market_value: number; pnl: number; pnl_pct: number; day_pnl: number; day_pnl_pct: number;
 }
 export interface ClosedPosition {
   code: string; name: string; date: string; price: number; shares: number; cost: number;
@@ -203,7 +209,7 @@ export interface ClosedPosition {
 }
 export interface PortfolioData {
   holdings: Holding[];
-  totals: { market_value: number; cost: number; pnl: number; pnl_pct: number };
+  totals: { market_value: number; cost: number; pnl: number; pnl_pct: number; day_pnl: number; day_pnl_pct: number };
   closed: ClosedPosition[];
   realized_pnl: number;
   updated: string; last_refresh: string | null;
@@ -308,6 +314,9 @@ export interface SectorScoresData {
 export interface GlobalIndex {
   key: string; name: string; region: string;
   price: number | null; change_pct: number | null;
+  weight?: number;      // 该市场总市值近似（万亿美元），用于加权
+  session?: string;     // 日盘 / 夜盘（中国视角）
+  closed?: boolean;     // true = 该市场已闭市，显示的是收盘价
 }
 export interface GlobalQuote {
   code: string; name: string;
@@ -357,17 +366,26 @@ export interface FedOddsStrike { strike: number; prob: number }
 export interface FedOdds {
   event: string; meeting: string; likely_upper: string;
   strikes: FedOddsStrike[];
+  stale?: boolean;      // true = 数据源暂不可用，展示的是最近一次缓存值
+  fetched_at?: string;  // 数据实际获取时间（stale 时用于提示）
 }
+export interface IndexComponent { label: string; value: string; pct: number; hist?: HistPoint[] }
 export interface CompositeIndex {
   value: number; label: string; desc: string; date: string;
+  favorable?: "high" | "low";  // high=分高有利，low=分低有利（缺省按 low）
   hist: HistPoint[]; interpretation: string;
+  components?: IndexComponent[];  // 子指标：当前值 + 各自分位，点击指数卡展开
 }
 export interface LiquidityData {
   cn: LiquidityCn;
   cn_indices?: Record<string, CompositeIndex>;
   us: Record<string, LiquidityUsItem>;
+  us_indices?: Record<string, CompositeIndex>;
   fed_odds?: FedOdds;
   updated: string;
+  /** 后端源故障回退 last-good 缓存时为 true，stale_since 为缓存生成时间 */
+  stale?: boolean;
+  stale_since?: string;
 }
 
 // 分时图（当日分钟级）
@@ -390,12 +408,14 @@ export const api = {
   hkCashflow: (symbol: string) => get<HkCashflow>(`/global/hk/cashflow?symbol=${encodeURIComponent(symbol)}`),
   radar: () => get<RadarData>("/radar"),
   radarRefresh: () => request<RadarData>("/radar/refresh", "POST"),
+  publicNewsSearch: (q: string, count = 5) =>
+    get<PublicNewsSearchData>(`/public-news-search?q=${encodeURIComponent(q)}&count=${count}`),
   portfolio: () => get<PortfolioData>("/portfolio"),
   addHolding: (code: string, shares: number, cost: number) => request<PortfolioData>("/portfolio/holding", "POST", { code, shares, cost }),
   removeHolding: (code: string) => request<PortfolioData>(`/portfolio/holding?code=${code}`, "DELETE"),
   refreshPortfolio: () => request<PortfolioData>("/portfolio/refresh", "POST"),
-  closePosition: (code: string, date: string, price: number, shares: number, cost: number) =>
-    request<PortfolioData>("/portfolio/close", "POST", { code, date, price, shares, cost }),
+  closePosition: (code: string, date: string, price: number, shares: number, cost?: number) =>
+    request<PortfolioData>("/portfolio/close", "POST", { code, date, price, shares, ...(cost !== undefined ? { cost } : {}) }),
   removeClosed: (index: number) => request<PortfolioData>(`/portfolio/close?index=${index}`, "DELETE"),
   valuation: (code: string) => get<Valuation>(`/valuation?code=${code}`),
   minuteKline: (code: string) => get<MinuteKline>(`/kline/minute?code=${encodeURIComponent(code)}`),

@@ -8,10 +8,15 @@
   让模型拿到的是能直接推理的密度，而不是原始转储。
 - **失败不抛**：任何异常都转成 {"error": ...} 回喂给模型，让它换个工具继续，不中断对话循环。
 
-chat.py / mcp_server.py / debate.py 共用本模块，新增工具只需改这里一处。
+chat.py / mcp_server.py 共用本模块，新增工具只需改这里一处。
 """
 
 from __future__ import annotations
+
+import html
+import re
+import xml.etree.ElementTree as ET
+from urllib.parse import urlparse
 
 import astock
 import gstock
@@ -100,6 +105,11 @@ TOOLS: list[dict] = [
        "查资讯雷达：12 条赛道的行业资讯聚合（非个股新闻，看产业面动态用）。可传 track 只看某条赛道（如「半导体」「AI」）。",
        {"track": {"type": "string", "description": "赛道名关键词，留空看全部"},
         "per_track": {"type": "integer", "description": "每条赛道取最新几条，默认 5"}}),
+    _t("search_public_news",
+       "联网搜索公开资料，用于核验已经识别出的重大事件。仅当现有公告/新闻指向重大变化且资料不足时调用一次，不要用于普通事件或批量扫标的。",
+       {"query": {"type": "string", "description": "精确查询词，包含公司/板块名和重大事件关键词"},
+        "count": {"type": "integer", "description": "返回条数，默认 5，最大 8"}},
+       ["query"]),
 
     # —— 海外 ——
     _t("query_global_stock",
@@ -335,6 +345,51 @@ def _radar(args: dict):
             "tracks": [i.get("name") for i in (d.get("industries") or [])], "items": out}
 
 
+def public_news_search(query: str, count: int = 5) -> dict:
+    """Bing RSS 公开网页搜索：固定目标域名、只取摘要，不抓任意结果页正文。"""
+    import requests
+
+    q = re.sub(r"\s+", " ", str(query or "")).strip()[:160]
+    if not q:
+        return {"query": "", "results": []}
+    limit = max(1, min(int(count or 5), 8))
+    response = requests.get(
+        "https://www.bing.com/search",
+        params={"q": q, "format": "rss", "setlang": "zh-hans"},
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; Vibe-Research/0.3; +https://github.com/FLIER001/Vibe-Research)",
+            "Accept": "application/rss+xml, application/xml, text/xml",
+        },
+        timeout=15,
+    )
+    response.raise_for_status()
+    raw = response.content[:1_000_000]
+    root = ET.fromstring(raw)
+    results = []
+    for item in root.findall(".//item"):
+        title = html.unescape(re.sub(r"<[^>]+>", "", item.findtext("title") or "")).strip()
+        link = html.unescape((item.findtext("link") or "").strip())
+        parsed = urlparse(link)
+        if not title or parsed.scheme not in ("http", "https") or not parsed.netloc:
+            continue
+        snippet = html.unescape(re.sub(r"<[^>]+>", "", item.findtext("description") or ""))
+        snippet = re.sub(r"\s+", " ", snippet).strip()[:500]
+        results.append({
+            "title": title[:240],
+            "url": link,
+            "snippet": snippet,
+            "published": (item.findtext("pubDate") or "").strip(),
+            "source": parsed.netloc.lower().removeprefix("www."),
+        })
+        if len(results) >= limit:
+            break
+    return {"query": q, "results": results}
+
+
+def _public_news_search(args: dict):
+    return public_news_search(str(args.get("query") or ""), int(args.get("count") or 5))
+
+
 # name -> 执行函数。绝大多数是「调后端函数 + 裁剪」，复杂的抽成上面的私有函数。
 _HANDLERS = {
     "query_quote": lambda a: astock.tencent_quote([str(c) for c in a.get("codes", [])]),
@@ -364,6 +419,7 @@ _HANDLERS = {
         ("title", "publishDate", "orgSName", "industryName"), 20),
     "query_market": _market,
     "query_news_radar": _radar,
+    "search_public_news": _public_news_search,
     "query_global_stock": lambda a: gstock.us_hk_stock(str(a.get("symbol", ""))) or {"error": "未找到该美股/港股/韩股代码"},
     "query_hk_cashflow": lambda a: gstock.hk_cashflow(str(a.get("symbol", ""))) or {"error": "未找到该港股现金流（仅港股支持）"},
 }

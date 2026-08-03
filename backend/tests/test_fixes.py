@@ -32,7 +32,8 @@ def test_api_key_auth(monkeypatch):
 def tmp_pf(tmp_path, monkeypatch):
     monkeypatch.setattr(pf, "CACHE_DIR", str(tmp_path))
     monkeypatch.setattr(pf, "PF_FILE", str(tmp_path / "portfolio.json"))
-    monkeypatch.setattr(astock, "tencent_quote", lambda codes: {c: {"name": f"股{c}", "price": 10.0} for c in codes})
+    monkeypatch.setattr(astock, "tencent_quote",
+                        lambda codes: {c: {"name": f"股{c}", "price": 10.0, "last_close": 9.5} for c in codes})
     return tmp_path
 
 
@@ -44,6 +45,11 @@ def test_portfolio_crud_roundtrip(tmp_pf):
     h = r.json()["data"]["holdings"][0]
     assert h["code"] == "600519"
     assert h["pnl"] == pytest.approx((10.0 - 8.0) * 100)
+    # 当日盈亏 = (现价 - 昨收) × 股数
+    assert h["day_pnl"] == pytest.approx((10.0 - 9.5) * 100)
+    assert h["day_pnl_pct"] == pytest.approx((10.0 - 9.5) / 9.5 * 100, abs=0.01)
+    assert r.json()["data"]["totals"]["day_pnl"] == pytest.approx(50.0)
+    assert r.json()["data"]["totals"]["day_pnl_pct"] == pytest.approx(50.0 / 950.0 * 100, abs=0.01)
 
     # 同代码加仓 → 加权平均成本
     client.post("/api/portfolio/holding", json={"code": "600519", "shares": 100, "cost": 12.0})
@@ -51,13 +57,40 @@ def test_portfolio_crud_roundtrip(tmp_pf):
     assert h["shares"] == 200
     assert h["cost"] == pytest.approx(10.0)
 
-    r = client.post("/api/portfolio/close", json={"code": "600519", "date": "2026-07-05", "price": 11.0, "shares": 200, "cost": 10.0})
+    # 清仓全部 200 股，成本缺省 → 自动取持仓加权成本 10.0，持仓同步清空
+    r = client.post("/api/portfolio/close", json={"code": "600519", "date": "2026-07-05", "price": 11.0, "shares": 200})
     assert r.status_code == 200
     assert r.json()["data"]["closed"][0]["pnl"] == pytest.approx(200.0)
+    assert r.json()["data"]["closed"][0]["cost"] == pytest.approx(10.0)
+    assert r.json()["data"]["holdings"] == []
 
-    assert client.delete("/api/portfolio/holding?code=600519").json()["data"]["holdings"] == []
     assert client.delete("/api/portfolio/close?index=0").json()["data"]["closed"] == []
     assert client.post("/api/portfolio/refresh").status_code == 200
+
+
+def test_portfolio_partial_close_deducts_holding(tmp_pf):
+    """部分清仓：从当前持仓扣减股数、成本不变；未持仓代码必须显式给成本。"""
+    client.post("/api/portfolio/holding", json={"code": "600519", "shares": 300, "cost": 8.0})
+    r = client.post("/api/portfolio/close", json={"code": "600519", "date": "2026-07-06", "price": 9.0, "shares": 100})
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert d["closed"][0]["pnl"] == pytest.approx(100.0)
+    assert d["closed"][0]["cost"] == pytest.approx(8.0)
+    h = d["holdings"][0]
+    assert h["shares"] == 200
+    assert h["cost"] == pytest.approx(8.0)
+
+    # 未持仓的代码无法自动取成本 → 明确 400，而不是按 0 成本算
+    r = client.post("/api/portfolio/close", json={"code": "000001", "date": "2026-07-06", "price": 9.0, "shares": 100})
+    assert r.status_code == 400
+    # 显式给成本仍可用（覆盖：记录一笔当前持仓之外的历史清仓）
+    r = client.post("/api/portfolio/close", json={"code": "000001", "date": "2026-07-06", "price": 9.0, "shares": 100, "cost": 10.0})
+    assert r.status_code == 200
+    assert r.json()["data"]["closed"][-1]["pnl"] == pytest.approx(-100.0)
+
+    client.delete("/api/portfolio/holding?code=600519")
+    client.delete("/api/portfolio/close?index=0")
+    client.delete("/api/portfolio/close?index=0")
 
 
 def test_portfolio_add_validation(tmp_pf):
@@ -182,6 +215,70 @@ def test_cached_skips_empty():
     assert market._cached("k_test", flaky) == {"ok": 1}  # 非空已缓存，不再调用
     assert len(calls) == 2
     market._CACHE.pop("k_test", None)
+
+
+# ── 分层缓存：源故障回退 last-good（指标不空窗） + 退避不每请求重建 ──────────
+
+def _reset_layered(key):
+    market._LAYERED.pop(key, None)
+    market._FAILED_STREAK.pop(key, None)
+
+
+def test_layered_falls_back_to_last_good():
+    key = "k_layered"
+    _reset_layered(key)
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) == 1:
+            return {"us": {"x": 1}}
+        raise RuntimeError("source down")
+
+    first = market._layered_get(key, flaky, valid=lambda v: bool(v.get("us")))
+    assert first == {"us": {"x": 1}} and first.get("stale") is None
+    # 过期后源故障：回退 last-good，标注 stale，数据仍在
+    market._LAYERED[key]["fresh"] = (0, first)  # 强制过期
+    second = market._layered_get(key, flaky, valid=lambda v: bool(v.get("us")))
+    assert second["us"] == {"x": 1}
+    assert second["stale"] is True and second["stale_since"]
+    # 退避窗口内不再调用 build（不打爆故障源），仍回 last-good
+    third = market._layered_get(key, flaky, valid=lambda v: bool(v.get("us")))
+    assert third["us"] == {"x": 1} and len(calls) == 2
+    # 冷启动 warm 快照：全新 key、无 last-good，直接给快照并标 stale
+    warm_calls = []
+
+    def boom():
+        warm_calls.append(1)
+        raise RuntimeError("down")
+
+    _reset_layered("k_warm")
+    warmed = market._layered_get("k_warm", boom, valid=bool, warm=lambda: {"cn": {"snapshot": 1}})
+    assert warmed["cn"] == {"snapshot": 1} and warmed["stale"] is True
+    _reset_layered(key)
+
+
+def test_sub_cached_keeps_last_good():
+    key = "k_sub"
+    market._SUB.pop(key, None)
+    market._SUB_LAST.pop(key, None)
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        return {"v": 1} if len(calls) == 1 else {}
+
+    assert market._sub_cached(key, flaky) == {"v": 1}
+    market._SUB[key] = (0, {"v": 1})  # 强制过期
+    out = market._sub_cached(key, flaky)  # 源故障 → last-good
+    assert out == {"v": 1}
+    assert len(calls) >= 2  # 后台异步重试可能追加一次调用
+    # last-good 过期兜底窗口外、源仍空 → 返回空值（不假装有数据）
+    market._SUB_LAST[key] = (0, {"v": 1})
+    market._SUB.pop(key, None)
+    assert market._sub_cached(key, flaky) == {}
+    market._SUB.pop(key, None)
+    market._SUB_LAST.pop(key, None)
 
 
 # ── akshare 未安装：market 降级返回空，不挡服务 ─────────────────────

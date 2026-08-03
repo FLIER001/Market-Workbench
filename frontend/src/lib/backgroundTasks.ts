@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { storageGet, storageSet } from "@/lib/storage";
+import { isLoggedIn } from "@/lib/userData";
+import { auth } from "@/lib/auth";
 
 export type BackgroundTaskStatus = "idle" | "running" | "done" | "error" | "cancelled";
 
@@ -33,8 +35,41 @@ for (const [key, task] of Object.entries(saved)) {
     : task);
 }
 
+// 登录后如果后端有深度分析结果，异步拉取并合并到本地（覆盖 idle 占位）
+if (typeof window !== "undefined") {
+  window.addEventListener("vr:restore-deep-analysis", ((event: CustomEvent) => {
+    const remote = event.detail as Record<string, BackgroundTask<unknown>> | undefined;
+    if (!remote || typeof remote !== "object") return;
+    for (const [key, task] of Object.entries(remote)) {
+      const existing = records.get(key);
+      const localIsEmpty = !existing || existing.status === "idle";
+      const remoteHasContent = task.status === "done" || task.status === "error";
+      if (localIsEmpty && remoteHasContent) {
+        records.set(key, task);
+        emit(key);
+      }
+    }
+    persist();
+  }) as EventListener);
+}
+
 function persist() {
   storageSet(STORAGE_KEY, JSON.stringify(Object.fromEntries(records)));
+  window.dispatchEvent(new CustomEvent("vr:background-tasks"));
+
+  // 已完成 / 失败 / 中止的深度分析结果，登录后同步到账号（key 以 watchlist-deep-analysis: 开头）
+  if (!isLoggedIn()) return;
+  const done: Record<string, BackgroundTask<unknown>> = {};
+  for (const [key, task] of records) {
+    if (!key.startsWith("watchlist-deep-analysis:")) continue;
+    if (task.status !== "done" && task.status !== "error" && task.status !== "cancelled") continue;
+    done[key] = task;
+  }
+  if (Object.keys(done).length > 0) {
+    auth.setData("deep-analysis", done).catch(() => {
+      /* 同步失败不阻塞本地 */
+    });
+  }
 }
 
 function emit(key: string) {
@@ -139,4 +174,19 @@ export function backgroundTaskKey(scope: string, identity: string): string {
     hash = Math.imul(hash, 16777619);
   }
   return `${scope}:${(hash >>> 0).toString(36)}`;
+}
+
+/** 登录后把后端同步来的已完成任务注入本地缓存（不覆盖本地已有记录，本地更新）。 */
+export function restoreBackgroundTasks(items: Record<string, BackgroundTask<unknown>>): void {
+  for (const [key, task] of Object.entries(items)) {
+    const existing = records.get(key);
+    // 本地没有 → 直接注入；本地是 idle 占位（useBackgroundTask 初始值）而后端有实质结果 → 覆盖
+    const localIsEmpty = !existing || (existing.status === "idle" && !existing.data);
+    const remoteHasContent = task.status === "done" || task.status === "error";
+    if (localIsEmpty && remoteHasContent) {
+      records.set(key, task);
+      emit(key);
+    }
+  }
+  persist();
 }

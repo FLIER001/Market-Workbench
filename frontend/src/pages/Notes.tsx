@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Trash2, ChevronDown, ChevronRight, NotebookPen, ScanSearch, Save } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { loadNotes, deleteNote, clearNotes, addNote, type Note } from "@/lib/notes";
 import { reflectStream } from "@/lib/agents";
@@ -12,7 +11,6 @@ const KIND_COLOR: Record<string, string> = {
   复盘: "bg-primary/15 text-primary",
   今日要点: "bg-warning/15 text-warning",
   问AI: "bg-success/15 text-success",
-  多空辩论: "bg-sky-500/15 text-sky-400",
   反思审计: "bg-violet-500/15 text-violet-400",
 };
 interface ReflectTaskData {
@@ -24,7 +22,7 @@ interface ReflectTaskData {
 const REFLECT_TASK_KEY = "notes:reflection";
 const EMPTY_REFLECT: ReflectTaskData = { noteId: null, text: "", error: "", saved: false };
 
-export function Notes() {
+export function NotesPanel() {
   const [notes, setNotes] = useState<Note[]>(loadNotes);
   const [openId, setOpenId] = useState<string | null>(null);
   const reflectTask = useBackgroundTask<ReflectTaskData>(REFLECT_TASK_KEY, EMPTY_REFLECT);
@@ -50,22 +48,21 @@ export function Notes() {
 
   return (
     <div>
-      <PageHeader
-        title="研究记录"
-        subtitle="把 AI 复盘 / 要点 / 问答沉淀在本地，随时回看。数据只存本地、不上传。"
-        actions={notes.length > 0 && (
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <p className="text-xs text-muted-foreground">把 AI 复盘 / 要点 / 问答沉淀在本地，随时回看</p>
+        {notes.length > 0 && (
           <button onClick={() => { if (confirm("清空所有研究记录？")) { clearNotes(); setNotes([]); } }}
-            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-muted-foreground hover:text-destructive">
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-muted-foreground hover:text-destructive">
             <Trash2 className="h-4 w-4" /> 清空
           </button>
         )}
-      />
+      </div>
 
       {notes.length === 0 ? (
         <GlassCard>
           <div className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
             <NotebookPen className="h-8 w-8 text-muted-foreground/40" />
-            还没有记录。在「每日复盘」「资讯雷达」或「问 AI」里点 <b className="text-foreground">「存入沉淀」</b> 保存分析结果。
+            还没有记录。在「市场全景」「资讯」或「问 AI」里点 <b className="text-foreground">「存入沉淀」</b> 保存分析结果。
           </div>
         </GlassCard>
       ) : (

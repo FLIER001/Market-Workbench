@@ -1,5 +1,7 @@
-// 自选股 / 自选 ETF —— 两套数据分别存于本地 localStorage，不上传、不进仓库。
+// 自选股 / 自选 ETF —— 本地 localStorage 秒读，登录后自动同步到后端账号。
 // 行情复用 /api/quote；复盘仍只读取自选股，ETF 清单保持独立。
+
+import { syncKeyToBackend } from "@/lib/userData";
 
 export type WatchCollection = "stock" | "etf";
 const STORAGE_KEYS: Record<WatchCollection, { flat: string; groups: string }> = {
@@ -85,15 +87,13 @@ export function loadWatchGroups(collection: WatchCollection = "stock"): WatchGro
 export function saveWatchGroups(groups: WatchGroup[], collection: WatchCollection = "stock") {
   const normalized = normalizeGroups(groups);
   try {
-    localStorage.setItem(
-      STORAGE_KEYS[collection].groups,
-      JSON.stringify({ version: 1, groups: normalized }),
-    );
+    const groupsPayload = JSON.stringify({ version: 1, groups: normalized });
+    localStorage.setItem(STORAGE_KEYS[collection].groups, groupsPayload);
+    syncKeyToBackend(STORAGE_KEYS[collection].groups, groupsPayload);
     // 保留旧扁平键，供旧版本及尚未改造的联动页面读取。
-    localStorage.setItem(
-      STORAGE_KEYS[collection].flat,
-      JSON.stringify(flattenWatchGroups(normalized)),
-    );
+    const flatPayload = JSON.stringify(flattenWatchGroups(normalized));
+    localStorage.setItem(STORAGE_KEYS[collection].flat, flatPayload);
+    syncKeyToBackend(STORAGE_KEYS[collection].flat, flatPayload);
   } catch {
     /* 存储不可用时，本次页面状态仍可继续使用 */
   }
@@ -134,7 +134,9 @@ export function loadWatchNotes(): WatchNotes {
 
 export function saveWatchNotes(notes: WatchNotes) {
   try {
-    localStorage.setItem(STOCK_NOTES_KEY, JSON.stringify(notes));
+    const payload = JSON.stringify(notes);
+    localStorage.setItem(STOCK_NOTES_KEY, payload);
+    syncKeyToBackend(STOCK_NOTES_KEY, payload);
   } catch {
     /* 存储不可用时，本次页面状态仍可继续使用 */
   }

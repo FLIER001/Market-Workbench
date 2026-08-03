@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import {
   Check,
@@ -14,6 +15,7 @@ import {
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
+import { DeepAnalysisButton } from "@/components/watchlist/DeepAnalysisButton";
 import { StockSearchInput } from "@/components/ui/StockSearchInput";
 import {
   assignCodesToGroup,
@@ -31,6 +33,7 @@ import {
   type WatchNotes,
 } from "@/lib/watchlist";
 import { useLiveQuotes, isTradingHours } from "@/hooks/useLiveQuotes";
+import { useValuationPercentiles, type StockValPct } from "@/hooks/useValuationPercentiles";
 import { cn } from "@/lib/utils";
 
 const color = (value: number | undefined) =>
@@ -43,6 +46,28 @@ const color = (value: number | undefined) =>
         : "text-muted-foreground";
 const pct = (value: number | undefined) =>
   value == null ? "—" : `${value > 0 ? "+" : ""}${value}%`;
+
+/** 估值当前值 + 括号内近5年分位。颜色沿用全站口径：<20% 低估区绿 / >80% 高估区红。 */
+function ValuationCell({ label, current, metric }: { label: "PE" | "PB"; current: number | undefined; metric: StockValPct["pe"] }) {
+  if (current == null) return <span className="text-muted-foreground">—</span>;
+  const p = metric?.percentile;
+  return (
+    <span
+      title={
+        metric && p != null
+          ? `${label === "PE" ? "市盈率(TTM)" : "市净率"} ${current}，近5年分位 ${p}%（${metric.n} 个交易日，百度股市通）`
+          : `${label} ${current}（暂无近5年分位数据）`
+      }
+    >
+      <span className="font-mono">{current}</span>
+      {p != null && (
+        <span className={cn("ml-0.5 font-mono text-[10px]", p < 20 ? "text-success" : p > 80 ? "text-danger" : "text-muted-foreground/70")}>
+          ({p}%)
+        </span>
+      )}
+    </span>
+  );
+}
 
 const LIVE_KEY = "vr-watchlist-live";
 const ALL_GROUPS = "all";
@@ -96,6 +121,12 @@ export function Watchlist() {
   }, [groups]);
 
   const { quotes, loading, updatedAt, polling, error, refresh } = useLiveQuotes(codes, live);
+  const valPct = useValuationPercentiles(codes);
+  const valPctByCode = useMemo(() => {
+    const map = new Map<string, StockValPct>();
+    for (const [code, v] of Object.entries(valPct)) map.set(code, v);
+    return map;
+  }, [valPct]);
 
   const persist = (next: WatchGroup[]) => {
     if (collection === "stock") setStockGroups(next);
@@ -270,15 +301,18 @@ export function Watchlist() {
     return `我的分组${itemLabel}（本地）：\n` + populated.map((group) => {
       const rows = group.codes.map((code) => {
         const quote = quotes[code];
+        const vp = valPctByCode.get(code);
+        const pePctile = vp?.pe?.percentile != null ? `(${vp.pe.percentile}%·5年)` : "";
+        const pbPctile = vp?.pb?.percentile != null ? `(${vp.pb.percentile}%·5年)` : "";
         const row = quote
-          ? `${quote.name}(${code}) 现价${quote.price} ${pct(quote.change_pct)} PE(TTM)${quote.pe_ttm ?? "—"} 换手${quote.turnover_pct ?? "—"}%`
+          ? `${quote.name}(${code}) 现价${quote.price} ${pct(quote.change_pct)} PE(TTM)${quote.pe_ttm ?? "—"}${pePctile} PB${quote.pb ?? "—"}${pbPctile} 换手${quote.turnover_pct ?? "—"}%`
           : `${code}（行情未取到）`;
         const note = collection === "stock" ? stockNotes[code] : "";
         return note ? `${row} 备注：${note}` : row;
       });
       return `【${group.name}】\n${rows.join("\n")}`;
     }).join("\n");
-  }, [collection, groups, quotes, stockNotes]);
+  }, [collection, groups, quotes, stockNotes, valPctByCode]);
 
   const activeLabel = activeGroupId === ALL_GROUPS ? "全部自选" : activeGroup?.name || "未分组";
 
@@ -286,7 +320,7 @@ export function Watchlist() {
     <div>
       <PageHeader
         title="自选"
-        subtitle="自选股与自选 ETF 分开管理；分组、排序与 AI 上下文互不混用"
+        subtitle="自选股与自选 ETF 分开管理"
         actions={
           <div className="flex items-center gap-2">
             <button
@@ -526,16 +560,31 @@ export function Watchlist() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
-                  {["名称", "代码", "现价", "涨跌%", "PE(TTM)", "PB", "换手%", "分组", ""].map((heading) => (
-                    <th key={heading} className="whitespace-nowrap px-2 py-2 font-medium">{heading}</th>
+                  {["名称", "代码", "现价", "涨跌%", "PE(TTM)", "PB", "换手%", "分组", "AI分析", "笔记", ""].map((heading) => (
+                    <th
+                      key={heading || "actions"}
+                      className="whitespace-nowrap px-2 py-2 font-medium"
+                      title={heading === "PE(TTM)" || heading === "PB" ? "括号内为近5年分位（百度股市通）" : undefined}
+                    >
+                      {heading}
+                    </th>
                   ))}
                 </tr>
+                {collection === "etf" && (
+                  <tr>
+                    <td colSpan={11} className="border-b border-border/30 px-2 pb-2 pt-0.5 text-[10px] text-muted-foreground/60">
+                      PE/PB 为行情快照值；个股估值历史分位不适用于 ETF
+                    </td>
+                  </tr>
+                )}
               </thead>
               <tbody>
                 {visibleCodes.map((code) => {
                   const quote = quotes[code];
+                  const vp = valPctByCode.get(code);
                   return (
-                      <tr key={code} className={cn("border-b border-border/30", openNoteCode === code && "bg-primary/[0.035]")}>
+                    <Fragment key={code}>
+                      <tr className={cn("border-b border-border/30", openNoteCode === code && "bg-primary/[0.035]")}>
                         <td className="px-2 py-2.5 font-medium">
                           <Link
                             to={`/stock-data?code=${code}`}
@@ -548,8 +597,12 @@ export function Watchlist() {
                         <td className="px-2 py-2.5 font-mono text-xs text-muted-foreground">{code}</td>
                         <td className={cn("px-2 py-2.5 font-mono", color(quote?.change_pct))}>{quote ? quote.price : "—"}</td>
                         <td className={cn("px-2 py-2.5 font-mono", color(quote?.change_pct))}>{quote ? pct(quote.change_pct) : "—"}</td>
-                        <td className="px-2 py-2.5 font-mono text-muted-foreground">{quote?.pe_ttm ?? "—"}</td>
-                        <td className="px-2 py-2.5 font-mono text-muted-foreground">{quote?.pb ?? "—"}</td>
+                        <td className="px-2 py-2.5 text-muted-foreground">
+                          <ValuationCell label="PE" current={quote?.pe_ttm} metric={vp?.pe} />
+                        </td>
+                        <td className="px-2 py-2.5 text-muted-foreground">
+                          <ValuationCell label="PB" current={quote?.pb} metric={vp?.pb} />
+                        </td>
                         <td className="px-2 py-2.5 font-mono text-muted-foreground">{quote?.turnover_pct ?? "—"}</td>
                         <td className="px-2 py-2.5">
                           <select
@@ -561,29 +614,35 @@ export function Watchlist() {
                           </select>
                         </td>
                         <td className="px-2 py-2.5">
-                          <div className="flex items-center gap-8">
-                            {collection === "stock" && (
-                              <button
-                                onClick={() => toggleNote(code)}
-                                className={cn(
-                                  "transition-colors hover:text-primary",
-                                  stockNotes[code] || openNoteCode === code ? "text-primary" : "text-muted-foreground/50",
-                                )}
-                                title={stockNotes[code] ? `备注：${stockNotes[code]}` : "添加备注"}
-                              >
-                                <NotebookPen className="h-3.5 w-3.5" />
-                              </button>
-                            )}
+                          {collection === "stock" && (
+                            <DeepAnalysisButton code={code} name={quote?.name} />
+                          )}
+                        </td>
+                        <td className="px-2 py-2.5">
+                          {collection === "stock" && (
                             <button
-                              onClick={() => removeCode(code)}
-                              className="text-muted-foreground/50 hover:text-destructive"
-                              title={`移出${collection === "stock" ? "自选股" : "自选 ETF"}`}
+                              onClick={() => toggleNote(code)}
+                              className={cn(
+                                "transition-colors hover:text-primary",
+                                stockNotes[code] || openNoteCode === code ? "text-primary" : "text-muted-foreground/50",
+                              )}
+                              title={stockNotes[code] ? `备注：${stockNotes[code]}` : "添加备注"}
                             >
-                              <X className="h-3.5 w-3.5" />
+                              <NotebookPen className="h-3.5 w-3.5" />
                             </button>
-                          </div>
+                          )}
+                        </td>
+                        <td className="px-2 py-2.5">
+                          <button
+                            onClick={() => removeCode(code)}
+                            className="text-muted-foreground/50 hover:text-destructive"
+                            title={`移出${collection === "stock" ? "自选股" : "自选 ETF"}`}
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
                         </td>
                       </tr>
+                    </Fragment>
                   );
                 })}
               </tbody>
@@ -592,7 +651,7 @@ export function Watchlist() {
         )}
       </GlassCard>
 
-      {collection === "stock" && openNoteCode && (
+      {collection === "stock" && openNoteCode && createPortal(
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
           onMouseDown={(event) => {
@@ -656,7 +715,8 @@ export function Watchlist() {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

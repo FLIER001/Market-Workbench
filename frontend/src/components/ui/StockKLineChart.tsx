@@ -321,7 +321,7 @@ export function StockKLineChart({ code, name, volRatio }: { code: string; name: 
         <div>
           <h3 className="flex items-center gap-1.5 text-sm font-semibold">
             <ChartCandlestick className="h-4 w-4 text-primary" />
-            {name} K线
+            {period === "minute" ? `${name} 分时走势` : `${name} K线`}
           </h3>
           <p className="mt-1 text-[11px] text-muted-foreground/65">
             {period === "minute"

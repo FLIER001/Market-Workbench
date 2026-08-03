@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Upload, FileText, Trash2, Download, Loader2, FolderOpen } from "lucide-react";
-import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, ApiError, downloadReport, type MyReport } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -19,7 +18,7 @@ const fileToB64 = (file: File): Promise<string> =>
     reader.readAsDataURL(file);
   });
 
-export function MyReports() {
+export function MyReportsPanel() {
   const [reports, setReports] = useState<MyReport[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -82,10 +81,7 @@ export function MyReports() {
 
   return (
     <div>
-      <PageHeader
-        title="我的研报"
-        subtitle="把自己的研报拖进来归档，自动按行业分类。文件只存在本地部署目录、不上传、不进任何仓库。"
-      />
+      <p className="mb-4 text-xs text-muted-foreground">把自己的研报拖进来归档，自动按行业分类</p>
 
       {/* 上传区 */}
       <GlassCard className="mb-4">

@@ -1,25 +1,20 @@
 import { Link } from "react-router-dom";
-import { Building2, ChevronRight, Flame, Landmark } from "lucide-react";
-import { PageHeader } from "@/components/ui/PageHeader";
+import { Building2, CalendarDays, ChevronRight, Flame, Landmark } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
 import sectorsData from "@/data/sectors.json";
-import { sectorResearch } from "@/data/sectorResearch";
+import { sectorEvents, sectorResearch } from "@/data/sectorResearch";
 
-export function Sectors() {
+export function SectorAnalysis() {
   const sectors = sectorsData.sectors;
   const hotCount = sectors.filter((s) => s.hot).length;
 
   return (
     <div>
-      <PageHeader
-        title="板块中心"
-        subtitle={`${sectors.length} 个赛道 · 产业链环节、代表企业、事件观察点与政策证据`}
-      />
-
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {sectors.map((s) => {
           const research = sectorResearch[s.key];
           const companyCount = new Set(research?.nodes.flatMap((node) => node.companies.map((company) => company.code)) || []).size;
+          const eventCount = sectorEvents[s.key]?.length || 0;
           return (
             <Link key={s.key} to={`/sectors/${s.key}`}>
               <GlassCard glow={s.hot} className="flex h-full flex-col justify-between">
@@ -40,6 +35,9 @@ export function Sectors() {
                       </span>
                       <span className="inline-flex items-center gap-1 rounded-full bg-muted/40 px-2 py-1">
                         <Landmark className="h-3 w-3" /> 政策：{research.policy.label}
+                      </span>
+                      <span className="inline-flex items-center gap-1 rounded-full bg-muted/40 px-2 py-1">
+                        <CalendarDays className="h-3 w-3" /> {eventCount} 个未来事件
                       </span>
                     </div>
                   )}

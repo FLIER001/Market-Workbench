@@ -92,11 +92,20 @@ def remove_holding(code: str) -> dict:
     return get_portfolio()
 
 
-def close_position(code: str, date: str, price: float, shares: float, cost: float) -> dict:
-    """记一笔已清仓：算已实现盈亏，存入 closed 列表。"""
-    pnl = (price - cost) * shares
+def close_position(code: str, date: str, price: float, shares: float, cost: float | None = None) -> dict:
+    """记一笔已清仓：算已实现盈亏，存入 closed 列表，并同步从当前持仓扣减股数。
+
+    cost 不传时自动取该代码当前持仓的加权成本——买入成本在添加持仓时已录入，
+    清仓不该要求重填。持仓里没有该代码时必须显式给成本（会拿到明确的错误而不是按 0 算）。
+    """
     with _LOCK:
         d = _load()
+        holding = next((h for h in d["holdings"] if h["code"] == code), None)
+        if cost is None:
+            if holding is None:
+                raise ValueError("当前持仓中没有该代码，请补充买入成本")
+            cost = holding["cost"]
+        pnl = (price - cost) * shares
         d.setdefault("closed", [])
         try:
             name = astock.tencent_quote([code]).get(code, {}).get("name", code)
@@ -107,6 +116,12 @@ def close_position(code: str, date: str, price: float, shares: float, cost: floa
             "shares": shares, "cost": cost, "pnl": round(pnl, 2),
             "pnl_pct": round((price - cost) / cost * 100, 2) if cost else 0.0,
         })
+        if holding is not None:
+            remain = holding["shares"] - shares
+            if remain > 1e-9:
+                holding["shares"] = remain
+            else:  # 全部卖出（或微小浮点误差）→ 从当前持仓移除
+                d["holdings"] = [h for h in d["holdings"] if h["code"] != code]
         _save(d)
     return get_portfolio()
 
@@ -126,7 +141,7 @@ def get_portfolio() -> dict:
     with _LOCK:
         d = _load()
     hs = d.get("holdings", [])
-    rows, tmv, tcost = [], 0.0, 0.0
+    rows, tmv, tcost, tday, tday_base = [], 0.0, 0.0, 0.0, 0.0
     if hs:
         try:
             quotes = astock.tencent_quote([h["code"] for h in hs])
@@ -138,14 +153,22 @@ def get_portfolio() -> dict:
             mv = price * h["shares"]
             cv = h["cost"] * h["shares"]
             pnl = mv - cv
+            # 当日盈亏 = (现价 - 昨收) × 股数；昨收缺失（行情异常/新股）时按 0
+            last_close = q.get("last_close", 0.0)
+            day_pnl = (price - last_close) * h["shares"] if last_close else 0.0
+            day_base = last_close * h["shares"]  # 昨收市值，作当日盈亏比例的基数
             rows.append({
                 "code": h["code"], "name": q.get("name", h["code"]),
                 "price": price, "shares": h["shares"], "cost": h["cost"],
                 "market_value": round(mv, 2), "pnl": round(pnl, 2),
                 "pnl_pct": round(pnl / cv * 100, 2) if cv else 0.0,
+                "day_pnl": round(day_pnl, 2),
+                "day_pnl_pct": round(day_pnl / day_base * 100, 2) if day_base else 0.0,
             })
             tmv += mv
             tcost += cv
+            tday += day_pnl
+            tday_base += day_base
     total_pnl = tmv - tcost
     closed = d.get("closed", [])
     return {
@@ -154,6 +177,8 @@ def get_portfolio() -> dict:
             "market_value": round(tmv, 2), "cost": round(tcost, 2),
             "pnl": round(total_pnl, 2),
             "pnl_pct": round(total_pnl / tcost * 100, 2) if tcost else 0.0,
+            "day_pnl": round(tday, 2),
+            "day_pnl_pct": round(tday / tday_base * 100, 2) if tday_base else 0.0,
         },
         "closed": closed,
         "realized_pnl": round(sum(c.get("pnl", 0) for c in closed), 2),

@@ -1,5 +1,4 @@
-// 通用 NDJSON 流读取器 —— 后端的 /api/debate、/api/reflect 都用「每行一个 JSON 事件」推送。
-// 抽出来是因为多 agent 流程的事件类型比对话多（阶段、进度、分角色增量），
+// 通用 NDJSON 流读取器 —— 后端的流式端点（如 /api/reflect）用「每行一个 JSON 事件」推送。
 // 各页面只关心事件本身，不该各写一遍拆行/解码逻辑。
 
 import { ApiError, authHeaders } from "@/lib/api";

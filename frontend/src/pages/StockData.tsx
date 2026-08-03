@@ -1,5 +1,6 @@
 import { lazy, Suspense, useRef, useState, useEffect } from "react";
 import { createPortal } from "react-dom";
+import { useLocation } from "react-router-dom";
 import {
   Search, FileText, Newspaper, Loader2, AlertCircle, LineChart, BarChart3, Megaphone,
   Wallet, Trophy, CalendarClock, Boxes, MessageSquare, Star, Check,
@@ -87,12 +88,8 @@ function ValBand({ label, m }: { label: string; m: ValMetric }) {
 }
 
 export function StockData() {
+  const location = useLocation();
   const [code, setCode] = useState("");
-  const initialCodeRef = useRef(
-    typeof window === "undefined"
-      ? ""
-      : new URLSearchParams(window.location.search).get("code")?.trim().toUpperCase() || "",
-  );
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // 自动提示
@@ -260,14 +257,15 @@ export function StockData() {
     }
   };
 
-  // 从板块核心环节点击企业进入时，直接带代码查询，不让用户再手输一次。
+  // 顶部全局搜索或板块核心环节带代码进入时自动查询；同页更换 URL 参数也会刷新。
   useEffect(() => {
-    const initialCode = initialCodeRef.current;
-    if (!initialCode) return;
-    initialCodeRef.current = "";
-    setCode(initialCode);
-    void run(initialCode);
-  }, []);
+    const requestedCode = new URLSearchParams(location.search).get("code")?.trim().toUpperCase() || "";
+    if (!requestedCode) return;
+    setCode(requestedCode);
+    void run(requestedCode);
+    // run 依赖大量页面状态；这里只由 URL 中的 code 驱动查询。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.search]);
 
   const metrics = val ? [
     { k: "现价", v: fmt(val.price) },
@@ -301,7 +299,7 @@ export function StockData() {
     <div>
       <PageHeader
         title="个股数据"
-        subtitle="行情 · 估值 · 研报 · 新闻 —— 客观数据配齐，判断交给你的 AI"
+        subtitle="行情 · 估值 · 研报 · 新闻"
         actions={(val || gstock) && (
           <div className="flex items-center gap-2">
             {val && (
@@ -536,7 +534,7 @@ export function StockData() {
           {pctl && (pctl.metrics.pe_ttm || pctl.metrics.pb) && (
             <GlassCard glow className="mb-4">
               <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold"><LineChart className="h-4 w-4 text-primary" /> 估值历史分位 · {pctl.period}</h3>
-              <p className="mb-4 text-[11px] text-muted-foreground/60">绿=低估区 / 灰=合理区 / 红=高估区。只显示当前处于历史什么位置，不构成买卖建议。</p>
+              <p className="mb-4 text-[11px] text-muted-foreground/60">绿=低估区 / 灰=合理区 / 红=高估区 · 显示当前处于历史什么位置</p>
               <div className="space-y-4">
                 {pctl.metrics.pe_ttm && <ValBand label="PE-TTM" m={pctl.metrics.pe_ttm} />}
                 {pctl.metrics.pb && <ValBand label="市净率 PB" m={pctl.metrics.pb} />}
@@ -656,7 +654,7 @@ export function StockData() {
                   </div>
                 </div>
               )}
-              <p className="mt-3 text-[11px] text-muted-foreground/60">资金/筹码为公开客观数据，仅供了解该股当前状态，不构成任何买卖建议。</p>
+              <p className="mt-3 text-[11px] text-muted-foreground/60">资金/筹码为公开客观数据，仅供了解该股当前状态</p>
             </GlassCard>
           )}
 
@@ -763,7 +761,7 @@ export function StockData() {
         <GlassCard>
           <div className="py-10 text-center text-sm text-muted-foreground">
             输入一个 6 位股票代码，拉取它的行情、估值、研报与新闻。<br />
-            <span className="text-xs text-muted-foreground/60">数据来自公开源（腾讯行情 / 东财研报 / akshare）；Vibe-Research 不预置任何标的、不做推荐。</span>
+            <span className="text-xs text-muted-foreground/60">数据来自公开源（腾讯行情 / 东财研报 / akshare）</span>
           </div>
         </GlassCard>
       )}

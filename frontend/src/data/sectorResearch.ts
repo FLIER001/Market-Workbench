@@ -54,6 +54,10 @@ export interface SectorResearch {
 
 const FYP_URL = "https://www.ndrc.gov.cn/fggz/fzzlgh/gjfzgh/202603/U020260317369114704096.pdf";
 const HUMANOID_ACTION_URL = "https://www.miit.gov.cn/jgsj/kjs/wjfb/art/2026/art_cd666691abf8471fb8553d463aa416e3.html";
+const HUMANOID_TRAINING_URL = "https://www.miit.gov.cn/zwgk/zcwj/wjfb/tz/art/2026/art_f291ccd3da4c47ce95741de63cc088e6.html";
+const LOW_ALTITUDE_INFRA_URL = "https://www.miit.gov.cn/zwgk/zcwj/wjfb/yj/art/2026/art_d1cb1667897e4c999a303d110b6691dc.html";
+const STORAGE_REPORT_URL = "https://www.nea.gov.cn/20260730/0a1e9823b7a14e8ba16e82c34b3bea2b/c.html";
+const ENERGY_PRESS_URL = "https://www.nea.gov.cn/20260730/3ce671c387574eeeb120fc3825be0399/c.html";
 const GAME_APPROVAL_URL = "https://www.nppa.gov.cn/bsfw/jggs/yxspjg/index.html";
 const GAME_RULE_URL = "https://www.gov.cn/zhengce/zhengceku/2021-09/01/content_5634661.htm";
 
@@ -85,7 +89,7 @@ const fypEvidence = (title: string): SectorPolicyEvidence => ({
 
 const baseSectorResearch: Record<string, SectorResearch> = {
   humanoid: {
-    asOf: "2026-07-28",
+    asOf: "2026-08-01",
     radarKeys: ["robot", "ai"],
     newsKeywords: ["humanoid", "robot", "具身", "人形机器人", "embodied"],
     nodes: [
@@ -103,7 +107,7 @@ const baseSectorResearch: Record<string, SectorResearch> = {
       ]),
     ],
     watchpoints: [
-      pos("实景实训与规模部署", "省级地区、央企场景申报、验证报告及万台级部署进度超预期。", "2026 年内"),
+      pos("实景实训与规模部署", "跟踪省级地区和央企的场景台账、作业成功率、效率、安全及经济性报告；11 月 30 日前为阶段总结窗口。", "截至 2026-11-30"),
       pos("头部整机定点与量产", "车企、3C、物流等真实订单由样机转为持续采购。"),
       neg("量产良率与成本不达预期", "丝杠、减速器、灵巧手寿命或一致性无法满足工业场景。"),
       neg("安全事故或标准收紧", "人机混行事故可能推迟部署，并抬高认证和保险成本。"),
@@ -112,7 +116,7 @@ const baseSectorResearch: Record<string, SectorResearch> = {
       score: 2,
       label: "强支持",
       confidence: "高",
-      summary: "中央规划与工信部专项行动均从技术攻关转向真实场景验证和规模部署，政策方向明确。",
+      summary: "中央规划与两部门专项行动已从技术攻关推进到真实场景验证、常态部署和按效用付费探索；下一步应以验证报告及持续采购而非样机数量判断兑现。",
       evidence: [
         {
           title: "2026年度人形机器人与具身智能实景实训专项行动",
@@ -126,7 +130,7 @@ const baseSectorResearch: Record<string, SectorResearch> = {
     },
   },
   "ai-computing": {
-    asOf: "2026-07-28",
+    asOf: "2026-08-01",
     radarKeys: ["ai", "semi"],
     newsKeywords: ["AI chip", "GPU", "data center", "算力", "智算", "服务器"],
     nodes: [
@@ -156,7 +160,7 @@ const baseSectorResearch: Record<string, SectorResearch> = {
     },
   },
   hbm: {
-    asOf: "2026-07-28",
+    asOf: "2026-08-01",
     radarKeys: ["semi", "ai"],
     newsKeywords: ["HBM", "high bandwidth memory", "memory", "高带宽存储"],
     nodes: [
@@ -186,7 +190,7 @@ const baseSectorResearch: Record<string, SectorResearch> = {
     },
   },
   cpo: {
-    asOf: "2026-07-28",
+    asOf: "2026-08-01",
     radarKeys: ["semi", "ai"],
     newsKeywords: ["CPO", "optical interconnect", "silicon photonics", "光模块", "硅光"],
     nodes: [
@@ -216,7 +220,7 @@ const baseSectorResearch: Record<string, SectorResearch> = {
     },
   },
   semiconductor: {
-    asOf: "2026-07-28",
+    asOf: "2026-08-01",
     radarKeys: ["semi"],
     newsKeywords: ["semiconductor", "chip", "晶圆", "半导体", "EDA"],
     nodes: [
@@ -246,7 +250,7 @@ const baseSectorResearch: Record<string, SectorResearch> = {
     },
   },
   "solid-state-battery": {
-    asOf: "2026-07-28",
+    asOf: "2026-08-01",
     radarKeys: ["energy", "auto"],
     newsKeywords: ["solid-state battery", "固态电池", "sulfide electrolyte"],
     nodes: [
@@ -271,12 +275,12 @@ const baseSectorResearch: Record<string, SectorResearch> = {
     ],
     policy: {
       score: 1, label: "支持", confidence: "中",
-      summary: "新型电池与新能源汽车技术创新获得支持，但具体路线仍以安全验证和产业化结果为准。",
+      summary: "国家能源局继续支持新型储能多技术路线并举，但当前仍由锂离子电池主导；固态路线的利好必须由中试良率、安全、寿命和成本数据验证。",
       evidence: [fypEvidence("推动新型太阳能电池、新型储能及新能源汽车关键技术创新")],
     },
   },
   "low-altitude": {
-    asOf: "2026-07-28",
+    asOf: "2026-08-01",
     radarKeys: ["space", "auto"],
     newsKeywords: ["eVTOL", "low altitude", "低空", "适航", "无人机"],
     nodes: [
@@ -295,18 +299,18 @@ const baseSectorResearch: Record<string, SectorResearch> = {
     ],
     watchpoints: [
       pos("适航取证与商业航线", "型号合格证、生产许可证和常态化运营航线增加。"),
-      pos("低空基础设施招标", "地方航路、起降点、通信导航监视气象系统进入建设期。"),
+      pos("低空基础设施招标", "跟踪地方航路、起降点、5G/5G-A 通感、北斗增强与空管系统采购，以及 2027 年航路通信覆盖目标的实施进度。"),
       neg("安全事故与监管收紧", "事故可能导致空域、运营和适航规则阶段性收紧。"),
       neg("场景经济性不足", "客流、货运密度或运维成本无法支撑规模运营。"),
     ],
     policy: {
       score: 2, label: "强支持但强监管", confidence: "高",
-      summary: "规划明确推进低空经济和基础设施，同时强调适航、空域精细化管理与安全保障。",
+      summary: "政策已从产业方向延伸到通信、感知、导航和智能网联系统建设，并提出 2027 年低空公共航路地面移动通信覆盖率不低于 90%；适航、空域与数据安全仍是硬约束。",
       evidence: [fypEvidence("推进低空经济健康有序发展，建设低空基础设施并强化安全保障")],
     },
   },
   "smart-driving": {
-    asOf: "2026-07-28",
+    asOf: "2026-08-01",
     radarKeys: ["auto", "ai"],
     newsKeywords: ["autonomous driving", "ADAS", "智能驾驶", "robotaxi"],
     nodes: [
@@ -336,7 +340,7 @@ const baseSectorResearch: Record<string, SectorResearch> = {
     },
   },
   "innovative-drug": {
-    asOf: "2026-07-28",
+    asOf: "2026-08-01",
     radarKeys: ["bio"],
     newsKeywords: ["drug", "biotech", "clinical", "创新药", "ADC"],
     nodes: [
@@ -366,7 +370,7 @@ const baseSectorResearch: Record<string, SectorResearch> = {
     },
   },
   "power-grid": {
-    asOf: "2026-07-28",
+    asOf: "2026-08-01",
     radarKeys: ["energy"],
     newsKeywords: ["grid", "power transmission", "电网", "特高压", "输变电"],
     nodes: [
@@ -384,19 +388,19 @@ const baseSectorResearch: Record<string, SectorResearch> = {
       ]),
     ],
     watchpoints: [
-      pos("电网投资和特高压核准", "国家电网、南方电网资本开支与主设备招标上修。"),
+      pos("电网投资和特高压核准", "2026 年上半年电网投资同比增长 13.5%，继续跟踪国家电网、南方电网资本开支、特高压核准与主设备招标能否连续兑现。"),
       pos("配网数字化和新能源并网", "分布式能源、充电设施和数据中心推动配网扩容。"),
       neg("项目核准或交付延期", "地方配套、原材料和施工进度拖慢收入确认。"),
       neg("铜铝等成本上涨", "原材料涨价而合同调价机制滞后，压缩设备利润。"),
     ],
     policy: {
       score: 2, label: "强支持", confidence: "高",
-      summary: "新型电力系统、跨区配置和新能源消纳要求带来中长期电网建设需求。",
+      summary: "2026 年上半年电网投资同比增长 13.5%，高温负荷和新能源占比上升继续强化跨区输电、配网扩容与调度需求；设备端兑现仍看核准、招标和交付。",
       evidence: [fypEvidence("推动能源体系转型与新型电力系统建设")],
     },
   },
   defense: {
-    asOf: "2026-07-28",
+    asOf: "2026-08-01",
     radarKeys: ["space"],
     newsKeywords: ["defense", "aerospace", "军工", "航空装备", "舰船"],
     nodes: [
@@ -426,7 +430,7 @@ const baseSectorResearch: Record<string, SectorResearch> = {
     },
   },
   fusion: {
-    asOf: "2026-07-28",
+    asOf: "2026-08-01",
     radarKeys: ["science", "energy"],
     newsKeywords: ["fusion", "tokamak", "核聚变", "托卡马克"],
     nodes: [
@@ -456,7 +460,7 @@ const baseSectorResearch: Record<string, SectorResearch> = {
     },
   },
   "business-space": {
-    asOf: "2026-07-28",
+    asOf: "2026-08-01",
     radarKeys: ["space"],
     newsKeywords: ["launch", "satellite", "commercial space", "商业航天", "卫星互联网"],
     nodes: [
@@ -486,7 +490,7 @@ const baseSectorResearch: Record<string, SectorResearch> = {
     },
   },
   "ai-pharma": {
-    asOf: "2026-07-28",
+    asOf: "2026-08-01",
     radarKeys: ["bio", "ai", "science"],
     newsKeywords: ["AI drug", "biotech", "medical AI", "生物医药", "AI制药"],
     nodes: [
@@ -516,7 +520,7 @@ const baseSectorResearch: Record<string, SectorResearch> = {
     },
   },
   resources: {
-    asOf: "2026-07-28",
+    asOf: "2026-08-01",
     radarKeys: ["energy", "macro"],
     newsKeywords: ["rare earth", "critical minerals", "稀土", "锗", "铟", "钨"],
     nodes: [
@@ -546,7 +550,7 @@ const baseSectorResearch: Record<string, SectorResearch> = {
     },
   },
   "ai-application": {
-    asOf: "2026-07-28",
+    asOf: "2026-08-01",
     radarKeys: ["ai", "tech"],
     newsKeywords: ["AI agent", "enterprise AI", "大模型应用", "智能体", "Agent"],
     nodes: [
@@ -576,7 +580,7 @@ const baseSectorResearch: Record<string, SectorResearch> = {
     },
   },
   "ai-hardware": {
-    asOf: "2026-07-28",
+    asOf: "2026-08-01",
     radarKeys: ["consumer", "ai", "semi"],
     newsKeywords: ["AI glasses", "edge AI", "AI PC", "AI手机", "AI眼镜"],
     nodes: [
@@ -606,7 +610,7 @@ const baseSectorResearch: Record<string, SectorResearch> = {
     },
   },
   "energy-storage": {
-    asOf: "2026-07-28",
+    asOf: "2026-08-01",
     radarKeys: ["energy"],
     newsKeywords: ["energy storage", "battery storage", "储能", "电化学储能"],
     nodes: [
@@ -624,19 +628,19 @@ const baseSectorResearch: Record<string, SectorResearch> = {
       ]),
     ],
     watchpoints: [
-      pos("容量电价与市场机制", "容量补偿、辅助服务和现货价差改善项目收益率。"),
+      pos("装机、调用与市场机制", "截至 2026 年 6 月底已投运新型储能达 1.53 亿千瓦/3.96 亿千瓦时；继续跟踪利用小时、容量补偿、辅助服务和现货价差能否改善收益率。"),
       pos("海外大储订单", "项目中标、并网和回款形成连续兑现。"),
       neg("安全事故", "火灾或召回导致标准提高、项目延期和保险成本上升。"),
       neg("低价竞争与回款", "系统价格过快下降或地方项目回款周期拉长。"),
     ],
     policy: {
       score: 2, label: "强支持", confidence: "高",
-      summary: "新型储能是能源转型和新型电力系统的重要环节，政策支持与安全规范并行。",
+      summary: "国家能源局最新报告显示行业已进入规模化并向市场化发展过渡，2026 年上半年新型储能投资同比增长 74.3%；装机高增不等于盈利，核心仍是调用率、市场机制、安全和回款。",
       evidence: [fypEvidence("推动新型储能关键技术创新并完善新型电力系统")],
     },
   },
   "data-element": {
-    asOf: "2026-07-28",
+    asOf: "2026-08-01",
     radarKeys: ["tech", "security", "macro"],
     newsKeywords: ["data infrastructure", "data exchange", "数据要素", "公共数据", "数据基础设施"],
     nodes: [
@@ -666,7 +670,7 @@ const baseSectorResearch: Record<string, SectorResearch> = {
     },
   },
   gaming: {
-    asOf: "2026-07-28",
+    asOf: "2026-08-01",
     radarKeys: ["consumer", "tech"],
     newsKeywords: ["game", "gaming", "游戏", "版号", "Steam"],
     nodes: [
@@ -891,7 +895,10 @@ const nodePlans: Record<string, SectorNodePlan> = {
 };
 
 const policyAdditions: Record<string, SectorPolicyEvidence[]> = {
-  humanoid: [{ title: "关于深入实施“人工智能+”行动的意见", source: "国务院", date: "2025-08", url: AI_PLUS_URL, direction: "positive" }],
+  humanoid: [
+    { title: "关于深入实施“人工智能+”行动的意见", source: "国务院", date: "2025-08", url: AI_PLUS_URL, direction: "positive" },
+    { title: "2026年度人形机器人与具身智能实景实训专项行动", source: "工业和信息化部、国务院国资委", date: "2026-06", url: HUMANOID_TRAINING_URL, direction: "mixed" },
+  ],
   "ai-computing": [
     { title: "关于深入实施“人工智能+”行动的意见", source: "国务院", date: "2025-08", url: AI_PLUS_URL, direction: "positive" },
     { title: "深入实施“东数西算”工程 加快构建全国一体化算力网", source: "国家数据局等", date: "2023-12", url: EAST_WEST_URL, direction: "mixed" },
@@ -899,17 +906,24 @@ const policyAdditions: Record<string, SectorPolicyEvidence[]> = {
   hbm: [{ title: "关于深入实施“人工智能+”行动的意见", source: "国务院", date: "2025-08", url: AI_PLUS_URL, direction: "positive" }],
   cpo: [{ title: "深入实施“东数西算”工程 加快构建全国一体化算力网", source: "国家数据局等", date: "2023-12", url: EAST_WEST_URL, direction: "positive" }],
   semiconductor: [{ title: "关于深入实施“人工智能+”行动的意见", source: "国务院", date: "2025-08", url: AI_PLUS_URL, direction: "positive" }],
-  "solid-state-battery": [{ title: "新型储能规模化建设专项行动方案（2025—2027年）", source: "国家发展改革委等", date: "2025-09", url: STORAGE_ACTION_URL, direction: "mixed" }],
+  "solid-state-battery": [
+    { title: "新型储能规模化建设专项行动方案（2025—2027年）", source: "国家发展改革委等", date: "2025-09", url: STORAGE_ACTION_URL, direction: "mixed" },
+    { title: "中国新型储能发展报告（2026）：锂电主导、多技术路线并举", source: "国家能源局", date: "2026-07", url: STORAGE_REPORT_URL, direction: "mixed" },
+  ],
   "low-altitude": [
     { title: "通用航空装备创新应用实施方案（2024—2030年）", source: "工业和信息化部等", date: "2024-03", url: LOW_ALTITUDE_URL, direction: "positive" },
     { title: "低空经济标准体系建设指南（2025年版）", source: "市场监管总局等", date: "2026-02", url: LOW_ALTITUDE_STANDARD_URL, direction: "mixed" },
+    { title: "加强信息通信业能力建设 支撑低空基础设施发展的实施意见", source: "工业和信息化部等五部门", date: "2026-02", url: LOW_ALTITUDE_INFRA_URL, direction: "mixed" },
   ],
   "smart-driving": [{ title: "智能网联汽车“车路云一体化”应用试点", source: "工业和信息化部等", date: "2024-01", url: SMART_DRIVING_URL, direction: "mixed" }],
   "innovative-drug": [
     { title: "审议通过《全链条支持创新药发展实施方案》", source: "国务院常务会议", date: "2024-07", url: DRUG_SUPPORT_URL, direction: "positive" },
     { title: "深化医药卫生体制改革2024年重点工作任务", source: "国务院办公厅", date: "2024-06", url: MEDICAL_REFORM_URL, direction: "mixed" },
   ],
-  "power-grid": [{ title: "新型储能规模化建设专项行动方案（2025—2027年）", source: "国家发展改革委等", date: "2025-09", url: STORAGE_ACTION_URL, direction: "mixed" }],
+  "power-grid": [
+    { title: "新型储能规模化建设专项行动方案（2025—2027年）", source: "国家发展改革委等", date: "2025-09", url: STORAGE_ACTION_URL, direction: "mixed" },
+    { title: "2026年上半年能源形势：电网投资同比增长13.5%", source: "国家能源局", date: "2026-07", url: ENERGY_PRESS_URL, direction: "positive" },
+  ],
   defense: [{ title: "“十五五”规划纲要：一体化推进国家战略体系和能力建设", source: "国家发展改革委", date: "2026-03", url: FYP_URL, direction: "mixed" }],
   fusion: [{ title: "“十五五”规划纲要：加强未来能源和可控核聚变前瞻布局", source: "国家发展改革委", date: "2026-03", url: FYP_URL, direction: "positive" }],
   "business-space": [{ title: "“十五五”规划纲要：推动商业航天等新兴产业发展", source: "国家发展改革委", date: "2026-03", url: FYP_URL, direction: "positive" }],
@@ -920,7 +934,11 @@ const policyAdditions: Record<string, SectorPolicyEvidence[]> = {
   resources: [{ title: "稀土管理条例：总量调控、追溯和监督管理", source: "国务院", date: "2024-06", url: RARE_EARTH_URL, direction: "mixed" }],
   "ai-application": [{ title: "关于深入实施“人工智能+”行动的意见", source: "国务院", date: "2025-08", url: AI_PLUS_URL, direction: "positive" }],
   "ai-hardware": [{ title: "关于深入实施“人工智能+”行动的意见", source: "国务院", date: "2025-08", url: AI_PLUS_URL, direction: "positive" }],
-  "energy-storage": [{ title: "新型储能规模化建设专项行动方案（2025—2027年）", source: "国家发展改革委等", date: "2025-09", url: STORAGE_ACTION_URL, direction: "mixed" }],
+  "energy-storage": [
+    { title: "新型储能规模化建设专项行动方案（2025—2027年）", source: "国家发展改革委等", date: "2025-09", url: STORAGE_ACTION_URL, direction: "mixed" },
+    { title: "中国新型储能发展报告（2026）", source: "国家能源局", date: "2026-07", url: STORAGE_REPORT_URL, direction: "mixed" },
+    { title: "2026年上半年能源形势：新型储能投资同比增长74.3%", source: "国家能源局", date: "2026-07", url: ENERGY_PRESS_URL, direction: "positive" },
+  ],
   "data-element": [
     { title: "可信数据空间发展行动计划（2024—2028年）", source: "国家数据局", date: "2024-11", url: DATA_SPACE_URL, direction: "positive" },
     { title: "国家数据标准体系建设指南", source: "国家发展改革委等", date: "2024-10", url: DATA_STANDARD_URL, direction: "mixed" },

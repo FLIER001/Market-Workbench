@@ -12,9 +12,10 @@ import { hasLlm, chatStream } from "@/lib/llm";
 import { storageGet, storageSet } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 import { cancelBackgroundTask, startBackgroundTask, updateBackgroundTask, useBackgroundTask } from "@/lib/backgroundTasks";
+import { WatchlistEventJudgement } from "@/components/intel/WatchlistEventJudgement";
 
 const TABS = [
-  { key: "events", label: "事件概率", icon: TrendingUp, integrated: false, desc: "全球宏观预期概率（公开数据、免登录只读），后续接入" },
+  { key: "events", label: "自选事件研判", icon: TrendingUp, integrated: false, desc: "基于自选标的、关联板块与多源证据的 AI 事件研判" },
   { key: "filings", label: "A股公告", icon: FileText, integrated: false, desc: "汇总关注列表里各个股的近期公告（东财公开披露）" },
   { key: "news", label: "公开新闻", icon: Newspaper, integrated: false, desc: "汇总关注列表里各个股的近期新闻（公开源）" },
   { key: "investment-news", label: "Investment News", icon: Rss, integrated: true, desc: "12 赛道全球公开 RSS 资讯（集成自 investment-news 仓库）" },
@@ -527,7 +528,7 @@ function WatchlistFeed({ kind }: { kind: "filings" | "news" }) {
   if (!codes.length) {
     return (
       <div className="rounded-lg border border-dashed border-border/70 p-8 text-center text-sm text-muted-foreground/70">
-        还没有关注股票。到<Link to="/daily-review" className="text-primary">「每日复盘」</Link>加自选（6 位代码），这里会汇总它们的{kind === "filings" ? "公告" : "新闻"}。
+        还没有关注股票。到<Link to="/daily-review" className="text-primary">「市场全景」</Link>加自选（6 位代码），这里会汇总它们的{kind === "filings" ? "公告" : "新闻"}。
       </div>
     );
   }
@@ -581,7 +582,7 @@ export function Intel() {
 
   return (
     <div>
-      <PageHeader title="资讯雷达" subtitle="多来源资讯中心：AI 帮你跨源捞资讯、提炼要点" />
+      <PageHeader title="资讯" subtitle="多来源资讯中心：AI 帮你跨源捞资讯、提炼要点" />
 
       <div className="mb-4 flex flex-wrap gap-2">
         {TABS.map(({ key, label, icon: Icon, integrated }) => (
@@ -600,22 +601,19 @@ export function Intel() {
           <h3 className="font-semibold">{cur.label}</h3>
           {cur.integrated && <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] text-primary">investment-news</span>}
         </div>
-        {cur.key === "investment-news" ? (
+        {cur.key === "events" ? (
+          <WatchlistEventJudgement />
+        ) : cur.key === "investment-news" ? (
           <InvestmentNewsPanel />
         ) : cur.key === "filings" ? (
           <WatchlistFeed kind="filings" />
         ) : cur.key === "news" ? (
           <WatchlistFeed kind="news" />
-        ) : (
-          <>
-            <p className="text-sm text-muted-foreground">{cur.desc}</p>
-            <div className="mt-4 rounded-lg border border-dashed border-border/70 p-8 text-center text-sm text-muted-foreground/70">该数据源规划中——可先用右侧「Investment News」看 12 赛道公开资讯，或用「A 股公告 / 公开新闻」看关注股动态。</div>
-          </>
-        )}
+        ) : null}
       </GlassCard>
 
       <p className="mt-3 text-[11px] text-muted-foreground/60">
-        只做公开信息聚合、不做推荐、不预测涨跌。公告 / 新闻均来自你关注列表里个股的公开披露与公开源；赛道资讯已按合规词表过滤。今日要点由你自己配置的 AI 提炼。
+        公告与新闻来自自选标的公开信息；Investment News 按关联板块筛选，重大事件按需联网核验。
       </p>
     </div>
   );

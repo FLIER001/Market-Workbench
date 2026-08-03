@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,16 +22,17 @@ from pydantic import BaseModel
 import astock
 import chat as chat_layer
 import cli_runtime
-import debate as debate_layer
 import gstock
 import newsradar
 import portfolio as pf
+import users
 import market
 import myreports as mr
 import reflection as reflect_layer
 import sector_scores as sector_scores_layer
+import tools as tools_layer
 
-app = FastAPI(title="Vibe-Research API", version="0.2.2")
+app = FastAPI(title="Vibe-Research API", version="0.3.0")
 
 # 每半小时后台刷新持仓数据
 pf.start_scheduler(1800)
@@ -61,6 +64,19 @@ async def _require_api_key(request: Request, call_next):
             return JSONResponse({"detail": "未授权：缺少或错误的 API Key（VR_API_KEY）"}, status_code=401)
     return await call_next(request)
 
+
+def _bearer_token(request: Request) -> str:
+    auth = request.headers.get("authorization", "")
+    return auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+
+
+def _current_user(request: Request) -> dict:
+    """从 Authorization: Bearer <token> 解析当前登录用户；未登录抛 401。"""
+    user = users.resolve_token(_bearer_token(request))
+    if not user:
+        raise HTTPException(401, "未登录或登录已过期")
+    return user
+
 _CODE_RE = r"^\d{6}$"
 
 
@@ -73,7 +89,81 @@ def _validate(code: str) -> str:
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "service": "vibe-research-api", "version": "0.2.2"}
+    return {"ok": True, "service": "vibe-research-api", "version": "0.3.1"}
+
+
+# ---------------- 用户体系：注册 / 登录 / 会话 / 每用户数据 ----------------
+
+class AuthReq(BaseModel):
+    username: str
+    password: str
+
+
+class DataSetReq(BaseModel):
+    key: str
+    value: object
+
+
+class DataMergeReq(BaseModel):
+    items: dict
+
+
+@app.post("/api/auth/register")
+def auth_register(req: AuthReq):
+    """注册。第一个用户通常是本机主账号；注册后前端会引导把本地数据迁移上来。"""
+    try:
+        user = users.register(req.username, req.password)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    # 注册即登录，直接发 token
+    try:
+        sess = users.login(req.username, req.password)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"data": {**sess, "user_id": user["id"], "first_user": users.user_count() == 1}}
+
+
+@app.post("/api/auth/login")
+def auth_login(req: AuthReq):
+    try:
+        sess = users.login(req.username, req.password)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"data": sess}
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request):
+    return {"data": _current_user(request)}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request):
+    users.logout(_bearer_token(request))
+    return {"data": {"ok": True}}
+
+
+@app.get("/api/auth/data")
+def auth_get_data(request: Request):
+    user = _current_user(request)
+    return {"data": users.get_data(user["id"])}
+
+
+@app.post("/api/auth/data/set")
+def auth_set_data(req: DataSetReq, request: Request):
+    user = _current_user(request)
+    try:
+        users.set_data(user["id"], req.key, req.value)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"data": {"ok": True}}
+
+
+@app.post("/api/auth/data/merge")
+def auth_merge_data(req: DataMergeReq, request: Request):
+    """首次登录后把浏览器本地数据整体迁移到账号下。"""
+    user = _current_user(request)
+    return {"data": users.merge_data(user["id"], req.items)}
 
 
 class LLMConfig(BaseModel):
@@ -124,7 +214,7 @@ def chat(req: ChatReq):
 
 
 def _check_llm(llm: LLMConfig) -> dict:
-    """校验模型配置并返回 cfg（chat / debate / reflect 三个流式端点共用）。
+    """校验模型配置并返回 cfg（chat / reflect 两个流式端点共用）。
 
     配置问题走 HTTP 400（前端能弹提示引导去「接入 AI」页），运行时错误留给流内 error 事件。
     """
@@ -149,24 +239,6 @@ def _ndjson(events):
             yield json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False) + "\n"
 
     return StreamingResponse(gen(), media_type="application/x-ndjson")
-
-
-class DebateReq(BaseModel):
-    code: str
-    rounds: int = 1
-    llm: LLMConfig
-
-
-@app.post("/api/debate")
-def debate(req: DebateReq):
-    """多空辩论：后端先拉客观事实底稿，再让多方 / 空方 / 中立主持依次发言，**流式** NDJSON。
-
-    刻意不产出买卖结论——终点是「分歧点 + 验证清单」，判断留给用户自己。
-    """
-    code = _validate(req.code)
-    cfg = _check_llm(req.llm)
-    rounds = 2 if req.rounds >= 2 else 1
-    return _ndjson(lambda: debate_layer.run_debate_stream(cfg, code, rounds))
 
 
 class ReflectReq(BaseModel):
@@ -257,12 +329,13 @@ class CloseIn(BaseModel):
     date: str
     price: float
     shares: float
-    cost: float
+    # 可省：缺省时用当前持仓的加权成本（添加持仓时已录过成本，清仓不必重填）
+    cost: Optional[float] = None
 
 
 @app.post("/api/portfolio/close")
 def portfolio_close(c: CloseIn):
-    """记一笔已清仓（已实现盈亏）。存本地。"""
+    """记一笔已清仓（已实现盈亏），并从当前持仓扣减对应股数。存本地。"""
     code = (c.code or "").strip()
     if not code.isdigit() or len(code) != 6:
         raise HTTPException(400, "代码必须是 6 位数字")
@@ -272,12 +345,14 @@ def portfolio_close(c: CloseIn):
     date = (c.date or "").strip()
     if not date:
         raise HTTPException(400, "请填清仓日期")
-    from datetime import datetime
     try:
         datetime.strptime(date, "%Y-%m-%d")
     except ValueError:
         raise HTTPException(400, "清仓日期格式应为 YYYY-MM-DD") from None
-    return {"data": pf.close_position(code, date, c.price, c.shares, c.cost)}
+    try:
+        return {"data": pf.close_position(code, date, c.price, c.shares, c.cost)}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
 
 @app.delete("/api/portfolio/close")
@@ -310,6 +385,18 @@ def radar_refresh():
         return {"data": newsradar.fetch_radar()}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"资讯雷达刷新失败：{e}") from e
+
+
+@app.get("/api/public-news-search")
+def public_news_search(
+    q: str = Query(..., min_length=2, max_length=160),
+    count: int = Query(5, ge=1, le=8),
+):
+    """重大事件公开资料联网核验：固定 Bing RSS 搜索，只返回标题、摘要与来源链接。"""
+    try:
+        return {"data": tools_layer.public_news_search(q, count)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"公开资料搜索失败：{e}") from e
 
 
 @app.get("/api/market/overview")
@@ -793,3 +880,56 @@ def industry(top: int = Query(20, ge=5, le=50)):
         return {"data": data}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"行业排名异常：{e}") from e
+
+
+# ---------------------------------------------------------------------------
+# 深度分析代理：自选页「AI分析」列，转发到独立部署的 hermes-agent（约 20 分钟级慢任务）。
+# 密钥只放后端环境变量，不进前端；前端用 backgroundTasks 轮询等待。
+# ---------------------------------------------------------------------------
+_DEEP_ANALYSIS_URL = os.environ.get("VR_DEEP_ANALYSIS_URL", "http://192.168.0.231:8642/v1/chat/completions")
+_DEEP_ANALYSIS_KEY = os.environ.get("VR_DEEP_ANALYSIS_KEY", "")
+_DEEP_ANALYSIS_MODEL = os.environ.get("VR_DEEP_ANALYSIS_MODEL", "hermes-agent")
+_DEEP_ANALYSIS_TIMEOUT = int(os.environ.get("VR_DEEP_ANALYSIS_TIMEOUT", "2400"))  # 秒，覆盖 20 分钟级任务
+
+
+class DeepAnalysisReq(BaseModel):
+    prompt: str
+
+
+@app.post("/api/deep-analysis")
+def deep_analysis(req: DeepAnalysisReq):
+    """深度分析代理：把 prompt 转发给 hermes-agent，返回纯文本结论。
+
+    hermes-agent 是 20 分钟级慢任务，这里用长 timeout 同步等待；
+    前端把每次调用注册进 backgroundTasks，页面跳转/刷新后可继续查看进度。
+    """
+    prompt = (req.prompt or "").strip()
+    if not prompt:
+        raise HTTPException(400, "prompt 不能为空")
+    if not _DEEP_ANALYSIS_KEY:
+        raise HTTPException(501, "后端未配置 VR_DEEP_ANALYSIS_KEY，无法调用深度分析服务")
+
+    import requests as _requests
+
+    try:
+        r = _requests.post(
+            _DEEP_ANALYSIS_URL,
+            headers={
+                "Authorization": f"Bearer {_DEEP_ANALYSIS_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={"model": _DEEP_ANALYSIS_MODEL, "messages": [{"role": "user", "content": prompt}]},
+            timeout=_DEEP_ANALYSIS_TIMEOUT,
+        )
+    except _requests.RequestException as e:
+        raise HTTPException(502, f"深度分析服务连接失败：{e}") from e
+
+    if r.status_code != 200:
+        raise HTTPException(502, f"深度分析服务 HTTP {r.status_code}: {r.text[:300]}")
+
+    try:
+        data = r.json()
+        content = data["choices"][0]["message"]["content"] or ""
+    except (ValueError, KeyError, IndexError) as e:
+        raise HTTPException(502, f"深度分析服务返回格式异常：{e}") from e
+    return {"data": {"content": content}}

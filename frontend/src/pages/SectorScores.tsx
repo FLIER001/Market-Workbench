@@ -8,7 +8,6 @@ import {
   Search,
   TrendingUp,
 } from "lucide-react";
-import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, type SectorScoreRow, type SectorScoresData } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -104,7 +103,7 @@ function MetricCard({
   );
 }
 
-export function SectorScores() {
+export function SectorScoresPanel() {
   const [data, setData] = useState<SectorScoresData | null>(loadLocalCache);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -183,20 +182,17 @@ export function SectorScores() {
 
   return (
     <div>
-      <PageHeader
-        title="板块评分"
-        subtitle="申万一级行业 · 最新交易日状态 × 月度历史锚"
-        actions={
-          <button
-            onClick={() => void load(true)}
-            disabled={loading}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-primary disabled:opacity-50"
-          >
-            <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
-            重新计算
-          </button>
-        }
-      />
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <p className="text-xs text-muted-foreground">申万一级行业 · 最新交易日状态 × 月度历史锚</p>
+        <button
+          onClick={() => void load(true)}
+          disabled={loading}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border/60 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-primary disabled:opacity-50"
+        >
+          <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+          重新计算
+        </button>
+      </div>
 
       {error && (
         <GlassCard className="mb-4 border-danger/30 p-4 text-sm text-danger">

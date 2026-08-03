@@ -57,7 +57,7 @@ export function EarningsSnapshot({ val, fin, pctl }: Props) {
         {fin.period && <span className="text-xs font-normal text-muted-foreground/60">· {fin.period}</span>}
       </h3>
       <p className="mb-3 text-[11px] text-muted-foreground/60">
-        最新财报 + 前向一致预期 + 估值位置一眼看全。客观数据机械分档，不构成买卖建议。
+        最新财报 + 前向一致预期 + 估值位置一眼看全 · 客观数据机械分档
       </p>
 
       {/* 结论先行：两大头条数字 */}

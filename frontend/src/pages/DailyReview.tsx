@@ -1,11 +1,10 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Sparkles, Loader2, AlertCircle, RefreshCw, Gauge, ArrowDownUp, TrendingUp, TrendingDown, Flame, BarChart3, Globe } from "lucide-react";
+import { Sparkles, Loader2, AlertCircle, RefreshCw, Gauge, ArrowDownUp, TrendingUp, TrendingDown, Flame, BarChart3, Globe, ChevronDown } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { AskAiButton } from "@/components/ui/AskAiButton";
 import { api, type IndexQuote, type MarketOverview, type ShortTermEmotion, type TurnoverTop, type GlobalIndex } from "@/lib/api";
 import { hasLlm, chatStream } from "@/lib/llm";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
@@ -31,6 +30,8 @@ export function DailyReview() {
   const [overview, setOverview] = useState<MarketOverview | null>(null);
   const [emotion, setEmotion] = useState<ShortTermEmotion | null>(null);
   const [turnover, setTurnover] = useState<TurnoverTop | null>(null);
+  // 全球市场：点击日盘/夜盘综合卡片展开对应国家指数（默认收起，再点一下收起）
+  const [expandSession, setExpandSession] = useState<"day" | "night" | null>(null);
   const [globalIdx, setGlobalIdx] = useState<GlobalIndex[]>(() => {
     try {
       const cached = storageGet("vr-daily-global-idx-v2");
@@ -43,9 +44,13 @@ export function DailyReview() {
   const [emoDone, setEmoDone] = useState(false);
   const [toDone, setToDone] = useState(false);
 
+  const refreshGlobal = () => {
+    api.globalIndices().then((d) => { setGlobalIdx(d); storageSet("vr-daily-global-idx-v2", JSON.stringify(d)); }).catch(() => {});
+  };
+
   const loadIndices = () => {
     api.indices().then(setIndices).catch(() => setIdxErr(true));
-    api.globalIndices().then((d) => { setGlobalIdx(d); storageSet("vr-daily-global-idx-v2", JSON.stringify(d)); }).catch(() => {});
+    refreshGlobal();
     api.marketOverview().then(setOverview).catch(() => {}).finally(() => setOvDone(true));
     api.emotion().then(setEmotion).catch(() => {}).finally(() => setEmoDone(true));
     api.turnoverTop().then(setTurnover).catch(() => {}).finally(() => setToDone(true));
@@ -61,6 +66,15 @@ export function DailyReview() {
 
   useEffect(() => {
     loadIndices();
+    // 全球市场指数 60 秒自动刷新（日盘/夜盘综合涨跌幅随之更新）；
+    // 后端对闭市市场直接回用收盘价、不再请求数据源。页面切到后台时暂停轮询省流量，
+    // 切回前台立即补刷一次。
+    const tick = () => { if (!document.hidden) refreshGlobal(); };
+    const timer = setInterval(tick, 60_000);
+    const onVisible = () => { if (!document.hidden) refreshGlobal(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
 
@@ -71,13 +85,66 @@ export function DailyReview() {
     ? indices.map((i) => `${i.name} ${i.price}（${i.change_pct > 0 ? "+" : ""}${i.change_pct}%）`).join("；")
     : "（指数数据未取到）";
 
+  const sentiment = overview?.sentiment;
+  const sectors = overview?.sectors || [];
+
+  // —— 把页面上各数据块都打包给 AI（指数只是其一）——
+  const sentimentText = sentiment
+    ? `涨${sentiment.up}/跌${sentiment.down}/平${sentiment.flat}家，涨停${sentiment.zt}（真实${sentiment.zt_real}）、跌停${sentiment.dt}（真实${sentiment.dt_real}），活跃度${sentiment.active}，市场广度${sentiment.breadth}`
+    : "（情绪数据未取到）";
+
+  const sectorText = sectors.length
+    ? sectors.slice(0, 10).map((x) => `${x.name}${x.pct > 0 ? "+" : ""}${x.pct}%·主力净${x.net > 0 ? "+" : ""}${Math.round(x.net)}亿`).join("；")
+    : "（板块资金未取到）";
+
+  const emotionText = emotion
+    ? `涨停${emotion.zt_count}家/跌停${emotion.dt_count}家/炸板${emotion.zb_count}家，最高连板${emotion.max_boards}板，连板股${emotion.lianban_count}只` +
+      `，封板率${emotion.seal_rate ?? "—"}%，炸板率${emotion.break_rate ?? "—"}%，晋级率${emotion.promotion_rate ?? "—"}%` +
+      (emotion.ladder?.length ? `，梯队[${emotion.ladder.map((t) => `${t.boards}板×${t.count}`).join(" ")}]` : "") +
+      (emotion.lianban_stocks?.length ? `，连板龙头[${emotion.lianban_stocks.slice(0, 5).map((x) => `${x.name}${x.boards}板(${x.industry})`).join("、")}]` : "")
+    : "（短线情绪未取到）";
+
+  const turnoverText = turnover?.stocks?.length
+    ? turnover.stocks.slice(0, 8).map((x) => `${x.name}${x.pct != null ? (x.pct > 0 ? "+" : "") + x.pct + "%" : ""}·额${x.amount != null ? Math.round(x.amount / 1e8) + "亿" : "—"}`).join("；")
+    : "（成交额榜未取到）";
+
+  const globalText = globalIdx.length
+    ? globalIdx.map((g) => `${g.name}${g.change_pct != null ? (g.change_pct > 0 ? "+" : "") + g.change_pct + "%" : "—"}`).join("、")
+    : "（外围未取到）";
+
   const runReview = async () => {
     setNeedConfig(false);
     if (!hasLlm()) { setNeedConfig(true); return; }
     const prompt =
-      `以下是今天 A 股大盘的客观数据：\n${dataSummary}\n\n` +
-      "请用中文做一段当天大盘复盘：整体涨跌、主要指数表现、盘面值得注意的点。" +
-      "只做客观陈述与多视角分析，不预测涨跌、不推荐任何标的、不构成投资建议。";
+      `你是 A 股职业复盘分析师。下面是今天盘面的客观数据，请基于此做一段**综合研判**，不要复述数据本身——数据读者已经在页面上看到了，你的价值在于「判断」。
+
+` +
+      `【大盘指数】${dataSummary}
+` +
+      `【市场情绪】${sentimentText}
+` +
+      `【板块资金】${sectorText}
+` +
+      `【短线情绪】${emotionText}
+` +
+      `【成交额榜】${turnoverText}
+` +
+      `【隔夜外围】${globalText}
+
+` +
+      `请按以下框架输出（用中文，精炼，每点 1-2 句，总篇幅控制在 400 字内）：
+` +
+      `1. **情绪周期定位**：用连板高度、炸板率、晋级率判断当前处于冰点/回暖/高潮/退潮哪个阶段，给出依据。炸板率>30%警惕分歧、>50%亏钱效应扩散；晋级率骤降+梯队断层是退潮信号。
+` +
+      `2. **指数与赚钱效应是否背离**：对比指数涨跌与涨跌停家数、活跃度。若指数红但下跌家数占多数，是权重护盘的"指数失真"，要点明。
+` +
+      `3. **资金主线与切换**：从板块资金流向判断当前主线是什么、是否有高位流出→低位承接的"高低切换"，主线是行业驱动（持续）还是事件驱动（易一日游）。
+` +
+      `4. **外围联动**：隔夜外围（尤其美股科技股/半导体）与今日 A 股对应板块的映射，是否有共振或背离。
+` +
+      `5. **次日观察点**：1-2 个客观、可验证的盘面信号（不预测涨跌、不推荐标的）。
+` +
+      `要求：观点明确、有判断有依据，不堆术语，不做投资建议，不复述上面的原始数据。`;
     startBackgroundTask(reviewKey, { text: "" }, async (update, signal) => {
       await chatStream([{ role: "user", content: prompt }], `今日大盘数据：${dataSummary}`, {
         onDelta: (t) => update((data) => ({ text: data.text + t })),
@@ -85,8 +152,6 @@ export function DailyReview() {
     });
   };
 
-  const sentiment = overview?.sentiment;
-  const sectors = overview?.sectors || [];
   const sentCells = sentiment ? [
     { k: "上涨家数", v: sentiment.up, up: true },
     { k: "下跌家数", v: sentiment.down, up: false },
@@ -101,15 +166,55 @@ export function DailyReview() {
   return (
     <div>
       <PageHeader
-        title="每日复盘"
-        subtitle={`${today} · 大盘 / 情绪 / 板块资金一屏看全，交给你的 AI 做复盘`}
+        title="市场全景"
+        subtitle={`${today} · 大盘 / 情绪 / 板块资金一屏看全`}
         actions={
-          <AskAiButton
-            context={`今日大盘数据：${dataSummary}`}
-            taskId={reviewKey}
-            label="问 AI"
-            suggestions={["今天大盘怎么走", "哪些指数领涨领跌", "盘面有什么值得注意"]}
-          />
+          /* AI 复盘：悬停展开复盘内容（如有），点击触发复盘 */
+          <div className="group relative">
+            <button
+              onClick={runReview}
+              disabled={reviewLoading}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow transition-colors hover:bg-primary/25 disabled:opacity-50"
+            >
+              {reviewLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              {reviewLoading ? "复盘中…" : review ? "重新复盘" : "AI 复盘"}
+            </button>
+            {/* 悬停展开的复盘内容浮层（向下展开，右对齐） */}
+            <div className="invisible absolute right-0 top-full z-50 mt-2 w-[400px] max-w-[85vw] translate-y-1 opacity-0 transition-all duration-200 group-hover:visible group-hover:translate-y-0 group-hover:opacity-100">
+              <GlassCard glow className="max-h-[60vh] overflow-auto p-4">
+                <div className="mb-2 flex items-center justify-between">
+                  <h3 className="flex items-center gap-1.5 text-sm font-semibold"><Sparkles className="h-4 w-4 text-primary" /> AI 当日复盘</h3>
+                  {review && !reviewLoading && <SaveNoteButton kind="复盘" title={`每日复盘 ${today}`} content={review} />}
+                </div>
+                {needConfig && (
+                  <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 p-2.5 text-xs text-muted-foreground">
+                    <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+                    还没接入 AI。<Link to="/settings" className="text-primary">先去接入你的 AI</Link>。
+                  </div>
+                )}
+                {reviewErr && (
+                  <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-2.5 text-xs text-destructive">
+                    <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {reviewErr}
+                  </div>
+                )}
+                {reviewLoading && !review && (
+                  <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> AI 正在复盘…
+                  </div>
+                )}
+                {review ? (
+                  <div className="prose prose-sm prose-invert max-w-none text-xs leading-relaxed text-foreground">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{review}</ReactMarkdown>
+                  </div>
+                ) : !needConfig && !reviewErr && !reviewLoading ? (
+                  <p className="text-xs text-muted-foreground">
+                    点上方按钮，系统把当天客观数据打包给你的 AI 生成复盘。
+                    <b className="text-foreground">分析是它给的，我们只负责喂数据。</b>
+                  </p>
+                ) : null}
+              </GlassCard>
+            </div>
+          </div>
         }
       />
 
@@ -149,16 +254,72 @@ export function DailyReview() {
               if (!grouped.has(g.region)) grouped.set(g.region, []);
               grouped.get(g.region)!.push(g);
             }
-            return regionOrder.map((region) => {
+            // 按市值权重计算日盘/夜盘综合涨跌幅（缺数据的指数跳过并归一化）
+            const DAY = new Set(["港股", "亚太", "南亚"]);
+            const NIGHT = new Set(["美股", "欧洲"]);
+            const weighted = (regions: Set<string>): number | null => {
+              let num = 0, den = 0;
+              for (const g of globalIdx) {
+                if (!regions.has(g.region) || g.change_pct == null || !g.weight) continue;
+                num += g.change_pct * g.weight;
+                den += g.weight;
+              }
+              return den > 0 ? Math.round((num / den) * 100) / 100 : null;
+            };
+            const dayChg = weighted(DAY);
+            const nightChg = weighted(NIGHT);
+            return (
+              <>
+              {(dayChg != null || nightChg != null) && (
+                <div className="mb-4 grid grid-cols-2 gap-3">
+                  {[
+                    { label: "日盘综合", sub: "港股 · 亚太 · 南亚", val: dayChg, session: "day" as const },
+                    { label: "夜盘综合", sub: "美股 · 欧洲（中国夜盘）", val: nightChg, session: "night" as const },
+                  ].map((c) => {
+                    const expanded = expandSession === c.session;
+                    return (
+                      <GlassCard
+                        key={c.label}
+                        onClick={() => setExpandSession(expanded ? null : c.session)}
+                        className={cn("p-3 transition-colors", expanded && "border-primary/40 bg-primary/5")}
+                      >
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs text-muted-foreground">{c.label}</p>
+                          <ChevronDown className={cn("h-3.5 w-3.5 text-muted-foreground/50 transition-transform", expanded && "rotate-180 text-primary")} />
+                        </div>
+                        <p className={cn("mt-0.5 font-mono text-2xl font-extrabold", c.val == null ? "text-foreground" : pctColor(c.val))}>
+                          {c.val == null ? "—" : `${c.val > 0 ? "+" : ""}${c.val}%`}
+                        </p>
+                        <p className="mt-0.5 text-[10px] text-muted-foreground/50">{c.sub} · 按市值加权</p>
+                      </GlassCard>
+                    );
+                  })}
+                </div>
+              )}
+              {regionOrder
+                .filter((region) => {
+                  if (expandSession === "day") return DAY.has(region);
+                  if (expandSession === "night") return NIGHT.has(region);
+                  return false; // 默认收起，点击综合卡片才展开
+                })
+                .map((region) => {
               const items = grouped.get(region);
               if (!items || items.length === 0) return null;
               return (
                 <div key={region} className="mb-4">
-                  <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/60">{region}</p>
+                  <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/60">
+                    {region}
+                    {(region === "美股" || region === "欧洲") && (
+                      <span className="ml-1.5 normal-case text-muted-foreground/40">（中国夜盘）</span>
+                    )}
+                  </p>
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
                     {items.map((g) => (
                       <GlassCard key={g.key} className="p-3">
-                        <p className="truncate text-xs text-muted-foreground">{g.name}</p>
+                        <div className="flex items-center justify-between gap-1">
+                          <p className="truncate text-xs text-muted-foreground">{g.name}</p>
+                          {g.closed && <span className="shrink-0 rounded bg-muted/40 px-1 py-px text-[9px] text-muted-foreground/60">收盘</span>}
+                        </div>
                         <p className={cn("mt-1 font-mono text-lg font-bold", g.change_pct == null ? "text-foreground" : pctColor(g.change_pct))}>{g.price ?? "—"}</p>
                         <p className={cn("text-xs", g.change_pct == null ? "text-muted-foreground" : pctColor(g.change_pct))}>
                           {g.change_pct == null ? "—" : `${g.change_pct > 0 ? "+" : ""}${g.change_pct}%`}
@@ -167,42 +328,15 @@ export function DailyReview() {
                     ))}
                   </div>
                 </div>
-              );
-            });
+                );
+              })}
+              </>
+            );
           })()}
         </>
       )}
 
-      {/* 3. AI 当日复盘 */}
-      <GlassCard glow className="mb-6">
-        <div className="flex items-center justify-between">
-          <h3 className="flex items-center gap-1.5 font-semibold"><Sparkles className="h-4 w-4 text-primary" /> AI 当日复盘</h3>
-          <button onClick={runReview} disabled={reviewLoading}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">
-            {reviewLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            {review ? "重新复盘" : "让 AI 复盘今天"}
-          </button>
-        </div>
-        {needConfig && (
-          <div className="mt-3 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm text-muted-foreground">
-            <AlertCircle className="h-4 w-4 shrink-0 text-warning" />
-            还没接入 AI。<Link to="/settings" className="text-primary">先去接入你的 AI</Link>，之后一键出复盘。
-          </div>
-        )}
-        {reviewErr && (
-          <div className="mt-3 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-            <AlertCircle className="h-4 w-4 shrink-0" /> {reviewErr}
-          </div>
-        )}
-        {review ? (
-          <>
-            <div className="prose prose-sm prose-invert mt-4 max-w-none text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]}>{review}</ReactMarkdown></div>
-            {!reviewLoading && <div className="mt-3"><SaveNoteButton kind="复盘" title={`每日复盘 ${today}`} content={review} /></div>}
-          </>
-        ) : !needConfig && !reviewErr && !reviewLoading ? (
-          <p className="mt-3 text-sm text-muted-foreground">点上方按钮，系统把当天客观数据打包给你的 AI，由它生成复盘。<b className="text-foreground">分析是它给的，我们只负责喂数据。</b></p>
-        ) : null}
-      </GlassCard>
+
 
       {/* 3b. 市场情绪 */}
       <div className="mb-3 flex items-center gap-2">
@@ -346,7 +480,7 @@ export function DailyReview() {
             </div>
             {/* 连板股清单（2 板以上，客观公开榜单） */}
             <div className="mt-3">
-              <p className="mb-1.5 text-[11px] text-muted-foreground">连板股（2 板以上连续涨停）· 客观公开榜单，非推荐 / 非预测</p>
+              <p className="mb-1.5 text-[11px] text-muted-foreground">连板股（2 板以上连续涨停）· 客观公开榜单</p>
               {emotion.lianban_stocks.length === 0 ? (
                 <p className="text-xs text-muted-foreground/50">今日无 2 板以上个股</p>
               ) : (
@@ -383,7 +517,7 @@ export function DailyReview() {
       {/* 7. 全市场成交额 TOP20（客观公开榜单） */}
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground"><BarChart3 className="h-4 w-4" /> 全市场成交额 TOP20</h3>
-        <span className="text-[11px] text-muted-foreground/50">客观公开榜单，非推荐 / 非预测 / 不构成投资建议</span>
+        <span className="text-[11px] text-muted-foreground/50">客观公开榜单</span>
         {turnover?.updated && <span className="ml-auto text-[11px] text-muted-foreground/50">{turnover.updated}</span>}
       </div>
       <GlassCard className="mb-6">

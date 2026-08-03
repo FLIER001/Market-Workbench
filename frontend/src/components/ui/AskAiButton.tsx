@@ -21,6 +21,7 @@ const TOOL_LABEL: Record<string, string> = {
   query_valuation: "查估值",
   query_reports: "查研报",
   query_news: "查新闻",
+  search_public_news: "联网核验",
 };
 
 // 数据溯源：把工具调用的关键参数压成一小段（查了哪只/哪些代码）。
@@ -137,8 +138,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", taskI
                 <div ref={scrollRef} className="flex-1 space-y-3 overflow-auto p-4 text-sm">
                   {msgs.length === 0 && (
                     <div className="rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-muted-foreground">
-                      AI 可基于本页上下文、并自行调取 A股行情/估值/研报数据作答。结论由你的模型给出，
-                      <b className="text-foreground">不构成投资建议</b>。
+                      AI 可基于本页上下文、并自行调取 A 股行情 / 估值 / 研报数据作答。
                     </div>
                   )}
                   {msgs.map((m, i) => (

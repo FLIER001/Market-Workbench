@@ -2,6 +2,7 @@
 // 只存本地 localStorage，不上传、不进仓库。对应投研框架第 7 层「沉淀」。
 
 import { storageSet, storageRemove } from "@/lib/storage";
+import { syncKeyToBackend } from "@/lib/userData";
 
 export interface Note {
   id: string;
@@ -24,7 +25,9 @@ export function loadNotes(): Note[] {
 }
 
 function persist(notes: Note[]) {
-  storageSet(KEY, JSON.stringify(notes.slice(0, MAX)));
+  const payload = JSON.stringify(notes.slice(0, MAX));
+  storageSet(KEY, payload);
+  syncKeyToBackend(KEY, payload);
 }
 
 // 新记录置顶。返回更新后的完整列表。

@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { StockSearchInput } from "@/components/ui/StockSearchInput";
+import { isTradingHours } from "@/hooks/useLiveQuotes";
 import { api, ApiError, type PortfolioData } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -26,7 +27,6 @@ export function Portfolio() {
   const [cDate, setCDate] = useState("");
   const [cPrice, setCPrice] = useState("");
   const [cShares, setCShares] = useState("");
-  const [cCost, setCCost] = useState("");
   const [, setClosing] = useState(false);
 
   const load = useCallback(async (manual = false) => {
@@ -43,8 +43,15 @@ export function Portfolio() {
 
   useEffect(() => {
     load();
-    const t = setInterval(() => load(), REFRESH_MS); // 每半小时自动刷新
-    return () => clearInterval(t);
+    // 定时刷新只在「A股交易时段 + 页面在前台」时执行：收盘后/切到后台时持仓盈亏不变，不必刷。
+    const tick = () => {
+      if (!document.hidden && isTradingHours()) load();
+    };
+    const t = setInterval(tick, REFRESH_MS);
+    // 页面切回前台 / 开盘时补刷一次
+    const onVisible = () => { if (!document.hidden) load(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", onVisible); };
   }, [load]);
 
   const add = async (overrideCode?: string) => {
@@ -70,13 +77,14 @@ export function Portfolio() {
   const addClose = async (overrideCode?: string) => {
     const c = (overrideCode || cCode).trim();
     if (!/^\d{6}$/.test(c)) { setErr("清仓记录：请输入 6 位代码"); return; }
-    const p = parseFloat(cPrice), s = parseFloat(cShares), cc = parseFloat(cCost);
+    const p = parseFloat(cPrice), s = parseFloat(cShares);
     if (!cDate) { setErr("请选清仓日期"); return; }
-    if (!(p > 0) || !(s > 0) || !Number.isFinite(cc)) { setErr("清仓价 / 股数须大于 0，成本请填数字（可为负）"); return; }
+    if (!(p > 0) || !(s > 0)) { setErr("清仓价 / 股数须大于 0"); return; }
     setClosing(true); setErr(null);
     try {
-      setData(await api.closePosition(c, cDate, p, s, cc));
-      setCCode(""); setCDate(""); setCPrice(""); setCShares(""); setCCost("");
+      // 成本不传：后端用添加持仓时录入的成本计算已实现盈亏，并从当前持仓扣减股数
+      setData(await api.closePosition(c, cDate, p, s));
+      setCCode(""); setCDate(""); setCPrice(""); setCShares("");
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "添加清仓记录失败");
     } finally {
@@ -100,7 +108,7 @@ export function Portfolio() {
   return (
     <div>
       <PageHeader
-        title="我的持仓"
+        title="持仓"
         subtitle="自己录、存在本地，实时看浮动盈亏"
         actions={
           <div className="flex items-center gap-2">
@@ -124,10 +132,11 @@ export function Portfolio() {
 
       {/* 汇总 */}
       {totals && holdings.length > 0 && (
-        <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
           {[
+            { k: "当日盈亏", v: (totals.day_pnl > 0 ? "+" : "") + fmt(totals.day_pnl), c: pnlColor(totals.day_pnl) },
+            { k: "当日盈亏比例", v: (totals.day_pnl_pct > 0 ? "+" : "") + totals.day_pnl_pct + "%", c: pnlColor(totals.day_pnl) },
             { k: "总市值", v: fmt(totals.market_value), c: "text-foreground" },
-            { k: "总成本", v: fmt(totals.cost), c: "text-foreground" },
             { k: "浮动盈亏", v: (totals.pnl > 0 ? "+" : "") + fmt(totals.pnl), c: pnlColor(totals.pnl) },
             { k: "盈亏比例", v: (totals.pnl_pct > 0 ? "+" : "") + totals.pnl_pct + "%", c: pnlColor(totals.pnl) },
           ].map((m) => (
@@ -139,28 +148,63 @@ export function Portfolio() {
         </div>
       )}
 
-      {/* 录入 */}
-      <GlassCard className="mb-4">
-        <h3 className="mb-3 text-sm font-semibold">添加持仓</h3>
-        <div className="flex flex-wrap items-end gap-2">
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">股票代码</label>
-            <StockSearchInput value={code} onChange={setCode} onPick={(c) => add(c)} placeholder="代码 / 中文 / 首字母" className="w-40" />
+      {/* 录入：添加持仓 / 添加清仓记录，并列放在持仓明细上方 */}
+      <div className="mb-4 grid gap-4 lg:grid-cols-[3fr_4fr]">
+        <GlassCard>
+          <h3 className="mb-3 text-sm font-semibold">添加持仓</h3>
+          <div className="flex flex-wrap items-end gap-1.5">
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">股票代码</label>
+              <StockSearchInput value={code} onChange={setCode} onPick={(c) => add(c)} placeholder="代码 / 中文 / 首字母" className="w-28" />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">数量（股）</label>
+              <input value={shares} onChange={(e) => setShares(e.target.value.replace(/[^\d.]/g, ""))} placeholder="如 100"
+                className="w-20 rounded-lg border border-border bg-black/20 px-2.5 py-2 text-sm outline-none focus:border-primary/50" />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">成本价</label>
+              <input value={cost} onChange={(e) => setCost(e.target.value.replace(/[^\d.-]/g, "").replace(/(?!^)-/g, ""))} placeholder="如 12.5，可负"
+                className="w-24 rounded-lg border border-border bg-black/20 px-2.5 py-2 text-sm outline-none focus:border-primary/50" />
+            </div>
+            <button onClick={() => add()}
+              className="rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">
+              添加
+            </button>
           </div>
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">数量（股）</label>
-            <input value={shares} onChange={(e) => setShares(e.target.value.replace(/[^\d.]/g, ""))} placeholder="如 100"
-              className="w-28 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">成本价</label>
-            <input value={cost} onChange={(e) => setCost(e.target.value.replace(/[^\d.-]/g, "").replace(/(?!^)-/g, ""))} placeholder="如 12.5，可负"
-              className="w-28 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
-          </div>
+          <p className="mt-2 text-[11px] text-muted-foreground/60">同一代码再次添加会按加权平均成本合并（加仓）。</p>
+        </GlassCard>
 
-        </div>
-        <p className="mt-2 text-[11px] text-muted-foreground/60">同一代码再次添加会按加权平均成本合并（加仓）。</p>
-      </GlassCard>
+        <GlassCard className="overflow-x-auto">
+          <h3 className="mb-3 text-sm font-semibold">添加清仓记录</h3>
+          <div className="flex flex-nowrap items-end gap-1.5">
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">股票代码</label>
+              <StockSearchInput value={cCode} onChange={setCCode} onPick={(c) => addClose(c)} placeholder="代码 / 中文 / 首字母" className="w-32" />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">清仓日期</label>
+              <input type="date" value={cDate} onChange={(e) => setCDate(e.target.value)}
+                className="rounded-lg border border-border bg-black/20 px-2 py-2 text-sm outline-none focus:border-primary/50" />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">清仓价</label>
+              <input value={cPrice} onChange={(e) => setCPrice(e.target.value.replace(/[^\d.]/g, ""))} placeholder="卖出价"
+                className="w-20 rounded-lg border border-border bg-black/20 px-2.5 py-2 text-sm outline-none focus:border-primary/50" />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">股数</label>
+              <input value={cShares} onChange={(e) => setCShares(e.target.value.replace(/[^\d.]/g, ""))} placeholder="如 100"
+                className="w-20 rounded-lg border border-border bg-black/20 px-2.5 py-2 text-sm outline-none focus:border-primary/50" />
+            </div>
+            <button onClick={() => addClose()}
+              className="rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">
+              添加
+            </button>
+          </div>
+          <p className="mt-2 text-[11px] text-muted-foreground/60">成本自动取添加持仓时录入的买入成本，股数会同步从当前持仓扣减。</p>
+        </GlassCard>
+      </div>
 
       {err && (
         <div className="mb-4 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
@@ -181,7 +225,7 @@ export function Portfolio() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
-                  {["名称", "现价", "数量", "成本", "市值", "浮动盈亏", "盈亏%", ""].map((h) => (
+                  {["名称", "当日盈亏", "现价", "数量", "成本", "市值", "浮动盈亏", "盈亏%", ""].map((h) => (
                     <th key={h} className="whitespace-nowrap px-2 py-2 font-medium">{h}</th>
                   ))}
                 </tr>
@@ -193,6 +237,7 @@ export function Portfolio() {
                       <span className="font-medium">{h.name}</span>
                       <span className="ml-1.5 font-mono text-xs text-muted-foreground/60">{h.code}</span>
                     </td>
+                    <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.day_pnl))}>{h.day_pnl > 0 ? "+" : ""}{fmt(h.day_pnl)}</td>
                     <td className="px-2 py-2.5 font-mono">{fmtPx(h.price)}</td>
                     <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmt(h.shares)}</td>
                     <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmtPx(h.cost)}</td>
@@ -210,38 +255,6 @@ export function Portfolio() {
             </table>
           </div>
         )}
-      </GlassCard>
-
-      {/* 清仓录入 */}
-      <GlassCard className="mb-4 mt-6">
-        <h3 className="mb-3 text-sm font-semibold">添加清仓记录</h3>
-        <div className="flex flex-wrap items-end gap-2">
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">股票代码</label>
-            <StockSearchInput value={cCode} onChange={setCCode} onPick={(c) => addClose(c)} placeholder="代码 / 中文 / 首字母" className="w-40" />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">清仓日期</label>
-            <input type="date" value={cDate} onChange={(e) => setCDate(e.target.value)}
-              className="rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">清仓价</label>
-            <input value={cPrice} onChange={(e) => setCPrice(e.target.value.replace(/[^\d.]/g, ""))} placeholder="卖出价"
-              className="w-24 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">股数</label>
-            <input value={cShares} onChange={(e) => setCShares(e.target.value.replace(/[^\d.]/g, ""))} placeholder="如 100"
-              className="w-24 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-muted-foreground">买入成本</label>
-            <input value={cCost} onChange={(e) => setCCost(e.target.value.replace(/[^\d.-]/g, "").replace(/(?!^)-/g, ""))} placeholder="成本价，可负"
-              className="w-24 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50" />
-          </div>
-
-        </div>
       </GlassCard>
 
       {/* 已清仓列表 */}
