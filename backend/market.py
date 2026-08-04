@@ -14,6 +14,7 @@ from datetime import datetime, timezone, timedelta
 
 import astock
 import gstock
+import macro_fetch
 
 BEIJING = timezone(timedelta(hours=8))
 _CACHE: dict = {}
@@ -97,7 +98,7 @@ _SUB_TTL = 6 * 3600   # 利率/债券等低频序列：6 小时内直接用缓�
 _SUB_STALE_TTL = 900  # 过期后源故障：继续用 last-good 最多 15 分钟，同时后台重试
 
 
-def _layered_get(key: str, build, valid, warm=None):
+def _layered_get(key: str, build, valid, warm=None, ttl=_TTL):
     """last-good 语义：新鲜值 TTL 内直接返回；过期则重建；
 
     重建失败/结果无效时，回退最近一次成功的 last-good 并标注 stale；
@@ -107,7 +108,7 @@ def _layered_get(key: str, build, valid, warm=None):
     now = time.time()
     e = _LAYERED.setdefault(key, {})
     fresh = e.get("fresh")
-    if fresh and now - fresh[0] < _TTL:
+    if fresh and now - fresh[0] < ttl:
         return fresh[1]
     # 无 last-good 时先装磁盘快照：即使即将重建，也让 build 失败路径立即可回退
     if not e.get("last_good") and warm:
@@ -390,6 +391,19 @@ def get_turnover_top() -> dict:
 def get_global_indices() -> list[dict]:
     """全球指数快照（美股 / 港股，含缓存 5 分钟）。空结果不缓存。"""
     return _cached("global_indices", gstock.global_indices, valid=bool)
+
+
+def get_global_indices_for(keys: list[str]) -> list[dict]:
+    """指定市场的全球指数快照（缓存 5 分钟，按 keys 组合缓存）。
+
+    供「市场全景」增量刷新：只请求已开盘的市场，闭市市场由前端本地缓存合并。
+    未知 key 直接忽略；全部未知时返回空列表（不缓存）。
+    """
+    valid_keys = sorted({k for k in keys if k in gstock.INDEX_KEYS})
+    if not valid_keys:
+        return []
+    return _cached("global_indices:" + ",".join(valid_keys),
+                   lambda: gstock.global_indices(valid_keys), valid=bool)
 
 
 
@@ -1498,3 +1512,340 @@ def _liquidity_build() -> dict:
             val.pop("stale_since", None)
         _save_json(_LIQUIDITY_SNAPSHOT, val)
     return val
+
+
+# ---------------------------------------------------------------------------
+# 宏观面 —— 国内重要宏观经济指标（GDP/CPI/PPI/PMI/M2/工业增加值/进出口等）
+# ---------------------------------------------------------------------------
+
+_MACRO_TTL = 3600  # 宏观数据多为月度/季度，1 小时刷新足够
+_MACRO_SNAPSHOT = os.path.join(
+    os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research"),
+    "macro_snapshot.json")
+
+
+def _load_macro_snapshot():
+    d = _load_json(_MACRO_SNAPSHOT)
+    return d if isinstance(d, dict) and (d.get("cn") or d.get("groups")) else None
+
+
+# akshare 的 investing 接口统一返回（商品/日期/今值/预测值/前值）
+def _inv_hist(fn, label: str, limit: int = 60) -> dict | None:
+    """拉一条 investing 格式宏观指标，解析为前端友好的卡片数据。"""
+    try:
+        ak = astock._akshare()
+        df = fn().tail(limit)
+    except Exception:
+        return None
+    if df is None or df.empty:
+        return None
+    # 过滤今值为 NaN 的行（未发布月份）
+    df = df.dropna(subset=["今值"])
+    if df.empty:
+        return None
+    latest = df.iloc[-1]
+    val = float(latest["今值"])
+    forecast = latest.get("预测值")
+    prev = latest.get("前值")
+    hist = [{"date": str(r["日期"])[:10], "v": round(float(r["今值"]), 3)}
+            for _, r in df.iterrows() if r.get("今值") is not None]
+    return {
+        "label": label,
+        "value": round(val, 2),
+        "forecast": round(float(forecast), 2) if forecast is not None and str(forecast) != "nan" else None,
+        "prev": round(float(prev), 2) if prev is not None and str(prev) != "nan" else None,
+        "date": str(latest["日期"])[:10],
+        "hist": hist,
+    }
+
+
+# 货币供应/社融等 NBS 格式接口，单独处理
+def _m2_yoy() -> dict | None:
+    """M2 同比（百分比），用 macro_china_money_supply 的同比增长列。"""
+    try:
+        ak = astock._akshare()
+        df = ak.macro_china_money_supply()
+    except Exception:
+        return None
+    if df is None or df.empty:
+        return None
+    # 该接口最新在最前，取前 36 个月
+    df = df.head(36).copy()
+    df = df.sort_values("月份")
+    latest = df.iloc[-1]
+    month = str(latest["月份"])
+    # "2026年06月份" → "2026-06"
+    try:
+        m = month.replace("年", "-").replace("月份", "").replace("月", "")
+        date_str = m
+    except Exception:
+        date_str = month
+    val = float(latest["货币和准货币(M2)-同比增长"])
+    hist = [{"date": str(r["月份"]).replace("年", "-").replace("月份", "").replace("月", ""),
+             "v": round(float(r["货币和准货币(M2)-同比增长"]), 2)}
+            for _, r in df.iterrows()]
+    return {
+        "label": "M2 同比",
+        "value": round(val, 2),
+        "forecast": None,
+        "prev": round(float(df.iloc[-2]["货币和准货币(M2)-同比增长"]), 2) if len(df) > 1 else None,
+        "date": date_str,
+        "hist": hist,
+    }
+
+
+def _m1_yoy() -> dict | None:
+    """M1 同比（百分比）。"""
+    try:
+        ak = astock._akshare()
+        df = ak.macro_china_money_supply()
+    except Exception:
+        return None
+    if df is None or df.empty:
+        return None
+    df = df.head(36).copy().sort_values("月份")
+    latest = df.iloc[-1]
+    month = str(latest["月份"])
+    try:
+        m = month.replace("年", "-").replace("月份", "").replace("月", "")
+        date_str = m
+    except Exception:
+        date_str = month
+    val = float(latest["货币(M1)-同比增长"])
+    hist = [{"date": str(r["月份"]).replace("年", "-").replace("月份", "").replace("月", ""),
+             "v": round(float(r["货币(M1)-同比增长"]), 2)}
+            for _, r in df.iterrows()]
+    return {
+        "label": "M1 同比",
+        "value": round(val, 2),
+        "forecast": None,
+        "prev": round(float(df.iloc[-2]["货币(M1)-同比增长"]), 2) if len(df) > 1 else None,
+        "date": date_str,
+        "hist": hist,
+    }
+
+
+def _social_financing() -> dict | None:
+    """社会融资规模增量（亿元/月）。"""
+    try:
+        ak = astock._akshare()
+        df = ak.macro_china_shrzgm()
+    except Exception:
+        return None
+    if df is None or df.empty:
+        return None
+    df = df.tail(24).copy().sort_values("月份")
+    latest = df.iloc[-1]
+    month = str(latest["月份"])
+    # "201501" → "2015-01"
+    try:
+        date_str = f"{month[:4]}-{month[4:]}" if len(month) == 6 else month
+    except Exception:
+        date_str = month
+    val = float(latest["社会融资规模增量"])
+    hist = [{"date": f"{str(r['月份'])[:4]}-{str(r['月份'])[4:]}" if len(str(r["月份"])) == 6 else str(r["月份"]),
+             "v": round(float(r["社会融资规模增量"]), 1)}
+            for _, r in df.iterrows()]
+    return {
+        "label": "社融增量",
+        "value": round(val, 0),
+        "forecast": None,
+        "prev": round(float(df.iloc[-2]["社会融资规模增量"]), 0) if len(df) > 1 else None,
+        "date": date_str,
+        "hist": hist,
+    }
+
+
+def _add_derived(ind: dict) -> None:
+    """由已有指标纯计算派生新指标，就地并入 ind dict。
+
+    - m1_m2_spread: M1-M2 剪刀差（信用活化）
+    - price_spread: PMI 购进-出厂价格差（利润率压力，差值扩大=压利润）
+    - private_credit_pulse: 私人部门信用脉冲近似（社融存量同比 − 政府债券存量同比）
+    - household_ml_loan / corp_ml_loan / bill_financing: 信贷收支子指标展开为独立卡片
+    """
+
+    def _align_diff(a_key: str, b_key: str, label: str, unit: str = "%", a_sub=None, b_sub=None):
+        a = ind.get(a_key)
+        b = ind.get(b_key)
+        if not a or not b:
+            return None
+        ah = a.get(a_sub) if a_sub else a.get("hist")
+        bh = b.get(b_sub) if b_sub else b.get("hist")
+        if not ah or not bh:
+            return None
+        bm = {p["date"]: p["v"] for p in bh}
+        pts = []
+        for p in ah:
+            if p["date"] in bm:
+                pts.append((p["date"], round(p["v"] - bm[p["date"]], 2)))
+        if not pts:
+            return None
+        pts.sort()
+        hist = [{"date": d, "v": v} for d, v in pts]
+        return {
+            "label": label, "value": hist[-1]["v"], "forecast": None,
+            "prev": hist[-2]["v"] if len(hist) > 1 else None,
+            "date": hist[-1]["date"], "hist": hist, "unit": unit, "source": "派生计算",
+        }
+
+    # M1-M2 剪刀差
+    d = _align_diff("m1", "m2", "M1-M2 剪刀差")
+    if d:
+        ind["m1_m2_spread"] = d
+
+    # PMI 购进-出厂价格差（正值扩大=成本压力，对利润不利；取购进−出厂）
+    inp = ind.get("pmi_input_price")
+    outp = ind.get("pmi_output_price")
+    if inp and outp:
+        om = {p["date"]: p["v"] for p in outp.get("hist", [])}
+        pts = []
+        for p in inp.get("hist", []):
+            if p["date"] in om:
+                pts.append((p["date"], round(p["v"] - om[p["date"]], 2)))
+        if pts:
+            pts.sort()
+            hist = [{"date": d_, "v": v} for d_, v in pts]
+            ind["price_spread"] = {
+                "label": "PMI 购进-出厂价差", "value": hist[-1]["v"], "forecast": None,
+                "prev": hist[-2]["v"] if len(hist) > 1 else None,
+                "date": hist[-1]["date"], "hist": hist, "unit": "pt", "source": "派生计算",
+            }
+
+    # 私人部门信用脉冲近似 = 社融存量同比 − 政府债券存量同比
+    sfs = ind.get("social_financing_stock")
+    if sfs and sfs.get("gov_bond_growth_hist"):
+        gov = {p["date"]: p["v"] for p in sfs["gov_bond_growth_hist"]}
+        pts = []
+        for p in sfs.get("hist", []):
+            if p["date"] in gov:
+                pts.append((p["date"], round(p["v"] - gov[p["date"]], 2)))
+        if pts:
+            pts.sort()
+            hist = [{"date": d_, "v": v} for d_, v in pts]
+            ind["private_credit_pulse"] = {
+                "label": "私人信用脉冲(近似)", "value": hist[-1]["v"], "forecast": None,
+                "prev": hist[-2]["v"] if len(hist) > 1 else None,
+                "date": hist[-1]["date"], "hist": hist, "unit": "pt",
+                "source": "社融存量同比−政府债券存量同比",
+            }
+
+    # 信贷收支子指标展开为独立卡片
+    cbs = ind.get("credit_by_sector")
+    if cbs:
+        for src_key, new_key, label in [
+            ("corp_ml_loan_hist", "corp_ml_loan", "企事业中长期贷款余额"),
+            ("bill_financing_hist", "bill_financing", "票据融资余额"),
+            ("fiscal_deposit_hist", "fiscal_deposit", "财政性存款余额"),
+        ]:
+            h = cbs.get(src_key)
+            if h:
+                ind[new_key] = {
+                    "label": label, "value": h[-1]["v"], "forecast": None,
+                    "prev": h[-2]["v"] if len(h) > 1 else None,
+                    "date": h[-1]["date"], "hist": h, "unit": "亿元",
+                    "source": "人民银行信贷收支",
+                }
+        # 主卡重命名为住户中长期贷款（credit_by_sector 的 hist 就是住户中长期）
+        cbs["label"] = "住户中长期贷款余额"
+        ind["household_ml_loan"] = cbs
+
+
+def _macro_build() -> dict:
+    def build():
+        ak = astock._akshare()
+        from concurrent.futures import ThreadPoolExecutor
+
+        # investing 格式指标（并行拉取）
+        inv_specs = [
+            ("gdp", ak.macro_china_gdp_yearly, "GDP 不变价同比"),
+            ("cpi", ak.macro_china_cpi_yearly, "CPI 同比"),
+            ("ppi", ak.macro_china_ppi_yearly, "PPI 同比"),
+            ("pmi", ak.macro_china_pmi_yearly, "制造业 PMI"),
+            ("non_man_pmi", ak.macro_china_non_man_pmi, "非制造业 PMI"),
+            ("cx_pmi", ak.macro_china_cx_pmi_yearly, "财新制造业 PMI"),
+            ("industrial", ak.macro_china_industrial_production_yoy, "工业增加值同比"),
+            ("exports", ak.macro_china_exports_yoy, "出口同比"),
+            ("imports", ak.macro_china_imports_yoy, "进口同比"),
+            ("trade_balance", ak.macro_china_trade_balance, "贸易差额"),
+        ]
+
+        indicators: dict = {}
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = pool.map(
+                lambda spec: (spec[0], _inv_hist(spec[1], spec[2])),
+                inv_specs,
+            )
+            for key, val in results:
+                if val is not None:
+                    indicators[key] = val
+
+        # NBS 格式指标（单独处理）
+        for key, fn in [("m2", _m2_yoy), ("m1", _m1_yoy), ("social_financing", _social_financing)]:
+            val = fn()
+            if val is not None:
+                indicators[key] = val
+
+        # ---- 扩展指标：macro_fetch 爬取的官方统计（PMI 分项/核心 CPI/工业利润/
+        #      房地产/设备投资/财政/社融存量/信贷收支/银行家问卷/世界贸易量/专项债） ----
+        try:
+            ext = macro_fetch.fetch_all()
+        except Exception:
+            ext = {}
+        # 把扩展指标并入 indicators（键名统一，供分组引用）
+        for k, v in ext.items():
+            if isinstance(v, dict) and v.get("label"):
+                indicators[k] = v
+
+        if not indicators:
+            return {}
+
+        # 派生指标（依赖已有指标的纯计算）
+        _add_derived(indicators)
+
+        # 按八层框架分组，前端按组渲染
+        groups = {
+            "增长": ["gdp", "industrial", "industrial_revenue", "fai_equipment"],
+            "物价": ["cpi", "core_cpi", "ppi"],
+            "景气": ["pmi_headline", "pmi_new_orders", "pmi_production", "pmi_new_export_orders",
+                     "pmi_finished_inventory", "non_man_pmi", "cx_pmi", "pmi_expectation"],
+            "价格价差": ["pmi_input_price", "pmi_output_price", "price_spread"],
+            "信用": ["m2", "m1", "m1_m2_spread", "social_financing", "social_financing_stock",
+                     "private_credit_pulse", "household_ml_loan", "corp_ml_loan", "bill_financing"],
+            "货币流动性": ["fiscal_deposit", "bank_survey"],
+            "财政地产": ["fiscal_expenditure", "fiscal_revenue_expenditure", "special_bond_issuance",
+                        "property_sales_area", "property_funds", "property_loans"],
+            "盈利": ["industrial_profit", "industrial_inventory"],
+            "外贸全球": ["exports", "imports", "trade_balance", "world_trade_volume"],
+        }
+
+        return {
+            "cn": indicators,
+            "groups": {g: [k for k in keys if k in indicators] for g, keys in groups.items()},
+            "updated": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M"),
+        }
+
+    val = build()
+    if val and (val.get("cn") or val.get("groups")):
+        prev = _last_good("macro")
+        if isinstance(prev, dict):
+            # cn 指标做 last-good 合并（单源故障回退旧值）；
+            # groups 由当轮指标重建，不合并，避免旧分组键残留
+            val["cn"] = _merge(prev.get("cn"), val.get("cn"), "cn")
+            val["groups"] = {g: [k for k in keys if k in val["cn"]]
+                             for g, keys in val["groups"].items()}
+            val.pop("stale", None)
+            val.pop("stale_since", None)
+        _save_json(_MACRO_SNAPSHOT, val)
+    return val
+
+
+def get_macro() -> dict:
+    """国内重要宏观经济指标汇总（GDP/CPI/PPI/PMI/M2/工业增加值/进出口/贸易差额/社融）。
+
+    last-good 语义同 get_liquidity：源故障回退最近成功值并标注 stale；
+    月度/季度数据 1 小时刷新足够。冷启动从磁盘快照恢复。
+    """
+    return _layered_get("macro", _macro_build,
+                        valid=lambda v: bool(v.get("cn") or v.get("groups")),
+                        warm=_load_macro_snapshot, ttl=_MACRO_TTL)

@@ -214,6 +214,19 @@ export interface PortfolioData {
   realized_pnl: number;
   updated: string; last_refresh: string | null;
 }
+// 持仓择时信号（research/A股优质个股中短期择时策略.md 规则，后端按前复权日 K 计算）
+export interface TimingSignal {
+  code: string;
+  signal: "add" | "reduce" | "watch" | null;
+  signal_label: string;
+  strength: number;         // 0-3
+  strength_label: string;   // ★ 或 —
+  action: string;
+  details: string[];
+  as_of: string | null;
+  pending: boolean;         // 当日盘中：信号未收盘确认
+  rule: string;
+}
 
 // 资金面 / 筹码 / 信号（v3.3 并入，均为「用户查的那只股」的公开数据）
 export interface MarginRow { date: string; rzye: number; rzmre: number; rzche: number; rqye: number; rqmcl: number; rzrqye: number }
@@ -317,6 +330,7 @@ export interface GlobalIndex {
   weight?: number;      // 该市场总市值近似（万亿美元），用于加权
   session?: string;     // 日盘 / 夜盘（中国视角）
   closed?: boolean;     // true = 该市场已闭市，显示的是收盘价
+  hours_bj?: string[];  // 该市场交易时段换算成北京时间（含夏令时），如 ["21:30-次日04:00"]
 }
 export interface GlobalQuote {
   code: string; name: string;
@@ -388,9 +402,26 @@ export interface LiquidityData {
   stale_since?: string;
 }
 
+// 宏观面（国内重要宏观经济指标 · GDP/CPI/PPI/PMI/M2/工业增加值/进出口/贸易差额/社融）
+export interface MacroIndicator {
+  label: string;
+  value: number;
+  forecast: number | null;
+  prev: number | null;
+  date: string;
+  hist: HistPoint[];
+}
+export interface MacroData {
+  cn: Record<string, MacroIndicator>;
+  groups: Record<string, string[]>;
+  updated: string;
+  stale?: boolean;
+  stale_since?: string;
+}
+
 // 分时图（当日分钟级）
 export interface MinutePoint { time: string; price: number; volume: number }
-export interface MinuteKline { date: string; prev_close: number; points: MinutePoint[] }
+export interface MinuteKline { date: string; prev_close: number; points: MinutePoint[]; last_day?: boolean; market_minutes?: [number, number][] }
 
 export interface SearchResult {
   code: string; name: string; market: string;
@@ -401,9 +432,14 @@ export const api = {
   indices: () => get<IndexQuote[]>("/indices"),
   marketOverview: () => get<MarketOverview>("/market/overview"),
   liquidity: () => get<LiquidityData>("/market/liquidity"),
+  macro: () => get<MacroData>("/market/macro"),
   emotion: () => get<ShortTermEmotion>("/market/emotion"),
   turnoverTop: () => get<TurnoverTop>("/market/turnover-top"),
-  globalIndices: () => get<GlobalIndex[]>("/global/indices"),
+  // 传 keys = 只刷新这几个市场（已开盘的）；不传 = 全量快照
+  globalIndices: (keys?: string[]) =>
+    get<GlobalIndex[]>(`/global/indices${keys?.length ? `?keys=${encodeURIComponent(keys.join(","))}` : ""}`),
+  // 全球指数当日分时（key = 后端 _INDICES 的 key，如 spx/hsi/n225）
+  globalMinute: (key: string) => get<MinuteKline>(`/global/minute?key=${encodeURIComponent(key)}`),
   globalStock: (symbol: string) => get<GlobalStock>(`/global/stock?symbol=${encodeURIComponent(symbol)}`),
   hkCashflow: (symbol: string) => get<HkCashflow>(`/global/hk/cashflow?symbol=${encodeURIComponent(symbol)}`),
   radar: () => get<RadarData>("/radar"),
@@ -414,6 +450,7 @@ export const api = {
   addHolding: (code: string, shares: number, cost: number) => request<PortfolioData>("/portfolio/holding", "POST", { code, shares, cost }),
   removeHolding: (code: string) => request<PortfolioData>(`/portfolio/holding?code=${code}`, "DELETE"),
   refreshPortfolio: () => request<PortfolioData>("/portfolio/refresh", "POST"),
+  portfolioTiming: () => get<{ signals: Record<string, TimingSignal> }>("/portfolio/timing"),
   closePosition: (code: string, date: string, price: number, shares: number, cost?: number) =>
     request<PortfolioData>("/portfolio/close", "POST", { code, date, price, shares, ...(cost !== undefined ? { cost } : {}) }),
   removeClosed: (index: number) => request<PortfolioData>(`/portfolio/close?index=${index}`, "DELETE"),

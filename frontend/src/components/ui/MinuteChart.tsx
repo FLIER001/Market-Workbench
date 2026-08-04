@@ -1,29 +1,38 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { MinuteKline } from "@/lib/api";
 
-const TOTAL_MINUTES = 242;
 const HEADER_HEIGHT = 58;
+// A 股交易日分钟槽数（09:30-11:30 / 13:00-15:00），用于决定 x 轴刻度密度
+const A_SHARE_MINUTES = 242;
 
 const cssVar = (name: string) =>
   getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const hsl = (name: string, alpha?: number) =>
   `hsl(${cssVar(name)}${alpha == null ? "" : ` / ${alpha}`})`;
 
-const minuteIndex = (time: string) => {
-  const value = Number.parseInt(time.slice(0, 2), 10) * 60 + Number.parseInt(time.slice(2), 10);
-  return value <= 690 ? value - 570 : value - 780 + 121;
-};
-
-const clockTime = (index: number) => {
-  const value = index <= 120 ? index + 570 : index + 780 - 121;
-  return `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
-};
-
 const compactVolume = (value: number) => {
   if (value >= 1e8) return `${(value / 1e8).toFixed(2)}亿`;
   if (value >= 1e4) return `${(value / 1e4).toFixed(1)}万`;
   return String(Math.round(value));
 };
+
+// "0930" → 当日第 N 分钟（自午夜）
+const minuteOfDay = (time: string) =>
+  Number.parseInt(time.slice(0, 2), 10) * 60 + Number.parseInt(time.slice(2), 10);
+
+// 当日第 N 分钟 → "09:30"
+const clockLabel = (mod: number) =>
+  `${String(Math.floor(mod / 60)).padStart(2, "0")}:${String(mod % 60).padStart(2, "0")}`;
+
+// 均匀抽 5 个 x 轴刻度（按分钟槽下标）
+function buildTimeTicks(total: number): { index: number; label: string; anchor: "start" | "middle" | "end" }[] {
+  if (total <= 1) return [{ index: 0, label: "", anchor: "start" }];
+  return [0, 0.25, 0.5, 0.75, 1].map((r, i) => ({
+    index: Math.round(r * (total - 1)),
+    label: "",
+    anchor: (i === 0 ? "start" : i === 4 ? "end" : "middle") as "start" | "middle" | "end",
+  }));
+}
 
 type ChartSize = { width: number; height: number };
 
@@ -65,6 +74,44 @@ export function MinuteChart({
 
   const prevClose = data.prev_close;
   const points = data.points;
+  // x 轴分钟槽数：优先用后端注入的 market_minutes（完整交易时段）计算；
+  // 无 market_minutes（A 股个股）时回退到实际数据跨度与 A 股 242 的较大值。
+  const { totalMinutes, slotOffset, slotRanges } = useMemo(() => {
+    const mm = data.market_minutes;
+    if (mm && mm.length > 0) {
+      // 跨午夜处理：close_mod 可能 > 1440（如美股 close=1680=次日04:00）
+      // 统一把每个 session 的 close 规范化到 > open 的连续区间
+      const ranges: { start: number; end: number }[] = [];
+      for (const [s, e] of mm) {
+        let open = s;
+        let close = e;
+        // 跨午夜（close <= open）：close 加 1440 变成次日
+        if (close <= open) close += 24 * 60;
+        ranges.push({ start: open, end: close });
+      }
+      // 合并重叠/连续区间，计算总跨度
+      ranges.sort((a, b) => a.start - b.start);
+      const merged: { start: number; end: number }[] = [];
+      for (const r of ranges) {
+        const last = merged[merged.length - 1];
+        if (last && r.start <= last.end) {
+          last.end = Math.max(last.end, r.end);
+        } else {
+          merged.push({ ...r });
+        }
+      }
+      const totalSpan = merged.reduce((sum, r) => sum + (r.end - r.start), 0);
+      const offset = merged[0].start;
+      const slotR = merged.map(r => ({ start: r.start - offset, end: r.end - offset }));
+      return { totalMinutes: Math.max(totalSpan, A_SHARE_MINUTES), slotOffset: offset, slotRanges: slotR };
+    }
+    // A 股或无 market_minutes：回退到原逻辑
+    if (points.length === 0) return { totalMinutes: A_SHARE_MINUTES, slotOffset: 0, slotRanges: null };
+    const mods = points.map((p) => minuteOfDay(p.time));
+    const minMod = Math.min(...mods);
+    const span = Math.max(...mods) - minMod + 1;
+    return { totalMinutes: Math.max(A_SHARE_MINUTES, Math.min(span, 24 * 60)), slotOffset: minMod, slotRanges: null };
+  }, [points, data.market_minutes]);
   const svgHeight = Math.max(size.height - HEADER_HEIGHT, 260);
   const leftAxis = size.width < 560 ? 46 : 56;
   const rightAxis = size.width < 560 ? 48 : 58;
@@ -73,20 +120,45 @@ export function MinuteChart({
   const volumeTop = priceHeight + 16;
   const volumeHeight = Math.max(svgHeight - volumeTop - 28, 42);
   const panelBottom = volumeTop + volumeHeight;
-  const xAt = (index: number) => leftAxis + (index / (TOTAL_MINUTES - 1)) * chartWidth;
+  const xAt = (index: number) => leftAxis + (index / (totalMinutes - 1)) * chartWidth;
 
   const model = useMemo(() => {
-    const prices: (number | null)[] = new Array(TOTAL_MINUTES).fill(null);
-    const volumes: number[] = new Array(TOTAL_MINUTES).fill(0);
-    const orderedPoints = [...points].sort((a, b) => minuteIndex(a.time) - minuteIndex(b.time));
+    // 分钟槽下标 = 相对该市场首个交易时段开盘的偏移
+    // 有 slotRanges 时跳过午休空隙（多段交易时段按交易分钟数压缩）
+    const firstMod = slotOffset ?? Math.min(...points.map((p) => minuteOfDay(p.time)));
+    const slot = (time: string) => {
+      let mod = minuteOfDay(time);
+      if (slotRanges) {
+        // 跨午夜市场（如美股 21:30→次日04:00）：数据时间戳可能已过零点，
+        // 需加 1440 对齐到 market_minutes 的连续区间
+        if (mod < slotOffset) mod += 24 * 60;
+        // 有交易时段定义：按实际交易分钟数映射（跳过午休）
+        let acc = 0;
+        for (const r of slotRanges) {
+          if (mod - slotOffset >= r.start && mod - slotOffset <= r.end) {
+            return Math.min(acc + (mod - slotOffset - r.start), totalMinutes - 1);
+          }
+          acc += r.end - r.start;
+        }
+        // 不在任何已知时段内：返回最近的边界
+        return Math.min(acc, totalMinutes - 1);
+      }
+      return Math.min(mod - firstMod, totalMinutes - 1);
+    };
+    const prices: (number | null)[] = new Array(totalMinutes).fill(null);
+    const volumes: number[] = new Array(totalMinutes).fill(0);
+    // 隔夜市场（如美股 21:30→次日 04:00）：原始时钟分钟用于跨零点排序
+    const rawMod: (number | null)[] = new Array(totalMinutes).fill(null);
+    const orderedPoints = [...points].sort((a, b) => slot(a.time) - slot(b.time));
     let previousCumulative = 0;
-    let firstIdx = TOTAL_MINUTES;
+    let firstIdx = totalMinutes;
     let lastIdx = -1;
 
     for (const point of orderedPoints) {
-      const index = minuteIndex(point.time);
-      if (index < 0 || index >= TOTAL_MINUTES) continue;
+      const index = slot(point.time);
+      if (index < 0 || index >= totalMinutes) continue;
       prices[index] = point.price;
+      rawMod[index] = minuteOfDay(point.time);
       volumes[index] = Math.max(point.volume - previousCumulative, 0);
       previousCumulative = Math.max(point.volume, previousCumulative);
       firstIdx = Math.min(firstIdx, index);
@@ -94,15 +166,34 @@ export function MinuteChart({
     }
 
     // 只填补已发生交易时段内的缺口，不把盘中最新价错误延伸至收盘。
+    // 有 slotRanges 时只填补同一时段内的空隙（跳过午休），无则全段填补。
     if (lastIdx >= 0) {
       for (let index = firstIdx + 1; index <= lastIdx; index += 1) {
-        if (prices[index] == null) prices[index] = prices[index - 1];
+        if (prices[index] == null) {
+          // 无 slotRanges 或同一交易时段内：前向填充
+          if (!slotRanges) {
+            prices[index] = prices[index - 1];
+          } else {
+            // 检查此 index 是否在某个交易时段范围内
+            let acc = 0;
+            let inRange = false;
+            for (const r of slotRanges) {
+              if (index >= acc && index < acc + (r.end - r.start)) {
+                inRange = true;
+                break;
+              }
+              acc += r.end - r.start;
+            }
+            if (inRange) prices[index] = prices[index - 1];
+            // 不在交易时段（午休区）的空隙保持 null，不填充
+          }
+        }
       }
     }
 
     let cumulativeAmount = 0;
     let cumulativeVolume = 0;
-    const averages: (number | null)[] = new Array(TOTAL_MINUTES).fill(null);
+    const averages: (number | null)[] = new Array(totalMinutes).fill(null);
     for (let index = firstIdx; index <= lastIdx; index += 1) {
       const price = prices[index];
       if (price != null && volumes[index] > 0) {
@@ -178,6 +269,8 @@ export function MinuteChart({
       averages,
       firstIdx,
       lastIdx,
+      rawMod,
+      firstMod,
       low,
       high,
       yAt,
@@ -188,7 +281,7 @@ export function MinuteChart({
       maxVolume,
       ticks,
     };
-  }, [points, prevClose, priceHeight, volumeHeight, volumeTop, chartWidth, leftAxis]);
+  }, [points, prevClose, totalMinutes, priceHeight, volumeHeight, volumeTop, chartWidth, leftAxis]);
 
   if (points.length < 2 || model.lastIdx < 0) return null;
 
@@ -198,6 +291,8 @@ export function MinuteChart({
     averages,
     firstIdx,
     lastIdx,
+    rawMod,
+    firstMod,
     yAt,
     pricePath,
     averagePath,
@@ -226,6 +321,24 @@ export function MinuteChart({
   const border = hsl("--border");
   const background = hsl("--background");
 
+  // 该槽位的真实时钟：优先用 rawMod（实际数据时间戳），无数据时按 slotRanges 反推
+  const clockAt = (index: number) => {
+    if (rawMod[index] != null) return clockLabel(rawMod[index]!);
+    // 无数据点覆盖：从 slot 索引反推到实际时钟分钟（处理午休跳过）
+    if (slotRanges) {
+      let acc = 0;
+      for (const r of slotRanges) {
+        if (index >= acc && index < acc + (r.end - r.start)) {
+          const mod = slotOffset + r.start + (index - acc);
+          // 跨午夜：mod 可能 > 1440，取模
+          return clockLabel(mod % (24 * 60));
+        }
+        acc += r.end - r.start;
+      }
+    }
+    return clockLabel((firstMod + index) % (24 * 60));
+  };
+
   const hover =
     hoverIdx != null && prices[hoverIdx] != null
       ? {
@@ -234,7 +347,7 @@ export function MinuteChart({
           average: averages[hoverIdx],
           volume: volumes[hoverIdx],
           pct: prevClose > 0 ? ((prices[hoverIdx]! - prevClose) / prevClose) * 100 : 0,
-          time: clockTime(hoverIdx),
+          time: clockAt(hoverIdx),
           x: xAt(hoverIdx),
         }
       : null;
@@ -243,19 +356,20 @@ export function MinuteChart({
     const rect = wrapRef.current?.getBoundingClientRect();
     if (!rect) return;
     const localX = event.clientX - rect.left;
-    const index = Math.round(((localX - leftAxis) / chartWidth) * (TOTAL_MINUTES - 1));
+    const index = Math.round(((localX - leftAxis) / chartWidth) * (totalMinutes - 1));
     setHoverIdx(Math.max(firstIdx, Math.min(lastIdx, index)));
   };
 
-  const timeTicks = [
-    { index: 0, label: "09:30", anchor: "start" as const },
-    { index: 60, label: "10:30", anchor: "middle" as const },
-    { index: 120.5, label: "11:30 / 13:00", anchor: "middle" as const },
-    { index: 181, label: "14:00", anchor: "middle" as const },
-    { index: 241, label: "15:00", anchor: "end" as const },
-  ];
+  // A 股保留精确午休刻度；海外市场按覆盖分钟均匀抽刻度
+  const timeTicks = useMemo(() => {
+    const ticks = buildTimeTicks(totalMinutes);
+    for (const t of ticks) t.label = clockAt(t.index);
+    return ticks;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [totalMinutes, firstMod, rawMod]);
   const latestAverage = averages[lastIdx];
   const totalVolume = points[points.length - 1]?.volume ?? 0;
+  const hasVolume = totalVolume > 0;
 
   return (
     <div
@@ -280,13 +394,13 @@ export function MinuteChart({
               {changePct.toFixed(2)}%
             </span>
           </span>
-          <span className="hidden text-[10px] text-muted-foreground/50 sm:inline">截至 {clockTime(lastIdx)}</span>
+          <span className="hidden text-[10px] text-muted-foreground/50 sm:inline">截至 {clockAt(lastIdx)}</span>
         </div>
         <div className="hidden items-center gap-4 text-[10px] md:flex">
           <span className="text-muted-foreground">今开 <b className="ml-1 font-mono font-medium text-foreground">{openPrice.toFixed(2)}</b></span>
           <span className="text-muted-foreground">最高 <b className="ml-1 font-mono font-medium text-danger">{highPrice.toFixed(2)}</b></span>
           <span className="text-muted-foreground">最低 <b className="ml-1 font-mono font-medium text-success">{lowPrice.toFixed(2)}</b></span>
-          <span className="text-muted-foreground">总量 <b className="ml-1 font-mono font-medium text-foreground">{compactVolume(totalVolume)}</b></span>
+          {hasVolume && <span className="text-muted-foreground">总量 <b className="ml-1 font-mono font-medium text-foreground">{compactVolume(totalVolume)}</b></span>}
           {volRatio != null && (
             <span className="text-muted-foreground">
               量比{" "}
@@ -338,8 +452,8 @@ export function MinuteChart({
             y2={panelBottom}
             stroke={border}
             strokeWidth="0.6"
-            strokeDasharray={tick.index === 120.5 ? "5 4" : "2 4"}
-            opacity={tick.index === 120.5 ? 0.58 : 0.32}
+            strokeDasharray={tick.index === Math.round(0.5 * (totalMinutes - 1)) ? "5 4" : "2 4"}
+            opacity={tick.index === Math.round(0.5 * (totalMinutes - 1)) ? 0.58 : 0.32}
             vectorEffect="non-scaling-stroke"
           />
         ))}
@@ -364,23 +478,25 @@ export function MinuteChart({
           strokeLinecap="round"
           vectorEffect="non-scaling-stroke"
         />
-        <path
-          d={averagePath}
-          fill="none"
-          stroke={averageColor}
-          strokeWidth="1.15"
-          strokeLinejoin="round"
-          strokeLinecap="round"
-          opacity="0.95"
-          vectorEffect="non-scaling-stroke"
-        />
+        {hasVolume && (
+          <path
+            d={averagePath}
+            fill="none"
+            stroke={averageColor}
+            strokeWidth="1.15"
+            strokeLinejoin="round"
+            strokeLinecap="round"
+            opacity="0.95"
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
 
         {bars.slice(firstIdx, lastIdx + 1).map((bar, offset) => (
           <rect
             key={firstIdx + offset}
-            x={bar.x - Math.max(chartWidth / TOTAL_MINUTES / 2 - 0.35, 0.65)}
+            x={bar.x - Math.max(chartWidth / totalMinutes / 2 - 0.35, 0.65)}
             y={bar.y}
-            width={Math.max(chartWidth / TOTAL_MINUTES - 0.7, 1.3)}
+            width={Math.max(chartWidth / totalMinutes - 0.7, 1.3)}
             height={bar.height}
             rx="0.5"
             fill={bar.isUp ? upColor : downColor}
@@ -493,7 +609,7 @@ export function MinuteChart({
           <i className="h-0.5 w-3 rounded-full" style={{ backgroundColor: priceColor }} />
           价格
         </span>
-        {latestAverage != null && (
+        {latestAverage != null && hasVolume && (
           <span className="flex items-center gap-1.5 text-muted-foreground">
             <i className="h-0.5 w-3 rounded-full" style={{ backgroundColor: averageColor }} />
             均价 <b className="font-mono font-medium" style={{ color: averageColor }}>{latestAverage.toFixed(2)}</b>
@@ -520,12 +636,16 @@ export function MinuteChart({
               {hover.price.toFixed(2)}　{hover.pct > 0 ? "+" : ""}
               {hover.pct.toFixed(2)}%
             </b>
-            <span className="text-muted-foreground">均价</span>
-            <b className="text-right font-mono font-medium" style={{ color: averageColor }}>
-              {hover.average?.toFixed(2) ?? "—"}
-            </b>
-            <span className="text-muted-foreground">成交量</span>
-            <b className="text-right font-mono font-medium text-foreground">{hover.volume > 0 ? compactVolume(hover.volume) : "—"}</b>
+            {hasVolume && (
+              <>
+                <span className="text-muted-foreground">均价</span>
+                <b className="text-right font-mono font-medium" style={{ color: averageColor }}>
+                  {hover.average?.toFixed(2) ?? "—"}
+                </b>
+                <span className="text-muted-foreground">成交量</span>
+                <b className="text-right font-mono font-medium text-foreground">{hover.volume > 0 ? compactVolume(hover.volume) : "—"}</b>
+              </>
+            )}
           </div>
         </div>
       )}

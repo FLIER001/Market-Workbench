@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import time as _time
 from datetime import datetime
 from typing import Optional
 
@@ -25,6 +26,7 @@ import cli_runtime
 import gstock
 import newsradar
 import portfolio as pf
+import timing
 import users
 import market
 import myreports as mr
@@ -369,6 +371,18 @@ def portfolio_refresh():
         raise HTTPException(502, f"刷新失败：{e}") from e
 
 
+@app.get("/api/portfolio/timing")
+def portfolio_timing():
+    """当前持仓的加减仓信号 + 强度（按 research/A股优质个股中短期择时策略.md 规则，
+    前复权日 K 计算）。规则化技术指标提示，非投资建议。"""
+    try:
+        holdings = pf._load().get("holdings", [])
+        codes = [h["code"] for h in holdings]
+        return {"data": {"signals": timing.get_timing_signals(codes)}}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"择时信号异常：{e}") from e
+
+
 @app.get("/api/radar")
 def radar():
     """资讯雷达：12 赛道公开 RSS 资讯（读缓存，无缓存返回赛道骨架）。"""
@@ -459,13 +473,69 @@ def market_liquidity():
         raise HTTPException(502, f"资金供给指标异常：{e}") from e
 
 
+# 全球指数分时 5 分钟缓存（数据源分钟级，比页面轮询更省）
+_GLOBAL_MINUTE_CACHE: dict = {}
+
+
 @app.get("/api/global/indices")
-def global_indices():
-    """全球指数快照（道指 / 标普500 / 纳斯达克 / 恒生 / 恒生科技）—— A 股看隔夜外围脸色。缓存 5 分钟。"""
+def global_indices(keys: str | None = Query(default=None, max_length=500)):
+    """全球指数快照（美股 / 港股 / 亚太 / 欧洲 / 南亚）—— A 股看隔夜外围脸色。缓存 5 分钟。
+
+    keys（逗号分隔）非空时只返回这些市场，供「市场全景」每 5 分钟只增量刷新已开盘市场；
+    不传时返回全部。
+    """
     try:
+        if keys:
+            return {"data": market.get_global_indices_for([k.strip() for k in keys.split(",") if k.strip()])}
         return {"data": market.get_global_indices()}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"全球指数异常：{e}") from e
+
+
+@app.get("/api/global/minute")
+def global_minute(key: str = Query(..., min_length=2, max_length=16)):
+    """全球指数当日分时（分钟级）。港股/亚太/南亚腾讯全量分钟优先，
+    欧美/其余用东财 push2his 分钟序列（收盘价口径、无成交量）。缓存 5 分钟。"""
+    key = key.strip()
+    if key not in astock.GLOBAL_INDEX_MINUTE_SRC:
+        raise HTTPException(404, f"未覆盖的全球指数「{key}」")
+    hit = _GLOBAL_MINUTE_CACHE.get(key)
+    if hit and _time.time() - hit[0] < 300:
+        return {"data": hit[1]}
+    sym, secid = astock.GLOBAL_INDEX_MINUTE_SRC[key]
+    try:
+        data = astock.minute_kline(sym) if sym else (astock.em_index_minutes(secid) or {"date": "", "prev_close": 0.0, "points": []})
+        # 港股腾讯分时缺 16:00 收盘 tick：用东财补一个收盘点，避免图表末端空缺
+        if sym and sym.lower().startswith("hk") and data["points"]:
+            last_t = data["points"][-1]["time"]
+            if last_t < "1600":
+                em = astock.em_index_minutes(secid)
+                if em and em["points"]:
+                    em_last = em["points"][-1]
+                    if em_last["time"] >= "1600":
+                        data["points"].append({
+                            "time": em_last["time"],
+                            "price": em_last["price"],
+                            "volume": 0,
+                        })
+        if not data["points"]:
+            # 闭市市场当日分钟为空 → 回退「上一交易日」走势（标注 last_day=True）
+            fb = astock.em_index_minutes_latest(secid, market_key=key)
+            if fb:
+                fb["last_day"] = True
+                data = fb
+        if not data["points"]:
+            raise HTTPException(502, "分时数据源当前无返回")
+        # 注入该市场完整交易时段（北京分钟数），供前端分时图 x 轴覆盖完整交易时段
+        mm = gstock.market_minutes_bj(key)
+        if mm:
+            data["market_minutes"] = mm
+        _GLOBAL_MINUTE_CACHE[key] = (_time.time(), data)
+        return {"data": data}
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"全球指数分时异常：{e}") from e
 
 
 @app.get("/api/global/stock")
@@ -517,7 +587,6 @@ def quote(codes: str = Query(..., description="逗号分隔的 6 位代码")):
         raise HTTPException(502, f"行情源异常：{e}") from e
 
 
-import time as _time
 _PCT_CACHE: dict = {}
 
 
@@ -670,12 +739,26 @@ def kline_chart(
 
 @app.get("/api/kline/minute")
 def kline_minute(code: str = Query(...)):
-    """分时图（当日分钟级）：腾讯 minute/query 接口。"""
-    code = _validate(code)
+    """分时图（当日分钟级）：腾讯 minute/query 接口；闭市无数据时回退上一交易日。"""
+    code = (code or "").strip()
+    # 指数卡传带前缀代码（sh000300），个股页传 6 位裸代码
+    if not (len(code) == 8 and code[:2].isalpha() and code[2:].isdigit()):
+        code = _validate(code)
     try:
         data = astock.minute_kline(code)
         if not data["points"]:
+            secid = astock.a_index_em_secid(code) or astock.a_index_em_secid(f"{astock.get_prefix(code)}{code}")
+            fb = astock.em_index_minutes_latest(secid) if secid else None
+            if fb:
+                fb["last_day"] = True
+                data = fb
+        if not data["points"]:
             raise HTTPException(502, "分时数据源当前无返回")
+        # A 股指数/个股分时：注入固定交易时段（北京时间 09:30-11:30 / 13:00-15:00），
+        # 让前端分时图 x 轴覆盖完整 240 分钟而非仅数据跨度——午休段不前向填充、
+        # 收盘时间标注正确（不再把 13:01 数据点误标到 11:31 槽位）。
+        if not data.get("market_minutes"):
+            data["market_minutes"] = [[570, 690], [780, 900]]
         return {"data": data}
     except HTTPException:
         raise
@@ -933,3 +1016,12 @@ def deep_analysis(req: DeepAnalysisReq):
     except (ValueError, KeyError, IndexError) as e:
         raise HTTPException(502, f"深度分析服务返回格式异常：{e}") from e
     return {"data": {"content": content}}
+
+
+@app.get("/api/market/macro")
+def market_macro():
+    """宏观经济指标（GDP/CPI/PPI/PMI/M2/工业增加值/进出口/贸易差额/社融）。缓存 1 小时。"""
+    try:
+        return {"data": market.get_macro()}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"宏观经济指标异常：{e}") from e

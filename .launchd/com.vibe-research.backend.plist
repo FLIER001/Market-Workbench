@@ -15,6 +15,11 @@
     <string>--port</string>
     <string>8900</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>VR_DEEP_ANALYSIS_KEY</key>
+    <string>a0245618f7aa0391fe22f600622256ba8ef63b390134930e</string>
+  </dict>
   <key>WorkingDirectory</key>
   <string>/Users/k/Vibe-Research/backend</string>
   <key>KeepAlive</key>

@@ -1,8 +1,11 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import {
   Check,
+  ChevronDown,
+  ChevronUp,
+  ChevronsUpDown,
   FolderPlus,
   GripVertical,
   NotebookPen,
@@ -34,6 +37,7 @@ import {
 } from "@/lib/watchlist";
 import { useLiveQuotes, isTradingHours } from "@/hooks/useLiveQuotes";
 import { useValuationPercentiles, type StockValPct } from "@/hooks/useValuationPercentiles";
+import { useHoldingCodes } from "@/hooks/useHoldingCodes";
 import { cn } from "@/lib/utils";
 
 const color = (value: number | undefined) =>
@@ -46,6 +50,22 @@ const color = (value: number | undefined) =>
         : "text-muted-foreground";
 const pct = (value: number | undefined) =>
   value == null ? "—" : `${value > 0 ? "+" : ""}${value}%`;
+
+type WSortKey = "name" | "price" | "change_pct" | "pe_ttm" | "pb" | "turnover_pct";
+type WSortDir = "asc" | "desc";
+const W_COLS: { label: string; key: WSortKey | null; title?: string }[] = [
+  { label: "名称", key: "name" },
+  { label: "代码", key: null },
+  { label: "现价", key: "price" },
+  { label: "涨跌%", key: "change_pct" },
+  { label: "PE(TTM)", key: "pe_ttm", title: "括号内为近5年分位（百度股市通）" },
+  { label: "PB", key: "pb", title: "括号内为近5年分位（百度股市通）" },
+  { label: "换手%", key: "turnover_pct" },
+  { label: "分组", key: null },
+  { label: "AI分析", key: null },
+  { label: "笔记", key: null },
+  { label: "", key: null },
+];
 
 /** 估值当前值 + 括号内近5年分位。颜色沿用全站口径：<20% 低估区绿 / >80% 高估区红。 */
 function ValuationCell({ label, current, metric }: { label: "PE" | "PB"; current: number | undefined; metric: StockValPct["pe"] }) {
@@ -105,10 +125,49 @@ export function Watchlist() {
   const [stockNotes, setStockNotes] = useState<WatchNotes>(loadWatchNotes);
   const [openNoteCode, setOpenNoteCode] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
+  const [wSortKey, setWSortKey] = useState<WSortKey | null>(null);
+  const [wSortDir, setWSortDir] = useState<WSortDir>("desc");
 
   const groups = collection === "stock" ? stockGroups : etfGroups;
   const stockCount = useMemo(() => flattenWatchGroups(stockGroups).length, [stockGroups]);
   const etfCount = useMemo(() => flattenWatchGroups(etfGroups).length, [etfGroups]);
+
+  // 持仓标的自动并入自选：股票进“自选股”，ETF 进“自选 ETF”，均放未分组；
+  // 已有（含自定义分组里）的只标注不动分组。用户在自选里手动删掉的本次会话不再自动加回。
+  const holdingCodes = useHoldingCodes();
+  const holdingSet = useMemo(() => new Set(holdingCodes), [holdingCodes]);
+  const skipAutoRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (holdingCodes.length === 0) return;
+    const targets: { codes: string[]; groups: WatchGroup[]; kind: WatchCollection }[] = [
+      { codes: holdingCodes.filter((code) => !isEtfCode(code)), groups: stockGroups, kind: "stock" },
+      { codes: holdingCodes.filter(isEtfCode), groups: etfGroups, kind: "etf" },
+    ];
+    for (const { codes: hc, groups: gs, kind } of targets) {
+      const missing = hc.filter((code) => !skipAutoRef.current.has(code) && !gs.some((group) => group.codes.includes(code)));
+      if (missing.length === 0) continue;
+      const next = gs.map((group) =>
+        group.id === DEFAULT_WATCH_GROUP_ID ? { ...group, codes: [...group.codes, ...missing] } : group,
+      );
+      if (kind === "stock") setStockGroups(next);
+      else setEtfGroups(next);
+      saveWatchGroups(next, kind);
+    }
+    // 只依赖持仓代码：stockGroups/etfGroups 由本 effect 自身更新，加入依赖会多余重跑
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [holdingCodes]);
+
+  // 从持仓页等其它页面跳回自选时，分组可能已被联动更新，重读本地存储
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.hidden) return;
+      setStockGroups(loadWatchGroups("stock"));
+      setEtfGroups(loadWatchGroups("etf"));
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
+
   const codes = useMemo(() => flattenWatchGroups(groups), [groups]);
   const activeGroup = groups.find((group) => group.id === activeGroupId);
   const visibleCodes = activeGroupId === ALL_GROUPS ? codes : activeGroup?.codes || [];
@@ -127,6 +186,37 @@ export function Watchlist() {
     for (const [code, v] of Object.entries(valPct)) map.set(code, v);
     return map;
   }, [valPct]);
+
+  const sortedVisibleCodes = useMemo(() => {
+    if (!wSortKey) return visibleCodes;
+    const dir = wSortDir === "asc" ? 1 : -1;
+    return [...visibleCodes].sort((a, b) => {
+      const qa = quotes[a], qb = quotes[b];
+      const getVal = (code: string, q: typeof qa): string | number | undefined => {
+        if (!q) return code; // 行情未取到时排到最后（desc 下也在末尾）
+        switch (wSortKey) {
+          case "name": return q.name;
+          case "price": return q.price;
+          case "change_pct": return q.change_pct;
+          case "pe_ttm": return q.pe_ttm ?? -Infinity;
+          case "pb": return q.pb ?? -Infinity;
+          case "turnover_pct": return q.turnover_pct ?? -Infinity;
+        }
+      };
+      const va = getVal(a, qa), vb = getVal(b, qb);
+      if (typeof va === "string" && typeof vb === "string") return va.localeCompare(vb, "zh") * dir;
+      return ((va as number) - (vb as number)) * dir;
+    });
+  }, [visibleCodes, quotes, wSortKey, wSortDir]);
+
+  const toggleWSort = (key: WSortKey) => {
+    if (wSortKey === key) {
+      setWSortDir(wSortDir === "asc" ? "desc" : "asc");
+    } else {
+      setWSortKey(key);
+      setWSortDir(key === "name" ? "asc" : "desc");
+    }
+  };
 
   const persist = (next: WatchGroup[]) => {
     if (collection === "stock") setStockGroups(next);
@@ -248,6 +338,8 @@ export function Watchlist() {
   };
 
   const removeCode = (code: string) => {
+    // 持仓标的被手动移出后，本次会话不再自动加回（刷新页面后如仍持有会重新并入）
+    skipAutoRef.current.add(code);
     persist(groups.map((group) => ({
       ...group,
       codes: group.codes.filter((item) => item !== code),
@@ -560,15 +652,27 @@ export function Watchlist() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
-                  {["名称", "代码", "现价", "涨跌%", "PE(TTM)", "PB", "换手%", "分组", "AI分析", "笔记", ""].map((heading) => (
-                    <th
-                      key={heading || "actions"}
-                      className="whitespace-nowrap px-2 py-2 font-medium"
-                      title={heading === "PE(TTM)" || heading === "PB" ? "括号内为近5年分位（百度股市通）" : undefined}
-                    >
-                      {heading}
-                    </th>
-                  ))}
+                  {W_COLS.map((col) => {
+                    const k = col.key;
+                    return (
+                      <th
+                        key={col.label || "actions"}
+                        className="whitespace-nowrap px-2 py-2 font-medium"
+                        title={col.title}
+                      >
+                        {k ? (
+                          <button onClick={() => toggleWSort(k)} className="inline-flex items-center gap-1 hover:text-foreground">
+                            {col.label}
+                            {wSortKey === k ? (
+                              wSortDir === "asc" ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />
+                            ) : (
+                              <ChevronsUpDown className="h-3 w-3 text-muted-foreground/40" />
+                            )}
+                          </button>
+                        ) : col.label}
+                      </th>
+                    );
+                  })}
                 </tr>
                 {collection === "etf" && (
                   <tr>
@@ -579,7 +683,7 @@ export function Watchlist() {
                 )}
               </thead>
               <tbody>
-                {visibleCodes.map((code) => {
+                {sortedVisibleCodes.map((code) => {
                   const quote = quotes[code];
                   const vp = valPctByCode.get(code);
                   return (
@@ -593,6 +697,14 @@ export function Watchlist() {
                           >
                             {quote?.name || "—"}
                           </Link>
+                          {holdingSet.has(code) && (
+                            <sup
+                              className="ml-1 inline-flex h-3.5 min-w-3.5 translate-y-px items-center justify-center rounded border border-primary/50 bg-primary/15 px-0.5 align-super text-[9px] font-semibold leading-none text-primary"
+                              title="我的持仓"
+                            >
+                              持
+                            </sup>
+                          )}
                         </td>
                         <td className="px-2 py-2.5 font-mono text-xs text-muted-foreground">{code}</td>
                         <td className={cn("px-2 py-2.5 font-mono", color(quote?.change_pct))}>{quote ? quote.price : "—"}</td>

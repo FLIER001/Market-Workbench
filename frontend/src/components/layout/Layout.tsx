@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import {
   Activity, Radar, LayoutGrid, Wallet, Settings, Search,
-  Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github,
+  Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github, Globe,
   Star, FileText, Droplets, Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -19,6 +19,7 @@ const REPO_URL = "https://github.com/FLIER001/Vibe-Research";
 
 const NAV = [
   { to: "/daily-review", icon: Activity, label: "市场全景" },
+  { to: "/macro", icon: Globe, label: "宏观面" },
   { to: "/liquidity", icon: Droplets, label: "资金面" },
   { to: "/intel", icon: Radar, label: "资讯" },
   { to: "/sectors", icon: LayoutGrid, label: "板块", match: "/sectors" },

@@ -114,6 +114,29 @@ def tencent_quote(codes: list[str]) -> dict[str, dict]:
 # A股大盘指数（前缀规则与个股不同，固定带前缀代码）
 A_INDICES = ["sh000001", "sz399001", "sz399006", "sh000300", "sh000688", "bj899050"]
 
+# 大盘指数卡 name → 腾讯完整代码（点击展开当日分时用；指数须用完整带前缀代码，
+# 裸 6 位走 get_prefix 会把 000300 误判成 sz399300、sh000688 拼错前缀）
+A_INDEX_CODES = {
+    "上证指数": "sh000001",
+    "深证成指": "sz399001",
+    "创业板指": "sz399006",
+    "沪深300": "sh000300",
+    "科创50": "sh000688",
+    "北证50": "bj899050",
+}
+
+
+def a_index_em_secid(prefixed_code: str) -> str | None:
+    """腾讯带前缀代码（sh000001/sz399006/bj899050）→ 东财指数 secid。"""
+    if len(prefixed_code) != 8 or not prefixed_code[:2].isalpha():
+        return None
+    p, num = prefixed_code[:2], prefixed_code[2:]
+    if p == "sh":
+        return f"1.{num}"
+    if p in ("sz", "bj"):
+        return f"0.{num}"
+    return None
+
 
 def index_quote() -> list[dict]:
     """A股大盘指数实时行情（上证/深证成指/创业板指/沪深300）。"""
@@ -325,7 +348,7 @@ def tencent_kline(code: str, period: str = "day", count: int = 250) -> list[dict
 
 def minute_kline(code: str) -> dict:
     """分时图（当日分钟级）：腾讯 web.ifzq.gtimg.cn minute/query 接口，零鉴权。"""
-    symbol = f"{get_prefix(code)}{code}"
+    symbol = code if code[:2].isalpha() else f"{get_prefix(code)}{code}"
     url = f"https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={symbol}"
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Referer": "https://gu.qq.com/"})
     with urllib.request.urlopen(req, timeout=12) as resp:
@@ -343,6 +366,19 @@ def minute_kline(code: str) -> dict:
         except (ValueError, IndexError):
             pass
 
+    # 欧美指数腾讯只给当前 tick（无当日序列）：用东财 push2his 分钟历史补全
+    if len(rows) < 2:
+        secid = next((sec for sym, sec in GLOBAL_INDEX_MINUTE_SRC.values() if sym == symbol), None)
+        if secid:
+            em = em_index_minutes(secid)
+            if em is not None:
+                return em
+
+    # 港股收盘 16:00；A 股收盘 15:00。腾讯港股数据含 16:00 后的竞价/延时尾盘，
+    # 截到 16:00 足够。A 股 15:00 后无交易数据（腾讯不返回），不截断。
+    # 用代码前缀区分：hk 港股截到 1600，其余（A 股）截到 1500。
+    is_hk = symbol.lower().startswith("hk")
+    cutoff = "1600" if is_hk else "1500"
     points = []
     for line in rows:
         parts = str(line).split(" ")
@@ -350,8 +386,8 @@ def minute_kline(code: str) -> dict:
             continue
         try:
             t = parts[0]
-            # 只保留盘中交易时段 09:30-15:00，过滤收盘后集合竞价重复数据
-            if t < "0930" or t > "1500":
+            # 只保留盘中交易时段，过滤收盘后竞价/延时重复数据
+            if t < "0930" or t > cutoff:
                 continue
             points.append({
                 "time": t,
@@ -361,6 +397,180 @@ def minute_kline(code: str) -> dict:
         except (ValueError, IndexError):
             continue
     return {"date": date, "prev_close": prev_close, "points": points}
+
+
+# 全球指数 key → (腾讯分钟 symbol, 东财 secid)。港股/亚太/南亚腾讯全量分钟优先；
+# 欧美腾讯只有当前 tick、亚太部分腾讯不认，这两类直接用东财 push2his 分钟序列。
+# key 与 gstock._INDICES 对齐，东财 secid 取自其配置。
+# 全球指数 key → (腾讯分钟 symbol, 东财 secid)。港股/亚太/南亚腾讯全量分钟优先；
+# 欧美/其余腾讯只有当前 tick或不认，用东财 push2his 分钟序列。
+# 东财 trends2 时间戳 = 各市场开盘对应的北京时间（日经东京 09:00=北京 08:00，
+# DAX 法兰克福 09:00=北京 15:00 夏令，标普美东 09:30=北京 21:30 夏令），与指数卡
+# 同源，因此分时图最新点与卡片点位一致。
+GLOBAL_INDEX_MINUTE_SRC: dict[str, tuple[str | None, str]] = {
+    # 美股（腾讯单点 → 东财）
+    "spx": ("usINX", "100.SPX"), "ndx": ("usNDX", "100.NDX"),
+    # 港股（腾讯全量分钟）
+    "hsi": ("hkHSI", "100.HSI"), "hstech": ("hkHSTECH", "124.HSTECH"),
+    # 亚太（腾讯 hk 前缀不认 → 东财）
+    "n225": (None, "100.N225"), "ks11": (None, "100.KS11"), "twii": (None, "100.TWII"),
+    "aord": (None, "100.AORD"), "set": (None, "100.SET"), "jkse": (None, "100.JKSE"),
+    "klse": (None, "100.KLSE"), "vnindex": (None, "100.VNINDEX"),
+    # 欧洲（腾讯单点 → 东财）
+    "gdaxi": ("euGDAXI", "100.GDAXI"), "ftse": ("euFTSE", "100.FTSE"),
+    "fchi": ("euFCHI", "100.FCHI"), "aex": ("euAEX", "100.AEX"),
+    "ssmi": ("euSSMI", "100.SSMI"), "ibex": ("euIBEX", "100.IBEX"),
+    # 南亚（→ 东财）
+    "sensex": (None, "100.SENSEX"),
+}
+
+
+# trends2 可用主机 latch：push2his 优先，直连偶发被掐时降级 push2delay（延时分钟，
+# 对"当日走势图"足够）。不走 em_get——其直连探测一旦锁死直连会把降级主机也拖挂。
+_TRENDS_HOSTS = ("push2his.eastmoney.com", "push2.eastmoney.com", "push2delay.eastmoney.com")
+_trends_host = [0]
+
+
+def em_index_minutes(secid: str, ndays: int = 1) -> dict | None:
+    """东财 push2his trends2：全球指数分钟序列（收盘价口径，无成交量）。
+
+    ndays=1 当日；>1 用于闭市时回退取上一交易日。失败/空返回 None。
+    成交量统一置 0——欧美/亚太指数无口径一致的成交量，图表对全零量自动退化为纯走势线。
+    """
+    import requests as _req
+
+    params = {
+        "secid": secid, "fields1": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11",
+        "fields2": "f51,f53,f58", "ndays": max(ndays, 2), "iscr": 0,
+    }
+    # 强制直连：push2his/push2 对系统代理会 RemoteDisconnected，走代理反而全挂
+    s = _req.Session()
+    s.trust_env = False
+    d: dict = {}
+    for i in range(_trends_host[0], len(_TRENDS_HOSTS)):
+        try:
+            r = s.get(f"https://{_TRENDS_HOSTS[i]}/api/qt/stock/trends2/get",
+                      params=params, headers={"User-Agent": UA}, timeout=10)
+            data = r.json().get("data") or {}
+            if data.get("trends"):
+                _trends_host[0] = i  # latch 到首个可用主机，整进程复用
+                d = data
+                break
+        except Exception:  # noqa: BLE001 — 换下一个主机
+            continue
+    if not d:
+        return None
+    try:
+        trends = d.get("trends") or []
+        # 美股 21:30 开盘（北京夜间）跨自然日：ndays=1 开盘前只给上一交易日，
+        # 用 ndays=2 拿两天，只保留最新交易日；prev_close 取该日首点（昨收基准）。
+        prev = d.get("preClose")
+        points = []
+        raw: list[tuple[str, str, float]] = []
+        for line in trends:
+            parts = str(line).split(",")
+            if len(parts) < 2:
+                continue
+            try:
+                day = parts[0].split(" ")[0]
+                hhmm = parts[0].split(" ")[-1].replace(":", "")
+                raw.append((day, hhmm, float(parts[1])))
+            except (ValueError, IndexError):
+                continue
+        if not raw:
+            return None
+        latest_day = raw[-1][0]
+        day_points = [(hm, pr) for dy, hm, pr in raw if dy == latest_day]
+        # 隔夜市场（如美股 21:30→次日04:00 北京时间）跨自然日：
+        # latest_day 只保留了午夜后的数据，丢失了当晚 21:30-23:59 的走势。
+        # 检测跨日会话：如果首条数据在晚间（>=18:00）且跨了自然日，
+        # 则保留从首条起的所有点（即完整交易会话）。
+        first_hm = raw[0][1]
+        first_hour = int(first_hm[:2])
+        if first_hour >= 18 and len({dy for dy, _, _ in raw}) > 1:
+            # 隔夜会话：保留从首个晚间点开始的所有数据
+            day_points = [(hm, pr) for _, hm, pr in raw]
+            # prev_close = 会话开始前最后一个收盘价（即 raw 之前的数据）
+            # trends2 的 preClose 即为该会话的昨收
+        elif day_points and day_points[0][1] != raw[0][1]:  # 普通跨日：首点前还有前一交易日数据
+            prev_close_val = raw[-len(day_points) - 1][2] if len(raw) > len(day_points) else prev
+            if isinstance(prev_close_val, (int, float)):
+                prev = prev_close_val
+        points = [{"time": hm, "price": pr, "volume": 0} for hm, pr in day_points]
+        day = str(d.get("prePriceDate") or (str(trends[0]).split(" ")[0] if trends else "")).replace("-", "")
+        if day_points:
+            day = latest_day.replace("-", "")
+        return {
+            "date": day,
+            "prev_close": float(prev) if isinstance(prev, (int, float)) else 0.0,
+            "points": points,
+        }
+    except Exception:  # noqa: BLE001 — 数据格式异常时返回 None，让上层按"无分时数据"处理
+        return None
+
+
+def em_index_minutes_latest(secid: str, market_key: str | None = None) -> dict | None:
+    """闭市市场的"上一交易日"分时：取东财日 K 最后两收价，合成一条两端点走势线。
+
+    用于 trends2 对闭市市场返回空时兜底——图表显示为一条直线，但价格/涨跌幅/
+    昨收基准正确，并带上该 K 线日期供界面标注「上一交易日」。失败返回 None。
+
+    market_key 传入全球指数 key（如 'gdaxi'）时，用该市场北京时间交易时段
+    生成端点时间戳；否则按 A 股 09:30-15:00 兜底。
+    """
+    import requests as _req
+
+    params = {
+        "secid": secid, "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
+        "klt": 101, "fqt": 0, "end": "20500101", "lmt": 2,
+    }
+    s = _req.Session()
+    s.trust_env = False
+    for host in _TRENDS_HOSTS:
+        try:
+            r = s.get(f"https://{host}/api/qt/stock/kline/get",
+                      params=params, headers={"User-Agent": UA}, timeout=10)
+            d = r.json().get("data") or {}
+            klines = d.get("klines") or []
+            if not klines:
+                continue
+            last = str(klines[-1]).split(",")          # [date, open, close, high, low, ...]
+            day = last[0].replace("-", "")
+            close = float(last[2])
+            prev_close = float(str(klines[-2]).split(",")[2]) if len(klines) > 1 else float(last[1])
+
+            # 端点时间戳：有 market_key 时用该市场北京时间开/收盘，否则 A 股
+            if market_key:
+                try:
+                    import gstock as _gs
+                    mm = _gs.market_minutes_bj(market_key)
+                    if mm:
+                        # 取首段开盘和末段收盘（处理跨午夜）
+                        open_mod, _ = mm[0]
+                        _, close_mod = mm[-1]
+                        open_t = f"{open_mod // 60:02d}{open_mod % 60:02d}"
+                        # 跨午夜：close_mod 可能 < open_mod，取模到 [0,1440)
+                        close_wrapped = close_mod % (24 * 60)
+                        close_t = f"{close_wrapped // 60:02d}{close_wrapped % 60:02d}"
+                    else:
+                        open_t, close_t = "0930", "1500"
+                except Exception:
+                    open_t, close_t = "0930", "1500"
+            else:
+                open_t, close_t = "0930", "1500"
+
+            return {
+                "date": day,
+                "prev_close": prev_close,
+                "points": [
+                    {"time": open_t, "price": close, "volume": 0},
+                    {"time": close_t, "price": close, "volume": 0},
+                ],
+            }
+        except Exception:  # noqa: BLE001 — 换下一个主机
+            continue
+    return None
 
 
 def chart_kline(code: str, period: str = "day", count: int = 250) -> dict:

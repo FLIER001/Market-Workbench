@@ -17,39 +17,45 @@ from __future__ import annotations
 
 import astock
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # ---- 各市场本地交易时段（用于"闭市就不请求，直接用上次收盘价"）----
-# 每市场: (UTC 偏移小时, 交易时段列表[(start_h,start_m,end_h,end_m)], 周末是否闭市)
+# 直接用 IANA 时区：夏令时切换由 zoneinfo 自动处理（美/欧 3 月/10 月换季、
+# 澳洲 10 月/4 月换季都正确），不再按 UTC 月份猜固定偏移。
+# 每市场: (IANA 时区, 交易时段列表[(start_h,start_m,end_h,end_m)], 周末是否闭市)
 _MARKET_HOURS = {
-    "spx":     (-4, [(9,30,16,0)], True),   # 美东 9:30-16:00
-    "ndx":     (-4, [(9,30,16,0)], True),
-    "hsi":     (8,  [(9,30,12,0),(13,0,16,0)], True),  # 香港
-    "hstech":  (8,  [(9,30,12,0),(13,0,16,0)], True),
-    "n225":    (9,  [(9,0,11,30),(12,30,15,0)], True), # 东京
-    "ks11":    (9,  [(9,0,15,30)], True),   # 首尔
-    "twii":    (8,  [(9,0,13,30)], True),   # 台北
-    "aord":    (10, [(10,0,16,0)], True),   # 悉尼
-    "set":     (7,  [(10,0,12,30),(14,30,16,30)], True), # 曼谷
-    "jkse":    (7,  [(9,0,12,0),(13,30,15,15)], True),  # 雅加达
-    "klse":    (8,  [(9,0,12,30),(14,30,17,0)], True),  # 吉隆坡
-    "vnindex": (7,  [(9,0,11,30),(13,0,15,0)], True),   # 胡志明
-    "gdaxi":   (2,  [(9,0,17,30)], True),   # 法兰克福
-    "ftse":    (1,  [(8,0,16,30)], True),   # 伦敦
-    "fchi":    (2,  [(9,0,17,30)], True),   # 巴黎
-    "aex":     (2,  [(9,0,17,30)], True),   # 阿姆斯特丹
-    "ssmi":    (2,  [(9,0,17,30)], True),   # 苏黎世
-    "ibex":    (2,  [(9,0,17,30)], True),   # 马德里
-    "sensex":  (5.5,[(9,15,15,30)], True),  # 孟买
+    "spx":     ("America/New_York",    [(9,30,16,0)], True),              # 美东 9:30-16:00
+    "ndx":     ("America/New_York",    [(9,30,16,0)], True),
+    "hsi":     ("Asia/Hong_Kong",      [(9,30,12,0),(13,0,16,0)], True),  # 香港
+    "hstech":  ("Asia/Hong_Kong",      [(9,30,12,0),(13,0,16,0)], True),
+    "n225":    ("Asia/Tokyo",          [(9,0,11,30),(12,30,15,0)], True), # 东京
+    "ks11":    ("Asia/Seoul",          [(9,0,15,30)], True),              # 首尔
+    "twii":    ("Asia/Taipei",         [(9,0,13,30)], True),              # 台北
+    "aord":    ("Australia/Sydney",    [(10,0,16,0)], True),              # 悉尼
+    "set":     ("Asia/Bangkok",        [(10,0,12,30),(14,30,16,30)], True), # 曼谷
+    "jkse":    ("Asia/Jakarta",        [(9,0,12,0),(13,30,15,15)], True), # 雅加达
+    "klse":    ("Asia/Kuala_Lumpur",   [(9,0,12,30),(14,30,17,0)], True), # 吉隆坡
+    "vnindex": ("Asia/Ho_Chi_Minh",    [(9,0,11,30),(13,0,15,0)], True),  # 胡志明
+    "gdaxi":   ("Europe/Berlin",       [(9,0,17,30)], True),              # 法兰克福
+    "ftse":    ("Europe/London",       [(8,0,16,30)], True),              # 伦敦
+    "fchi":    ("Europe/Paris",        [(9,0,17,30)], True),              # 巴黎
+    "aex":     ("Europe/Amsterdam",    [(9,0,17,30)], True),              # 阿姆斯特丹
+    "ssmi":    ("Europe/Zurich",       [(9,0,17,30)], True),              # 苏黎世
+    "ibex":    ("Europe/Madrid",       [(9,0,17,30)], True),              # 马德里
+    "sensex":  ("Asia/Kolkata",        [(9,15,15,30)], True),             # 孟买
 }
 
+_BJ_TZ = ZoneInfo("Asia/Shanghai")
+
 def _is_market_open(key: str) -> bool:
-    """该市场此刻是否在交易时段内（按其本地时间判断）。配置缺失时保守返回 True（照常请求）。"""
+    """该市场此刻是否在交易时段内（按其本地真实时区判断，含夏令时）。
+    配置缺失时保守返回 True（照常请求）。"""
     cfg = _MARKET_HOURS.get(key)
     if not cfg:
         return True
-    offset, sessions, weekend_closed = cfg
-    local_now = datetime.now(timezone.utc) + timedelta(hours=offset)
+    tz_name, sessions, weekend_closed = cfg
+    local_now = datetime.now(ZoneInfo(tz_name))
     if weekend_closed and local_now.weekday() >= 5:  # 周六日闭市
         return False
     hm = local_now.hour * 60 + local_now.minute
@@ -57,6 +63,55 @@ def _is_market_open(key: str) -> bool:
         if sh * 60 + sm <= hm <= eh * 60 + em:
             return True
     return False
+
+def market_hours_bj(key: str) -> list[str] | None:
+    """该市场各交易时段换算成北京时间（"HH:MM-HH:MM" 列表），跨日时段终点记作「次日HH:MM」。
+    供前端标注「北京时间 21:30-次日04:00」用；未知市场返回 None。"""
+    cfg = _MARKET_HOURS.get(key)
+    if not cfg:
+        return None
+    tz_name, sessions, _ = cfg
+    local_now = datetime.now(ZoneInfo(tz_name))
+    bj_now = datetime.now(_BJ_TZ)
+    # 本地与北京的小时差（含当日 DST）：北京 08:00 时纽约为前一天 20:00 → diff = -720 分钟
+    diff = round((local_now.utcoffset() - bj_now.utcoffset()).total_seconds() / 60)
+
+    def fmt(m: int) -> str:
+        if m >= 24 * 60:
+            return f"次日{m % (24 * 60) // 60:02d}:{m % 60:02d}"
+        return f"{m // 60:02d}:{m % 60:02d}"
+
+    out = []
+    for (sh, sm, eh, em) in sessions:
+        s = sh * 60 + sm - diff
+        e = eh * 60 + em - diff
+        out.append(f"{fmt(s)}-{fmt(e)}")
+    return out
+
+
+def market_minutes_bj(key: str) -> list[tuple[int, int]] | None:
+    """该市场各交易时段换算成北京时间的分钟数 [(open_mod, close_mod), ...]。
+
+    与 market_hours_bj 同源同算，但返回纯整数（自午夜分钟数），供分时图
+    计算 x 轴总范围——不再只靠实际数据跨度，而是覆盖完整交易时段。
+    跨午夜时段（如美股 21:30→次日04:00）close_mod < open_mod，由调用方处理。
+    未知市场返回 None。
+    """
+    cfg = _MARKET_HOURS.get(key)
+    if not cfg:
+        return None
+    tz_name, sessions, _ = cfg
+    local_now = datetime.now(ZoneInfo(tz_name))
+    bj_now = datetime.now(_BJ_TZ)
+    diff = round((local_now.utcoffset() - bj_now.utcoffset()).total_seconds() / 60)
+    out = []
+    for (sh, sm, eh, em) in sessions:
+        s = sh * 60 + sm - diff
+        e = eh * 60 + em - diff
+        # 规范化到 [0, 2880) 范围（最多次日，不超过 48h）
+        s = s % (24 * 60) if s < 0 else s
+        out.append((s, e))
+    return out
 
 # 每个指数最近一次成功取到的报价（闭市时直接回用，不再请求东财）
 _LAST_QUOTES: dict = {}
@@ -172,12 +227,44 @@ def _quote_from(d: dict) -> dict:
     }
 
 
-def global_indices() -> list[dict]:
-    """全球指数快照。开市的市场实时请求；闭市的直接回用上次收盘价（标记 closed），不再请求。"""
+# 全部受支持的指数 key（供接口校验增量刷新参数）
+INDEX_KEYS = frozenset(idx["key"] for idx in _INDICES)
+
+# 全球指数 key → 腾讯分钟接口 symbol（点击展开当日分时用）。
+# 港股/亚太/南亚腾讯给全量当日分钟；欧美只给当前 tick，由 astock 内部用东财分钟历史补全。
+_TENCENT_MINUTE_SYMBOL = {
+    # 美股
+    "spx": "usINX", "ndx": "usNDX",
+    # 港股
+    "hsi": "hkHSI", "hstech": "hkHSTECH",
+    # 亚太
+    "n225": "hkN225", "ks11": "hkKS11", "twii": "hkTWII", "aord": "hkAS51",
+    "set": "hkSET", "jkse": "hkJCI", "klse": "hkKLSE", "vnindex": "hkVNINDEX",
+    # 欧洲
+    "gdaxi": "euGDAXI", "ftse": "euFTSE", "fchi": "euFCHI",
+    "aex": "euAEX", "ssmi": "euSSMI", "ibex": "euIBEX",
+    # 南亚
+    "sensex": "hkSENSEX",
+}
+
+
+def minute_symbol_for(key: str) -> str | None:
+    """全球指数 key → 腾讯分钟 symbol；未覆盖返回 None。"""
+    return _TENCENT_MINUTE_SYMBOL.get(key)
+
+
+def global_indices(keys: list[str] | None = None) -> list[dict]:
+    """全球指数快照。开市的市场实时请求；闭市的直接回用上次收盘价（标记 closed），不再请求。
+
+    keys 非空时只取这几个市场（未知 key 忽略），供前端只增量刷新已开盘市场。
+    """
     now = time.time()
+    wanted = set(keys) if keys else None
     out = []
     for idx in _INDICES:
         key = idx["key"]
+        if wanted is not None and key not in wanted:
+            continue
         open_now = _is_market_open(key)
         cached = _LAST_QUOTES.get(key)
         fresh_enough = cached is not None and (now - _LAST_QUOTES_TS.get(key, 0)) < _LAST_QUOTES_TTL
@@ -206,6 +293,7 @@ def global_indices() -> list[dict]:
             "weight": idx["weight"],
             "session": session_of(idx["region"]),
             "closed": not open_now,
+            "hours_bj": market_hours_bj(key),
         }
         # 取到有效价才更新缓存（避免把失败的 None 写进去）
         if item["price"] is not None:

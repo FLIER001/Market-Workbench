@@ -1,11 +1,12 @@
-import { useState, useEffect, useCallback } from "react";
-import { ShieldCheck, RefreshCw, Loader2, Trash2, AlertCircle } from "lucide-react";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { ShieldCheck, RefreshCw, Loader2, Trash2, AlertCircle, ChevronsUpDown, ChevronUp, ChevronDown, LineChart } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { StockSearchInput } from "@/components/ui/StockSearchInput";
 import { isTradingHours } from "@/hooks/useLiveQuotes";
-import { api, ApiError, type PortfolioData } from "@/lib/api";
+import { api, ApiError, type PortfolioData, type Holding, type TimingSignal } from "@/lib/api";
+import { publishHoldingCodes } from "@/hooks/useHoldingCodes";
 import { cn } from "@/lib/utils";
 
 const REFRESH_MS = 30 * 60 * 1000; // 每半小时自动刷新
@@ -13,6 +14,26 @@ const pnlColor = (v: number) => (v > 0 ? "text-danger" : v < 0 ? "text-success" 
 const fmt = (v: number) => v.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
 // 单价类（现价/成本/清仓价）最多 4 位小数：ETF/基金常见 3-4 位，截断成 2 位会与市值/盈亏对不上账
 const fmtPx = (v: number) => v.toLocaleString("zh-CN", { maximumFractionDigits: 4 });
+type SortKey = "name" | "day_pnl" | "price" | "shares" | "cost" | "market_value" | "pnl" | "pnl_pct";
+type SortDir = "asc" | "desc";
+const COLS: { label: string; key: SortKey | null }[] = [
+  { label: "名称", key: "name" },
+  { label: "当日盈亏", key: "day_pnl" },
+  { label: "现价 / 成本", key: "price" },
+  { label: "数量", key: "shares" },
+  { label: "市值", key: "market_value" },
+  { label: "浮动盈亏", key: "pnl" },
+  { label: "盈亏%", key: "pnl_pct" },
+  { label: "择时", key: null },
+  { label: "", key: null },
+];
+
+// 择时信号展示样式：加仓红、减仓绿（A股口径红涨绿跌），观望灰
+const SIGNAL_STYLE: Record<string, string> = {
+  add: "border-danger/40 bg-danger/10 text-danger",
+  reduce: "border-success/40 bg-success/10 text-success",
+  watch: "border-border bg-black/20 text-muted-foreground",
+};
 
 export function Portfolio() {
   const [data, setData] = useState<PortfolioData | null>(null);
@@ -28,12 +49,30 @@ export function Portfolio() {
   const [cPrice, setCPrice] = useState("");
   const [cShares, setCShares] = useState("");
   const [, setClosing] = useState(false);
+  const [sortKey, setSortKey] = useState<SortKey | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  // 择时信号：随持仓加载后懒拉一次；展开某只看规则细节
+  const [signals, setSignals] = useState<Record<string, TimingSignal>>({});
+  const [openSignal, setOpenSignal] = useState<string | null>(null);
+
+  // 持仓代码广播给自选等页面（自动并入自选 + 持仓标注）
+  useEffect(() => {
+    if (data) publishHoldingCodes(data.holdings.map((h) => h.code));
+  }, [data]);
 
   const load = useCallback(async (manual = false) => {
     if (manual) setRefreshing(true);
     try {
-      setData(manual ? await api.refreshPortfolio() : await api.portfolio());
+      const d = manual ? await api.refreshPortfolio() : await api.portfolio();
+      setData(d);
       setErr(null);
+      if (d.holdings.length > 0) {
+        api.portfolioTiming()
+          .then((r) => setSignals(r.signals || {}))
+          .catch(() => { /* 信号失败不影响持仓主数据 */ });
+      } else {
+        setSignals({});
+      }
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "加载失败");
     } finally {
@@ -99,6 +138,24 @@ export function Portfolio() {
   const holdings = data?.holdings || [];
   const totals = data?.totals;
   const closed = data?.closed || [];
+  const sortedHoldings = useMemo(() => {
+    if (!sortKey) return holdings;
+    const dir = sortDir === "asc" ? 1 : -1;
+    return [...holdings].sort((a: Holding, b: Holding) => {
+      const va = a[sortKey], vb = b[sortKey];
+      if (typeof va === "string" && typeof vb === "string") return va.localeCompare(vb, "zh") * dir;
+      return ((va as number) - (vb as number)) * dir;
+    });
+  }, [holdings, sortKey, sortDir]);
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir(sortDir === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      setSortDir(key === "name" ? "asc" : "desc");
+    }
+  };
 
   const aiContext = totals
     ? `我的持仓（本地数据）：\n` + holdings.map((h) => `${h.name}(${h.code}) ${h.shares}股 成本${h.cost} 现价${h.price} 浮盈${h.pnl}(${h.pnl_pct}%)`).join("\n") +
@@ -127,7 +184,7 @@ export function Portfolio() {
 
       <div className="mb-4 flex items-start gap-2 rounded-lg border border-success/25 bg-success/5 p-3 text-xs text-muted-foreground">
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />
-        <span>持仓<b className="text-foreground">只存在你本地</b>，不上传、不进仓库。行情每半小时自动刷新，也可手动刷新。本产品不提供标的、不给建议，只帮你把自己的账理清楚。</span>
+        <span>持仓<b className="text-foreground">只存在你本地</b>，不上传、不进仓库。行情每半小时自动刷新，也可手动刷新。「择时」列按你的中短期择时策略文档用规则计算，供执行纪律参考，非投资建议。</span>
       </div>
 
       {/* 汇总 */}
@@ -225,31 +282,31 @@ export function Portfolio() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
-                  {["名称", "当日盈亏", "现价", "数量", "成本", "市值", "浮动盈亏", "盈亏%", ""].map((h) => (
-                    <th key={h} className="whitespace-nowrap px-2 py-2 font-medium">{h}</th>
-                  ))}
+                  {COLS.map((col) => {
+                    const k = col.key;
+                    return (
+                    <th key={col.label || "action"} className="whitespace-nowrap px-2 py-2 font-medium">
+                      {k ? (
+                        <button onClick={() => toggleSort(k)} className="inline-flex items-center gap-1 hover:text-foreground">
+                          {col.label}
+                          {sortKey === k ? (
+                            sortDir === "asc" ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />
+                          ) : (
+                            <ChevronsUpDown className="h-3 w-3 text-muted-foreground/40" />
+                          )}
+                        </button>
+                      ) : col.label}
+                    </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
-                {holdings.map((h) => (
-                  <tr key={h.code} className="border-b border-border/30">
-                    <td className="px-2 py-2.5">
-                      <span className="font-medium">{h.name}</span>
-                      <span className="ml-1.5 font-mono text-xs text-muted-foreground/60">{h.code}</span>
-                    </td>
-                    <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.day_pnl))}>{h.day_pnl > 0 ? "+" : ""}{fmt(h.day_pnl)}</td>
-                    <td className="px-2 py-2.5 font-mono">{fmtPx(h.price)}</td>
-                    <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmt(h.shares)}</td>
-                    <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmtPx(h.cost)}</td>
-                    <td className="px-2 py-2.5 font-mono">{fmt(h.market_value)}</td>
-                    <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.pnl))}>{h.pnl > 0 ? "+" : ""}{fmt(h.pnl)}</td>
-                    <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.pnl))}>{h.pnl_pct > 0 ? "+" : ""}{h.pnl_pct}%</td>
-                    <td className="px-2 py-2.5">
-                      <button onClick={() => remove(h.code)} className="text-muted-foreground/50 hover:text-destructive" title="删除">
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </td>
-                  </tr>
+                {sortedHoldings.map((h) => (
+                  <SignalRows key={h.code} h={h} sig={signals[h.code]}
+                    open={openSignal === h.code}
+                    onToggle={() => setOpenSignal(openSignal === h.code ? null : h.code)}
+                    onRemove={() => remove(h.code)} />
                 ))}
               </tbody>
             </table>
@@ -306,5 +363,73 @@ export function Portfolio() {
       </GlassCard>
 
     </div>
+  );
+}
+
+/** 持仓明细行 + 可展开的择时信号详情行。 */
+function SignalRows({ h, sig, open, onToggle, onRemove }: {
+  h: Holding;
+  sig: TimingSignal | undefined;
+  open: boolean;
+  onToggle: () => void;
+  onRemove: () => void;
+}) {
+  const style = sig?.signal ? SIGNAL_STYLE[sig.signal] : "border-border bg-black/20 text-muted-foreground";
+  return (
+    <>
+      <tr className="border-b border-border/30">
+        <td className="px-2 py-2.5">
+          <span className="font-medium">{h.name}</span>
+          <span className="ml-1.5 font-mono text-xs text-muted-foreground/60">{h.code}</span>
+        </td>
+        <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.day_pnl))}>
+          <span>{h.day_pnl > 0 ? "+" : ""}{fmt(h.day_pnl)}</span>
+          <span className="block text-xs opacity-70">{h.day_pnl_pct > 0 ? "+" : ""}{h.day_pnl_pct}%</span>
+        </td>
+        <td className="px-2 py-2.5 font-mono">
+          <span>{fmtPx(h.price)}</span>
+          <span className="block text-xs text-muted-foreground">{fmtPx(h.cost)}</span>
+        </td>
+        <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmt(h.shares)}</td>
+        <td className="px-2 py-2.5 font-mono">{fmt(h.market_value)}</td>
+        <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.pnl))}>{h.pnl > 0 ? "+" : ""}{fmt(h.pnl)}</td>
+        <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.pnl))}>{h.pnl_pct > 0 ? "+" : ""}{h.pnl_pct}%</td>
+        <td className="px-2 py-2.5">
+          {sig === undefined ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground/40" />
+          ) : (
+            <button onClick={onToggle} title={sig.action}
+              className={cn("inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs whitespace-nowrap hover:opacity-80", style)}>
+              <LineChart className="h-3 w-3" />
+              {sig.signal_label}
+              <span className="font-mono tracking-tight">{sig.strength_label}</span>
+              {open ? <ChevronUp className="h-3 w-3 opacity-60" /> : <ChevronDown className="h-3 w-3 opacity-60" />}
+            </button>
+          )}
+        </td>
+        <td className="px-2 py-2.5">
+          <button onClick={onRemove} className="text-muted-foreground/50 hover:text-destructive" title="删除">
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </td>
+      </tr>
+      {open && sig && (
+        <tr className="border-b border-border/30 bg-black/20">
+          <td colSpan={9} className="px-3 py-3">
+            <p className={cn("text-xs font-medium", sig.signal ? SIGNAL_STYLE[sig.signal].split(" ").pop() : "text-muted-foreground")}>
+              {sig.action}
+            </p>
+            <ul className="mt-1.5 space-y-0.5 text-xs text-muted-foreground">
+              {sig.details.map((d, i) => <li key={i}>· {d}</li>)}
+            </ul>
+            <p className="mt-1.5 text-[11px] text-muted-foreground/60">
+              数据截至 {sig.as_of || "—"}
+              {sig.pending && "（盘中：信号以收盘确认为准，当前仅预警）"}
+              {" "}· {sig.rule} · 规则化技术指标提示，非投资建议
+            </p>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
