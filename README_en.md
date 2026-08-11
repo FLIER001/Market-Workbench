@@ -1,13 +1,15 @@
 <p align="center"><a href="README.md">简体中文</a> | <b>English</b></p>
 
-# Vibe-Research
+# Market Workbench
 
-[![Version](https://img.shields.io/badge/version-1.0.1-1f6feb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.1.0-1f6feb)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)](https://react.dev/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
 A locally hosted research workspace for China A-shares, with Hong Kong and US market coverage. It brings together quotes, financials, filings, fund flows, macro data, sectors and public news. You supply the AI connection; the project does not issue stock recommendations or trading instructions.
+
+> **Project lineage:** Market Workbench is a derivative work based on [simonlin1212/Vibe-Research](https://github.com/simonlin1212/Vibe-Research), retaining its public-data and pluggable-AI foundations. This version adds macro and liquidity views; gold and fund workflows; fund holdings and watchlists; industry and thematic-board research and scoring; account-scoped data sync; and visible source and freshness state.
 
 ![Market overview](docs/screenshots/daily-review.png)
 
@@ -97,7 +99,7 @@ npm test
 npm run build
 ```
 
-`frontend/package.json` is the single source of truth for the project version. The API, MCP server and UI read from it. See [CHANGELOG.md](CHANGELOG.md) for releases and [VISION.md](VISION.md) for product scope.
+`frontend/package.json` is the single source of truth for the project version. The API, MCP server and UI read from it. See [CHANGELOG.md](CHANGELOG.md) for releases.
 
 ## Documentation
 
@@ -109,7 +111,7 @@ npm run build
 
 ## Scope and disclaimer
 
-Vibe-Research organizes public data and information you enter yourself. It does not recommend securities, forecast prices, time trades or promise returns. Indicators, rankings and AI output are not investment advice; verify sources and make independent decisions.
+Market Workbench organizes public data and information you enter yourself. It does not recommend securities, forecast prices, time trades or promise returns. Indicators, rankings and AI output are not investment advice; verify sources and make independent decisions.
 
 ## License
 

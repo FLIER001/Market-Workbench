@@ -368,7 +368,7 @@ def public_news_search(query: str, count: int = 5) -> dict:
         "https://www.bing.com/search",
         params={"q": q, "format": "rss", "setlang": "zh-hans"},
         headers={
-            "User-Agent": "Mozilla/5.0 (compatible; Vibe-Research/0.3; +https://github.com/FLIER001/Vibe-Research)",
+            "User-Agent": "Mozilla/5.0 (compatible; Market-Workbench/1.1; +https://github.com/FLIER001/Vibe-Research)",
             "Accept": "application/rss+xml, application/xml, text/xml",
         },
         timeout=15,

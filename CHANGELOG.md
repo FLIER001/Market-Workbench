@@ -3,6 +3,10 @@
 本项目的版本号唯一来源是 `frontend/package.json`；后端 HTTP API、`/api/health`、
 前端界面与 MCP `serverInfo` 全部从它读取（见 `backend/version.py`）。
 
+## v1.1.0 — 2026-08-11
+
+项目更名为 **Market Workbench**。更新网页标题、后端 API、MCP server、模型上下文和文档；保留原有 Git 仓库地址、launchd 标识及 `~/.vibe-research/` 数据目录，避免影响现有克隆、后台服务和本地数据。
+
 ## v1.0.1 — 2026-08-11
 
 更新项目文档：重写中英文 README，补充本地启动、配置、架构与后端 API/MCP 说明。

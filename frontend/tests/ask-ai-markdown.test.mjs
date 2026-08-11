@@ -31,3 +31,13 @@ test("Ask AI renders assistant messages with the markdown stack", async () => {
     /m\.role === "assistant"\s*\?\s*\(\s*<div className="prose[^"]*">\s*<ReactMarkdown remarkPlugins=\{\[remarkGfm\]\}>\{m\.content\}<\/ReactMarkdown>\s*<\/div>/s,
   );
 });
+
+test("Ask AI provides a new-chat action that resets its persisted task", async () => {
+  const source = await readFile(
+    new URL("../src/components/ui/AskAiButton.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /resetBackgroundTask\(taskKey, EMPTY_ASK_TASK\)/);
+  assert.match(source, /清空历史上下文，开始全新对话/);
+});

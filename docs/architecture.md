@@ -1,6 +1,6 @@
 # 架构说明
 
-Vibe-Research 由一个 React 前端和一个 FastAPI 后端组成。前端负责界面、会话状态和 AI 配置入口；后端负责数据访问、用户本地存储、文件归档、AI 请求转发和 MCP 工具。
+Market Workbench 由一个 React 前端和一个 FastAPI 后端组成。前端负责界面、会话状态和 AI 配置入口；后端负责数据访问、用户本地存储、文件归档、AI 请求转发和 MCP 工具。
 
 ```text
 Browser

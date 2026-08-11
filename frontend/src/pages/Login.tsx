@@ -70,9 +70,9 @@ export function Login() {
         <div className="mb-6 flex flex-col items-center">
           <LineChart className="mb-2 h-10 w-10 text-primary text-glow" />
           <h1 className="text-2xl font-extrabold tracking-tight">
-            Vibe-<span className="text-primary">Research</span>
+            Market <span className="text-primary">Workbench</span>
           </h1>
-          <p className="mt-1 text-xs text-muted-foreground">个人 AI 投研系统 · 数据跟随账号，不再因换浏览器/域名丢失</p>
+          <p className="mt-1 text-xs text-muted-foreground">本地市场研究工作台 · 数据跟随账号，不再因换浏览器/域名丢失</p>
         </div>
 
         <GlassCard className="p-6">

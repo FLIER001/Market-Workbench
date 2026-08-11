@@ -1,6 +1,6 @@
 # Backend
 
-FastAPI service for Vibe-Research. It provides market data, user-local research data, AI request routing and an MCP server. The service is intended for local or self-hosted use.
+FastAPI service for Market Workbench. It provides market data, user-local research data, AI request routing and an MCP server. The service is intended for local or self-hosted use.
 
 ## Run locally
 
@@ -36,7 +36,7 @@ Several market sources are fetched on demand and may be delayed, unavailable or 
 From `backend/`, register the server with a local client such as Claude Code:
 
 ```bash
-claude mcp add vibe-research -- \
+claude mcp add market-workbench -- \
   "$(pwd)/.venv/bin/python" "$(pwd)/mcp_server.py"
 ```
 

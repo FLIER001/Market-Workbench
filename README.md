@@ -1,13 +1,15 @@
 <p align="center"><b>简体中文</b> | <a href="README_en.md">English</a></p>
 
-# Vibe-Research
+# Market Workbench
 
-[![Version](https://img.shields.io/badge/version-1.0.1-1f6feb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.1.0-1f6feb)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)](https://react.dev/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
-面向 A 股研究、兼顾港美市场的本地自托管投研工作台。它把行情、财务、公告、资金面、宏观、板块和公开资讯放到一个界面；AI 连接由用户自行配置，产品不提供荐股或交易指令。
+面向 A 股研究、兼顾港美市场的本地自托管市场研究工作台。它把行情、财务、公告、资金面、宏观、板块和公开资讯放到一个界面；AI 连接由用户自行配置，产品不提供荐股或交易指令。
+
+> **项目沿革**：本项目基于 [simonlin1212/Vibe-Research](https://github.com/simonlin1212/Vibe-Research) 二次开发，保留其公开数据与可插拔 AI 接入基础。当前版本主要增加宏观与资金面、黄金与基金、基金持仓与观察列表、行业及主题板块研究和评分、账号隔离的数据同步，以及数据来源和时效状态展示。
 
 ![市场全景](docs/screenshots/daily-review.png)
 
@@ -97,7 +99,7 @@ npm test
 npm run build
 ```
 
-项目版本的唯一来源是 `frontend/package.json`；后端 API、MCP Server 和界面展示都由此读取。变更记录见 [CHANGELOG.md](CHANGELOG.md)，产品范围见 [VISION.md](VISION.md)。
+项目版本的唯一来源是 `frontend/package.json`；后端 API、MCP Server 和界面展示都由此读取。变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 文档
 
@@ -109,7 +111,7 @@ npm run build
 
 ## 边界与免责声明
 
-Vibe-Research 只整理公开数据和用户自行录入的信息，不提供个股推荐、涨跌预测、交易时机或收益承诺。页面中的指标、榜单和 AI 输出都不构成投资建议；请核对来源并独立决策。
+Market Workbench 只整理公开数据和用户自行录入的信息，不提供个股推荐、涨跌预测、交易时机或收益承诺。页面中的指标、榜单和 AI 输出都不构成投资建议；请核对来源并独立决策。
 
 ## License
 

@@ -1,11 +1,11 @@
-"""Vibe-Research MCP server —— 把 A股数据工具暴露给 Claude Code 等 agent。
+"""Market Workbench MCP server —— 把 A股数据工具暴露给 Claude Code 等 agent。
 
 零第三方依赖（纯标准库 JSON-RPC over stdio），复用 astock 数据层 +
 chat.py 里的工具定义。给「订阅接入 / 高手」通道用：agent 用自己的
 订阅额度直接调数据、多步分析，不占本产品成本。
 
 挂进 Claude Code：
-    claude mcp add vibe-research -- /路径/backend/.venv/bin/python /路径/backend/mcp_server.py
+    claude mcp add market-workbench -- /路径/backend/.venv/bin/python /路径/backend/mcp_server.py
 
 合规：工具只返回客观数据，不含建议；判断由调用方 agent 给出。
 """
@@ -21,7 +21,7 @@ from version import read_version
 
 # 版本号与 HTTP API / 前端同源（#20）。此处曾是第 4 处硬编码，issue 只列了 3 处，
 # 照着改就会漏掉它——MCP 客户端初始化时拿到的仍是旧版本。
-SERVER_INFO = {"name": "vibe-research", "version": read_version()}
+SERVER_INFO = {"name": "market-workbench", "version": read_version()}
 DEFAULT_PROTOCOL = "2024-11-05"
 
 # 把 chat.TOOLS（OpenAI 格式）转成 MCP 的 {name, description, inputSchema}

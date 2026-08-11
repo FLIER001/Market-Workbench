@@ -1,12 +1,12 @@
 import { useState, useRef, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Sparkles, X, Settings, Send, Loader2, Wrench, AlertCircle } from "lucide-react";
+import { Sparkles, X, Settings, Send, Loader2, Wrench, AlertCircle, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { hasLlm, chatStream, type ChatMsg } from "@/lib/llm";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
-import { backgroundTaskKey, startBackgroundTask, useBackgroundTask } from "@/lib/backgroundTasks";
+import { backgroundTaskKey, resetBackgroundTask, startBackgroundTask, useBackgroundTask } from "@/lib/backgroundTasks";
 
 interface Props {
   // 本分栏/本页要喂给用户 AI 的上下文，作为对话的系统上下文。
@@ -33,6 +33,7 @@ const argStr = (a: Record<string, unknown>): string => {
 
 interface ToolUse { name: string; arg: string }
 interface AskTaskData { msgs: (ChatMsg & { tools?: ToolUse[] })[] }
+const EMPTY_ASK_TASK: AskTaskData = { msgs: [] };
 
 // 「问 AI」入口 —— 把当前分栏内容作为上下文，调用户自己配置的模型；
 // AI 可自行调 A股数据工具作答。结论由用户模型给出，本产品不校准、不负责。
@@ -42,7 +43,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", taskI
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const taskKey = backgroundTaskKey("ask-ai", taskId || `${label}\n${context}`);
-  const task = useBackgroundTask<AskTaskData>(taskKey, { msgs: [] });
+  const task = useBackgroundTask<AskTaskData>(taskKey, EMPTY_ASK_TASK);
   const msgs = task.data.msgs;
   const loading = task.status === "running";
   const err = task.status === "error" ? task.error : null;
@@ -53,6 +54,11 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", taskI
 
   const close = () => {
     setOpen(false);
+  };
+
+  const startNewChat = () => {
+    resetBackgroundTask(taskKey, EMPTY_ASK_TASK);
+    setInput("");
   };
 
   useEffect(() => {
@@ -110,9 +116,14 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", taskI
               <span className="flex items-center gap-2 font-semibold text-glow">
                 <Sparkles className="h-4 w-4 text-primary" /> 问 AI · 本页上下文
               </span>
-              <button onClick={close} className="text-muted-foreground hover:text-foreground">
-                <X className="h-4 w-4" />
-              </button>
+              <div className="flex items-center gap-1">
+                <button onClick={startNewChat} disabled={msgs.length === 0} className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40" title="清空历史上下文，开始全新对话">
+                  <RotateCcw className="h-3.5 w-3.5" /> 新对话
+                </button>
+                <button onClick={close} className="text-muted-foreground hover:text-foreground" aria-label="关闭问 AI">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
             </div>
 
             {!configured ? (

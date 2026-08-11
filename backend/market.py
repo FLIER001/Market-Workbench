@@ -964,7 +964,7 @@ def _cn_policy_anchor_fetch() -> dict:
     import html as _html
     import re as _re
     import requests as _requests
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; Vibe-Research/0.3)"}
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; Market-Workbench/1.1)"}
     try:
         index = _requests.get(_PBC_OMO_INDEX, headers=headers, timeout=15)
         index.raise_for_status()

@@ -126,11 +126,11 @@ export function Layout() {
             <LineChart className="h-6 w-6 shrink-0 text-primary text-glow" />
             {!collapsed && (
               <span className="text-lg font-extrabold tracking-tight">
-                Vibe-<span className="text-primary">Research</span>
+                Market <span className="text-primary">Workbench</span>
               </span>
             )}
           </Link>
-          {!collapsed && <p className="mt-1 text-[11px] text-muted-foreground">个人 AI 投研系统 · A股/美股/港股</p>}
+          {!collapsed && <p className="mt-1 text-[11px] text-muted-foreground">本地市场研究工作台 · A股/美股/港股</p>}
         </div>
 
         {/* Nav */}

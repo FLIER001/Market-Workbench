@@ -167,6 +167,14 @@ export function cancelBackgroundTask(key: string) {
   }
 }
 
+/** 中止并清空指定任务，让下一次请求从初始数据重新开始。 */
+export function resetBackgroundTask<T>(key: string, initialData: T) {
+  const controller = controllers.get(key);
+  controller?.abort();
+  controllers.delete(key);
+  setTask(key, { status: "idle", data: initialData, updatedAt: Date.now() });
+}
+
 export function backgroundTaskKey(scope: string, identity: string): string {
   let hash = 2166136261;
   for (let i = 0; i < identity.length; i += 1) {
