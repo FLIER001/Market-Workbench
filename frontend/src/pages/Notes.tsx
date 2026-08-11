@@ -84,7 +84,7 @@ export function NotesPanel() {
                 </div>
                 {open && (
                   <div className="border-t border-border/40 px-4 py-3">
-                    <div className="prose prose-sm prose-invert max-w-none text-foreground">
+                    <div className="prose prose-sm dark:prose-invert max-w-none text-foreground">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>{n.content}</ReactMarkdown>
                     </div>
 
@@ -105,7 +105,7 @@ export function NotesPanel() {
                           <p className="text-xs text-destructive">{reflectErr}</p>
                         ) : (
                           <>
-                            <div className="prose prose-sm prose-invert max-w-none text-foreground">
+                            <div className="prose prose-sm dark:prose-invert max-w-none text-foreground">
                               <ReactMarkdown remarkPlugins={[remarkGfm]}>{reflectText}</ReactMarkdown>
                             </div>
                             {!reflecting && (

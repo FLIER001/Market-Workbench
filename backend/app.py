@@ -39,7 +39,11 @@ import sector_scores as sector_scores_layer
 import sw_level2_scores as sw_level2_layer
 import tools as tools_layer
 
-app = FastAPI(title="Vibe-Research API", version="0.3.0")
+from version import read_version
+
+__version__ = read_version()
+
+app = FastAPI(title="Vibe-Research API", version=__version__)
 
 # 每半小时后台刷新持仓数据
 pf.start_scheduler(1800)
@@ -96,7 +100,7 @@ def _validate(code: str) -> str:
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "service": "vibe-research-api", "version": "0.3.1"}
+    return {"ok": True, "service": "vibe-research-api", "version": __version__}
 
 
 # ---------------- 用户体系：注册 / 登录 / 会话 / 每用户数据 ----------------

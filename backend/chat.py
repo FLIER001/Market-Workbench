@@ -124,7 +124,7 @@ def _temperature_for(model: str) -> float:
 def _call_llm(cfg: dict, messages: list, use_tools: bool) -> dict:
     _check_base_url(cfg.get("baseURL", ""))
     base = cfg["baseURL"].rstrip("/")
-    if not base.endswith(("/v1", "/v3", "/api/v3")):
+    if not base.endswith(("/v1", "/v3", "/api/v3", "/v4")):
         # 多数 OpenAI 兼容端点需要 /v1；已带版本段则不动。
         base = base + "/v1"
     payload = {"model": cfg["model"], "messages": messages, "temperature": _temperature_for(cfg["model"])}
@@ -201,7 +201,7 @@ def run_chat_cli(cfg: dict, user_messages: list, context: str = "") -> dict:
 
 def _resolve_base(cfg: dict) -> str:
     base = cfg["baseURL"].rstrip("/")
-    if not base.endswith(("/v1", "/v3", "/api/v3")):
+    if not base.endswith(("/v1", "/v3", "/api/v3", "/v4")):
         base = base + "/v1"
     return base
 

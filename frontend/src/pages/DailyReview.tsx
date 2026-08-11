@@ -314,7 +314,7 @@ export function DailyReview() {
                   </div>
                 )}
                 {review ? (
-                  <div className="prose prose-sm prose-invert max-w-none text-xs leading-relaxed text-foreground">
+                  <div className="prose prose-sm dark:prose-invert max-w-none text-xs leading-relaxed text-foreground">
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{review}</ReactMarkdown>
                   </div>
                 ) : !needConfig && !reviewErr && !reviewLoading ? (

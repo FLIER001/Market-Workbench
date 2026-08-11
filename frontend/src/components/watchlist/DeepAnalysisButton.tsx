@@ -175,7 +175,7 @@ export function DeepAnalysisButton({ code, name }: { code: string; name?: string
                 </button>
               </div>
             </div>
-            <div className="prose prose-sm prose-invert max-w-none overflow-y-auto pr-1 text-foreground">
+            <div className="prose prose-sm dark:prose-invert max-w-none overflow-y-auto pr-1 text-foreground">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{task.data.content || ""}</ReactMarkdown>
             </div>
           </div>
