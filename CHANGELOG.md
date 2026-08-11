@@ -3,6 +3,10 @@
 本项目的版本号唯一来源是 `frontend/package.json`；后端 HTTP API、`/api/health`、
 前端界面与 MCP `serverInfo` 全部从它读取（见 `backend/version.py`）。
 
+## v1.0.0 — 2026-08-11
+
+首个正式版本：整合宏观、资金面、板块、黄金、持仓、基金与研究工作流。
+
 ## v0.3.1 — 2026-08-09
 
 三个用户报告的 bug + 版本号治理。感谢 [@lihaoran0412](https://github.com/lihaoran0412)

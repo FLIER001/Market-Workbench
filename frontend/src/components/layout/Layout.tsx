@@ -13,8 +13,9 @@ import { clearLocalUserData } from "@/lib/userData";
 import { api, type SearchResult } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
 import { LogOut } from "lucide-react";
+import appPackage from "../../../package.json";
 
-const APP_VERSION = "v0.3.1";
+const APP_VERSION = `v${appPackage.version}`;
 const REPO_URL = "https://github.com/FLIER001/Vibe-Research";
 
 const NAV = [
