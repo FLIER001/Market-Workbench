@@ -40,7 +40,7 @@
 要求：Python 3.10+、Node.js 20+、npm。
 
 ```bash
-git clone https://github.com/FLIER001/Vibe-Research.git
+git clone https://github.com/FLIER001/Market-Workbench.git
 cd Vibe-Research
 
 # 终端一：后端（http://127.0.0.1:8900）

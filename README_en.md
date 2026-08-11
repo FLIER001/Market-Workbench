@@ -40,7 +40,7 @@ A locally hosted research workspace for China A-shares, with Hong Kong and US ma
 Requirements: Python 3.10+, Node.js 20+, and npm.
 
 ```bash
-git clone https://github.com/FLIER001/Vibe-Research.git
+git clone https://github.com/FLIER001/Market-Workbench.git
 cd Vibe-Research
 
 # Terminal 1: backend (http://127.0.0.1:8900)
