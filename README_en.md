@@ -35,10 +35,6 @@ A locally hosted research workspace for China A-shares, with Hong Kong and US ma
 | News and research | Public-news aggregation, personal report archive, research notes and reflection review |
 | AI and MCP | OpenAI-compatible APIs, local CLIs and MCP data tools; models and keys remain yours |
 
-![Stock data](docs/screenshots/stock-detail.png)
-
-![News radar](docs/screenshots/intel.png)
-
 ## Quick start
 
 Requirements: Python 3.10+, Node.js 20+, and npm.

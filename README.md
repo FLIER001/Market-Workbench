@@ -35,10 +35,6 @@
 | 资讯与研究 | 公开资讯聚合、个人研报归档、研究笔记、反思审计 |
 | AI 与 MCP | OpenAI 兼容 API、本机 CLI 与 MCP 数据工具；模型和密钥由用户自行提供 |
 
-![个股数据](docs/screenshots/stock-detail.png)
-
-![资讯雷达](docs/screenshots/intel.png)
-
 ## 快速开始
 
 要求：Python 3.10+、Node.js 20+、npm。
