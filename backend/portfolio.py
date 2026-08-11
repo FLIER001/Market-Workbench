@@ -141,12 +141,14 @@ def get_portfolio() -> dict:
     with _LOCK:
         d = _load()
     hs = d.get("holdings", [])
+    closed = d.get("closed", [])
+    codes = list(dict.fromkeys([h["code"] for h in hs] + [c["code"] for c in closed]))
+    try:
+        quotes = astock.tencent_quote(codes) if codes else {}
+    except Exception:
+        quotes = {}
     rows, tmv, tcost, tday, tday_base = [], 0.0, 0.0, 0.0, 0.0
     if hs:
-        try:
-            quotes = astock.tencent_quote([h["code"] for h in hs])
-        except Exception:
-            quotes = {}
         for h in hs:
             q = quotes.get(h["code"], {})
             price = q.get("price", 0.0)
@@ -170,7 +172,15 @@ def get_portfolio() -> dict:
             tday += day_pnl
             tday_base += day_base
     total_pnl = tmv - tcost
-    closed = d.get("closed", [])
+    if closed:
+        # 清仓后至今涨跌幅 = 现价 / 清仓价 - 1；现价取不到时留 None，前端显示占位
+        closed = [
+            {**c, "post_close_pct": (
+                round((quotes[c["code"]]["price"] - c["price"]) / c["price"] * 100, 2)
+                if c.get("price") and quotes.get(c["code"], {}).get("price") else None
+            )}
+            for c in closed
+        ]
     return {
         "holdings": rows,
         "totals": {

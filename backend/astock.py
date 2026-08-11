@@ -25,6 +25,14 @@ from pathlib import Path
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
 
+def _number(value) -> float | None:
+    try:
+        number = float(value)
+        return number if math.isfinite(number) else None
+    except (TypeError, ValueError):
+        return None
+
+
 def get_prefix(code: str) -> str:
     """6 位代码 → 交易所前缀。5 开头是沪市基金/ETF（51/56/58 等），深市基金 15/16 开头走默认 sz。"""
     if code.startswith(("6", "9", "5")):
@@ -318,6 +326,8 @@ def _parse_tencent_kline(payload: dict, symbol: str, period: str) -> list[dict]:
         if not isinstance(item, list) or len(item) < 6:
             continue
         try:
+            turnover = item[7] if len(item) > 7 and not isinstance(item[7], dict) else None
+            amount_wan = item[8] if len(item) > 8 and not isinstance(item[8], dict) else None
             rows.append({
                 "date": str(item[0])[:10],
                 "open": float(item[1]),
@@ -325,14 +335,25 @@ def _parse_tencent_kline(payload: dict, symbol: str, period: str) -> list[dict]:
                 "high": float(item[3]),
                 "low": float(item[4]),
                 "volume": float(item[5]),
+                "turnover_pct": float(turnover) if turnover not in (None, "") else None,
+                # 腾讯个股 K 线第 9 列为成交额（万元）。统一换算为元，避免用前复权价反推成交额。
+                "amount": float(amount_wan) * 10_000 if amount_wan not in (None, "") else None,
             })
         except (TypeError, ValueError):
             continue
     return rows
 
 
+# 腾讯 K 线备用域名：主域名 web.ifzq.gtimg.cn 2026-08 起被腾讯 WAF 拦（HTTPS 501 挑战页），
+# 同接口在 proxy.finance.qq.com 下仍可用（akshare stock_zh_a_hist_tx 走的就是这条）。
+_TENCENT_KLINE_FALLBACK = "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get"
+
+
 def tencent_kline(code: str, period: str = "day", count: int = 250) -> list[dict]:
-    """腾讯前复权 K 线；HTTP、零鉴权，作为页面图表主源。"""
+    """腾讯前复权 K 线；HTTP、零鉴权，作为页面图表主源。
+
+    主源 web.ifzq.gtimg.cn 被 WAF 拦后自动降级到 proxy.finance.qq.com。
+    """
     if period not in {"day", "week", "month"}:
         raise ValueError("period 必须是 day/week/month")
     symbol = f"{get_prefix(code)}{code}"
@@ -341,9 +362,37 @@ def tencent_kline(code: str, period: str = "day", count: int = 250) -> list[dict
         f"{_TENCENT_KLINE}?{query}",
         headers={"User-Agent": UA, "Referer": "https://gu.qq.com/"},
     )
-    with urllib.request.urlopen(request, timeout=12) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    return _parse_tencent_kline(payload, symbol, period)
+    try:
+        with urllib.request.urlopen(request, timeout=12) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        rows = _parse_tencent_kline(payload, symbol, period)
+        if rows:
+            return rows
+    except Exception:  # noqa: BLE001 — 主源被 WAF 拦/超时，走备用域名
+        pass
+
+    # 备用：proxy.finance.qq.com（直连、忽略系统代理，避免科学上网代理挂掉国内站）
+    try:
+        import requests as _req
+
+        session = _req.Session()
+        session.trust_env = False
+        params = {
+            "_var": "kline_dayqfq",
+            "param": f"{symbol},{period},,,{count},qfq",
+            "r": "0.12345",
+        }
+        resp = session.get(
+            _TENCENT_KLINE_FALLBACK,
+            params=params,
+            headers={"User-Agent": UA, "Referer": "https://gu.qq.com/"},
+            timeout=12,
+        )
+        text = resp.text
+        payload = json.loads(text[text.find("={") + 1:])
+        return _parse_tencent_kline(payload, symbol, period)
+    except Exception:  # noqa: BLE001 — 备用也失败则返回空，交由上层降级
+        return []
 
 
 def minute_kline(code: str) -> dict:
@@ -1165,3 +1214,226 @@ def industry_comparison(top_n: int = 20) -> dict:
         "code": it.get("f12", ""), "up_count": it.get("f104", 0), "down_count": it.get("f105", 0),
     } for i, it in enumerate(items)]
     return {"top": rows[:top_n], "bottom": rows[-top_n:], "total": len(rows)}
+
+
+# ---------------------------------------------------------------------------
+# 指数日K（东财）+ 业绩报表快照 —— 板块评分数据层
+# ---------------------------------------------------------------------------
+
+_CSI_ALL_SHARE_SECID = "1.000985"  # 中证全指（板块评分的全A基准）
+
+
+def index_daily_em(secid: str, days: int = 260) -> list[dict]:
+    """东财指数日K线（无鉴权 HTTP）：中证全指/沪深300/上证指数等。
+
+    东财 push2his 被掐时降级腾讯指数日K（proxy.finance.qq.com）。
+    """
+    params = {
+        "secid": secid, "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+        "klt": "101", "fqt": "0", "beg": "0", "end": "20500101",
+        "lmt": str(days), "ut": "fa5fd1943c7b386f172d6893dbfba10b",
+    }
+    try:
+        d = em_get(
+            "https://push2his.eastmoney.com/api/qt/stock/kline/get",
+            params=params, headers={"User-Agent": UA}, timeout=15,
+        ).json()
+    except Exception:
+        d = {}
+    klines = (d.get("data") or {}).get("klines") or []
+    rows = []
+    for line in klines:
+        parts = str(line).split(",")
+        if len(parts) < 6:
+            continue
+        try:
+            rows.append({
+                "date": parts[0][:10],
+                "open": float(parts[1]),
+                "close": float(parts[2]),
+                "high": float(parts[3]),
+                "low": float(parts[4]),
+                "volume": float(parts[5]),
+                "amount": float(parts[6]) if len(parts) > 6 else 0.0,
+            })
+        except (TypeError, ValueError):
+            continue
+    if rows:
+        return rows
+    return _index_daily_tx(secid, days)
+
+
+def _index_daily_tx(secid: str, days: int = 260) -> list[dict]:
+    """腾讯指数日K（东财 push2his 备用）。secid '1.000985' → 'sh000985'。"""
+    try:
+        market, code = secid.split(".", 1)
+        symbol = ("sh" if market == "1" else "sz") + code
+        import requests as _req
+
+        session = _req.Session()
+        session.trust_env = False
+        resp = session.get(
+            _TENCENT_KLINE_FALLBACK,
+            params={"_var": "k", "param": f"{symbol},day,,,{days},", "r": "0.1"},
+            headers={"User-Agent": UA}, timeout=12,
+        )
+        text = resp.text
+        payload = json.loads(text[text.find("={") + 1:])
+        data = (payload.get("data") or {}).get(symbol) or {}
+        raw = data.get("day") or data.get("qfqday") or []
+        rows = []
+        for item in raw:
+            if not isinstance(item, list) or len(item) < 6:
+                continue
+            try:
+                # 腾讯指数日K第7列是 {} 占位，成交额在第9列；个股前复权第7列即成交额。
+                amount_raw = item[8] if len(item) > 8 else (item[6] if len(item) > 6 else 0.0)
+                if isinstance(amount_raw, dict):
+                    amount_raw = 0.0
+                rows.append({
+                    "date": str(item[0])[:10],
+                    "open": float(item[1]),
+                    "close": float(item[2]),
+                    "high": float(item[3]),
+                    "low": float(item[4]),
+                    "volume": float(item[5]),
+                    "amount": float(amount_raw),
+                })
+            except (TypeError, ValueError):
+                continue
+        return rows
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def csi_all_share_daily(days: int = 260) -> list[dict]:
+    """中证全指日K线（板块评分的全A基准）。"""
+    return index_daily_em(_CSI_ALL_SHARE_SECID, days)
+
+
+def yjbb_snapshot(date_str: str) -> dict[str, dict]:
+    """东财业绩报表快照：指定报告期全 A 股的营收/净利同比。
+
+    返回 {code: {revenue_yoy, profit_yoy, roe, gross_margin}}。
+    date_str 格式 '20260331'。
+    """
+    try:
+        ak = _akshare()
+        df = ak.stock_yjbb_em(date=date_str)
+    except Exception:
+        return {}
+    if df is None or (hasattr(df, "empty") and df.empty):
+        return {}
+    out: dict[str, dict] = {}
+    for _, row in df.iterrows():
+        code = str(row.get("股票代码", "")).zfill(6)
+        if not code or len(code) != 6:
+            continue
+
+        def _num(v):
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        out[code] = {
+            "revenue_yoy": _num(row.get("营业总收入-同比增长")),
+            "profit_yoy": _num(row.get("净利润-同比增长")),
+            "roe": _num(row.get("净资产收益率")),
+            "gross_margin": _num(row.get("销售毛利率")),
+        }
+    return out
+
+
+def concept_constituents_em(board_codes: list[str], limit: int | None = None) -> list[dict]:
+    """东财概念/行业板块成分股，按流通市值降序合并去重。
+
+    默认分页拉取板块全部成分股；传入 limit 时每个板块最多保留 limit 只。
+    """
+    merged: dict[str, dict] = {}
+    for board_code in board_codes:
+        page = 1
+        fetched = 0
+        while page <= 50:
+            payload = None
+            for host in ("push2.eastmoney.com", "push2delay.eastmoney.com"):
+                try:
+                    response = em_get(
+                        f"https://{host}/api/qt/clist/get",
+                        params={
+                            "pn": str(page), "pz": "1000", "po": "1", "np": "1",
+                            "ut": "bd1d9ddb04089700cf9c27f6f7426281", "fltt": "2", "invt": "2",
+                            "fid": "f21", "fields": "f12,f14,f21",
+                            "fs": f"b:{board_code}+f:!50",
+                        },
+                        headers={"User-Agent": UA},
+                        timeout=15,
+                    )
+                    payload = response.json()
+                    if payload.get("data") is not None:
+                        break
+                    payload = None
+                except Exception:
+                    payload = None
+            data = (payload or {}).get("data") or {}
+            diff = data.get("diff") or []
+            if not diff:
+                break
+            for row in diff:
+                code = str(row.get("f12") or "")
+                if len(code) != 6 or not code.isdigit():
+                    continue
+                item = {
+                    "code": code,
+                    "name": str(row.get("f14") or code),
+                    "float_mcap": _number(row.get("f21")) or 0.0,
+                    "source": f"eastmoney:{board_code}",
+                }
+                previous = merged.get(code)
+                if previous is None or item["float_mcap"] > previous["float_mcap"]:
+                    merged[code] = item
+            fetched += len(diff)
+            total = data.get("total") or 0
+            if limit is not None and fetched >= limit:
+                break
+            if fetched >= total:
+                break
+            page += 1
+    return sorted(merged.values(), key=lambda item: -item["float_mcap"])
+
+
+def profit_forecast_revision_em(code: str) -> dict:
+    """东财 F10 下一预测年度 EPS 相对上月的一致预期修正。"""
+    import requests
+
+    symbol = f"{get_prefix(code).upper()}{code}"
+    session = requests.Session()
+    session.trust_env = False
+    response = session.get(
+        "https://emweb.securities.eastmoney.com/PC_HSF10/ProfitForecast/PageAjax",
+        params={"code": symbol},
+        headers={"User-Agent": UA, "Referer": "https://emweb.securities.eastmoney.com/"},
+        timeout=15,
+    )
+    rows = response.json().get("yctj_list") or []
+    forecasts = sorted(
+        (row for row in rows if str(row.get("YEAR_MARK") or "").upper() == "E"),
+        key=lambda row: int(row.get("YEAR") or 9999),
+    )
+    if not forecasts:
+        return {}
+    row = forecasts[0]
+    current = _number(row.get("EPS"))
+    previous = _number(row.get("EPS_LASTMONTHS"))
+    revision = (
+        (current / previous - 1) * 100
+        if current is not None and previous not in (None, 0)
+        else None
+    )
+    return {
+        "year": int(row.get("YEAR") or 0) or None,
+        "eps": current,
+        "eps_last_month": previous,
+        "revision_pct": round(max(-100.0, min(100.0, revision)), 2) if revision is not None else None,
+    }

@@ -33,6 +33,7 @@ ALLOWED_KEYS = {
     "watchlist", "watchlist-groups", "watchlist-notes",
     "etf-watchlist", "etf-watchlist-groups",
     "notes", "llm", "deep-analysis",
+    "fund-watchlist",
 }
 
 

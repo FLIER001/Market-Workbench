@@ -206,6 +206,7 @@ export interface Holding {
 export interface ClosedPosition {
   code: string; name: string; date: string; price: number; shares: number; cost: number;
   pnl: number; pnl_pct: number;
+  post_close_pct: number | null;  // 清仓后至今涨跌幅（现价 vs 清仓价）；现价取不到为 null
 }
 export interface PortfolioData {
   holdings: Holding[];
@@ -215,6 +216,7 @@ export interface PortfolioData {
   updated: string; last_refresh: string | null;
 }
 // 持仓择时信号（research/A股优质个股中短期择时策略.md 规则，后端按前复权日 K 计算）
+// 事件式：信号只在规则触发日产生并带有效期/衰减，不是"位置镜像"
 export interface TimingSignal {
   code: string;
   signal: "add" | "reduce" | "watch" | null;
@@ -226,6 +228,8 @@ export interface TimingSignal {
   as_of: string | null;
   pending: boolean;         // 当日盘中：信号未收盘确认
   rule: string;
+  since: string | null;     // 当前信号事件的触发日期
+  age_days: number;         // 距触发日的交易日数（当日为 0）
 }
 
 // 资金面 / 筹码 / 信号（v3.3 并入，均为「用户查的那只股」的公开数据）
@@ -274,6 +278,7 @@ export interface SectorScoreRow {
     turnover_rate_percentile: number | null;
     turnover_share: number | null;
     turnover_share_percentile: number | null;
+    activity_level?: number | null;
     daily_history_samples: number;
   };
   crowding: {
@@ -283,6 +288,69 @@ export interface SectorScoreRow {
   data_quality: {
     history_samples: number;
     missing: string[];
+  };
+}
+
+export interface SwLevel2Row {
+  code: string;
+  name: string;
+  level1_code: string;
+  score: number | null;
+  phase: "综合占优" | "赔率观察" | "集中风险" | "相对偏弱" | "中性观察";
+  latest_return: number | null;
+  valuation: {
+    score: number | null;
+    pe: number | null;
+    pe_percentile: number | null;
+    pb: number | null;
+    pb_percentile: number | null;
+    history_samples: number;
+  };
+  prosperity: {
+    score: number | null;
+    earnings_3m: number | null;
+    earnings_yoy: number | null;
+  };
+  attention: {
+    score: number | null;
+    turnover_rate: number | null;
+    turnover_rate_percentile: number | null;
+    turnover_share: number | null;
+    turnover_share_percentile: number | null;
+    activity_level?: number | null;
+    daily_history_samples: number;
+  };
+  crowding: {
+    risk: number | null;
+    penalty: number;
+  };
+  data_quality: {
+    history_samples: number;
+    missing: string[];
+  };
+}
+
+export interface SwLevel2Data {
+  schema_version: number;
+  as_of: string;
+  monthly_as_of: string;
+  history_start: string;
+  history_samples: number;
+  daily_history_samples: number;
+  industry_count: number;
+  level1_names: Record<string, string>;
+  industries: SwLevel2Row[];
+  is_intraday?: boolean;
+  generated_at: string;
+  stale: boolean;
+  refresh_error?: string;
+  methodology: {
+    classification: string;
+    frequency: string;
+    weights: { valuation: number; prosperity: number; attention: number };
+    penalty: string;
+    definitions: string[];
+    sources: { label: string; url: string | null }[];
   };
 }
 
@@ -318,6 +386,91 @@ export interface SectorScoresData {
     frequency: string;
     weights: { valuation: number; prosperity: number; attention: number };
     penalty: string;
+    definitions: string[];
+    sources: { label: string; url: string | null }[];
+  };
+}
+
+
+// ---- 板块双评分（强度 + 机会） ----
+export interface PlateScoreRow {
+  board_code: string;
+  board_name: string;
+  board_group: string;
+  sector_key: string | null;
+  rank: number;
+  strength: {
+    score: number | null;
+    detail: {
+      relative_trend: number | null;
+      breadth_impulse: number | null;
+      flow_confirmation: number | null;
+      trend_quality: number | null;
+      leader_concentration: number | null;
+      er20: number | null;
+      er60: number | null;
+      ma20_coverage?: number | null;
+      ma20_coverage_change?: number | null;
+      top3_return_contribution?: number | null;
+    };
+  };
+  opportunity: {
+    score: number | null;
+    detail: {
+      fundamental: number | null;
+      earnings_revision: number | null;
+      valuation_match: number | null;
+      position_score: number | null;
+      crowding_score: number | null;
+      catalyst: number | null;
+    };
+    coverage?: {
+      financial: number;
+      forecast: number;
+      valuation: number;
+      stale_factor_count: number;
+    };
+  };
+  priority: number | null;
+  raw_priority?: number | null;
+  state: string;
+  signal: string | null;
+  constituent_count: number;
+  effective_constituent_count?: number;
+  crowding_penalty?: number;
+  confidence?: "高" | "中" | "低";
+  data_quality?: {
+    flags: string[];
+    configured_count?: number;
+    source_count?: number;
+    effective_count?: number;
+    history_days?: number;
+    max_weight_pct?: number;
+    top5_weight_pct?: number;
+    financial?: number;
+    forecast?: number;
+    valuation?: number;
+    stale_factor_count?: number;
+  };
+}
+
+export interface PlateScoresData {
+  schema_version: number;
+  as_of: string;
+  generated_at: string;
+  is_intraday: boolean;
+  quote_time?: string | null;
+  financial_period?: string;
+  thresholds?: { strong: number; weak: number; opportunity: number };
+  board_count: number;
+  boards: PlateScoreRow[];
+  stale?: boolean;
+  refresh_error?: string;
+  methodology: {
+    framework: string;
+    strength_weights: Record<string, number>;
+    opportunity_weights: Record<string, number>;
+    hard_constraints: string[];
     definitions: string[];
     sources: { label: string; url: string | null }[];
   };
@@ -359,22 +512,27 @@ export interface HkCashflow {
 }
 
 
-// 资金供给（独立页面 · 国内 / 国外美国，含历史趋势 + 美联储利率 + 加息概率）
+// 资金面（独立页面 · 国内 / 美国，含来源日期与逐项回退状态）
 export interface HistPoint { date: string; v: number }
 export interface LiquidityUsItem {
   label: string; unit: string; value: number; date: string; chg: number | null; hist: HistPoint[];
+  source?: string; frequency?: string; source_date?: string; fetched_at?: string;
+  stale?: boolean; fallback_reason?: string;
 }
 export interface IndexFlow {
   name: string; hist: HistPoint[]; latest: HistPoint;
+  source?: string; frequency?: string; source_date?: string; fetched_at?: string;
+  stale?: boolean; fallback_reason?: string;
 }
 export interface LiquidityCn {
   date?: string;
   rzye_yi?: number; rzye_chg_yi?: number | null;
   rzrqye_yi?: number; rzrqye_chg_yi?: number | null;
   rzjme_yi?: number;
-  total_main_net_yi?: number;
   rzrqye_hist?: HistPoint[]; rzjme_hist?: HistPoint[];
   index_flows?: Record<string, IndexFlow>;
+  source?: string; frequency?: string; source_date?: string; fetched_at?: string;
+  stale?: boolean; fallback_reason?: string;
 }
 export interface FedOddsStrike { strike: number; prob: number }
 export interface FedOdds {
@@ -382,14 +540,19 @@ export interface FedOdds {
   strikes: FedOddsStrike[];
   stale?: boolean;      // true = 数据源暂不可用，展示的是最近一次缓存值
   fetched_at?: string;  // 数据实际获取时间（stale 时用于提示）
+  source?: string; frequency?: string; fallback_reason?: string;
 }
-export interface IndexComponent { label: string; value: string; pct: number; hist?: HistPoint[] }
+export interface IndexComponent { label: string; value: string; pct: number; date?: string; hist?: HistPoint[] }
 export interface CompositeIndex {
   value: number; label: string; desc: string; date: string;
-  favorable?: "high" | "low";  // high=分高有利，low=分低有利（缺省按 low）
+  kind?: "stress" | "state" | "warning" | "auxiliary";
+  favorable?: "high" | "low";
   hist: HistPoint[]; interpretation: string;
   components?: IndexComponent[];  // 子指标：当前值 + 各自分位，点击指数卡展开
+  source?: string; frequency?: string; coverage?: number; fetched_at?: string;
+  stale?: boolean; fallback_reason?: string;
 }
+export interface LiquidityStaleSource { label: string; date?: string; fetched_at?: string; reason: string }
 export interface LiquidityData {
   cn: LiquidityCn;
   cn_indices?: Record<string, CompositeIndex>;
@@ -397,9 +560,11 @@ export interface LiquidityData {
   us_indices?: Record<string, CompositeIndex>;
   fed_odds?: FedOdds;
   updated: string;
+  assembled_at?: string;
   /** 后端源故障回退 last-good 缓存时为 true，stale_since 为缓存生成时间 */
   stale?: boolean;
   stale_since?: string;
+  freshness?: { stale: boolean; stale_count: number; stale_sources: LiquidityStaleSource[] };
 }
 
 // 宏观面（国内重要宏观经济指标 · GDP/CPI/PPI/PMI/M2/工业增加值/进出口/贸易差额/社融）
@@ -410,13 +575,72 @@ export interface MacroIndicator {
   prev: number | null;
   date: string;
   hist: HistPoint[];
+  unit?: string;
+  source?: string;
+  desc?: string;
+  meta?: {
+    observation_period: string | null;
+    release_at: string | null;
+    fetched_at: string | null;
+    status: "fresh" | "stale" | "fallback";
+    frequency: "daily" | "monthly" | "quarterly";
+    quality: "direct" | "derived" | "proxy";
+    scope: string | null;
+    source_url: string | null;
+    owner_module: string | null;
+    derived_from: string[];
+  };
+}
+export interface MacroCluster {
+  name: string;
+  desc: string;
+  modules: string[];
 }
 export interface MacroData {
   cn: Record<string, MacroIndicator>;
   groups: Record<string, string[]>;
+  modules?: MacroModule[];
+  clusters?: MacroCluster[];
   updated: string;
   stale?: boolean;
   stale_since?: string;
+}
+
+// 8 模块得分（方向调整后分位加权 0-100）
+export interface MacroModuleUsed {
+  key: string;
+  direction: "up" | "down";
+  weight: number;
+  pct: number;
+  freshness?: number;
+  date?: string;
+}
+// 景气子模块（V1.0：国内官方/市场化/实际活动/全球）
+export interface MacroSubModule {
+  name: string;
+  weight: number;          // 占景气总分的名义权重（百分点）
+  score: number | null;    // null=该子模块整体缺源，未计入总分
+  coverage: number;
+  confidence: number;
+  indicators: string[];
+  used: MacroModuleUsed[];
+}
+export interface MacroModule {
+  name: string;
+  icon: string;
+  desc: string;
+  score: number | null;
+  coverage: number;
+  confidence: number;
+  hist?: HistPoint[];      // 最近12个月模块得分
+  indicators: string[];
+  used: MacroModuleUsed[];
+  // 景气模块 V1.0 扩展字段
+  submodules?: MacroSubModule[];
+  state?: string;          // 强扩张/扩张/弱扩张/弱收缩/收缩/深度收缩
+  mom?: number | null;     // 景气动量（环比）
+  direction?: string;      // 改善/恶化/持平
+  quadrant?: string;       // 复苏/扩张/放缓/衰退
 }
 
 // 分时图（当日分钟级）
@@ -427,12 +651,99 @@ export interface SearchResult {
   code: string; name: string; market: string;
 }
 
+
+// ---- 基金模块（公募）----
+export interface FundSearchResult { code: string; name: string; type: string }
+export interface FundQuote {
+  name: string; estimate_pct: number | null; estimate_time: string | null;
+  nav: number | null; nav_date: string | null;
+  today_return_pct: number | null; today_return_date: string | null;
+  yesterday_return_pct: number | null; yesterday_return_date: string | null;
+  estimate_source?: string | null; // 'self'=上季重仓推算 'index'=A股指数代理 'global_index'=港/美/韩指数代理
+  estimate_stale?: boolean;  // 海外市场闭市：估值为最近一场(隔夜)涨跌幅
+  estimate_proxy?: string | null; // 指数代理所用的跟踪标的指数名
+}
+export interface FundNavRow { date: string; nav: number; acc_nav: number | null; day_pct: number | null }
+export interface FundNavHistory { code: string; rows: FundNavRow[]; count: number }
+export interface FundMetrics {
+  code: string; ann_return: number | null; max_drawdown: number | null;
+  volatility: number | null; sharpe: number | null; n: number;
+}
+export interface FundProfileHolding { stock_code: string; stock_name: string; weight: number | null; quarter: string; change_pct?: number | null }
+export interface FundProfile {
+  code: string; name: string; type: string;
+  holdings: FundProfileHolding[]; holdings_quarter: string | null;
+  metrics: FundMetrics | null;
+}
+export interface FundScreenRow {
+  code: string; name: string; date: string; nav: number | null; day_pct: number | null;
+  [period: string]: string | number | null; // 近1周/近1月/.../成立来
+}
+export interface FundScreenData {
+  total_all: number; total_matched: number; rows: FundScreenRow[]; sort_by: string;
+}
+export interface FundHolding {
+  code: string; name: string;
+  nav: number; nav_date: string | null;
+  estimate_pct: number | null; estimate_time: string | null;
+  estimate_source?: string | null;
+  estimate_stale?: boolean;
+  estimate_proxy?: string | null;
+  shares: number; cost: number;
+  market_value: number; pnl: number; pnl_pct: number;
+  day_pnl: number | null;
+  today_return_amount: number | null; today_return_pct: number | null; today_return_date: string | null;
+  yesterday_return_amount: number | null; yesterday_return_pct: number | null; yesterday_return_date: string | null;
+}
+export interface FundClosedPosition {
+  code: string; name: string; date: string; nav: number; shares: number; cost: number;
+  pnl: number; pnl_pct: number;
+}
+export interface FundPortfolioData {
+  holdings: FundHolding[];
+  totals: {
+    market_value: number; cost: number; pnl: number; pnl_pct: number; day_estimate_pnl: number | null;
+    today_pnl: number | null; today_pnl_pct: number | null;
+    yesterday_pnl: number | null; yesterday_pnl_pct: number | null;
+  };
+  closed: FundClosedPosition[];
+  realized_pnl: number;
+  updated: string; last_refresh: string | null;
+}
+
+// ---- 黄金多维评分（方案 V2.1）----
+export interface GoldIndicator {
+  key: string; label: string; dimension: string; weight: number;
+  effective_weight?: number; data_status?: "fresh" | "stale";
+  value: number | null; value_text: string | null; chg: number | null; date: string | null;
+  score: number | null; signal: number | null; hist: HistPoint[]; note: string;
+  raw_signal?: number; expected_signal?: number; model_beta?: number;
+}
+export interface GoldScoreData {
+  schema_version: number;
+  date: string; gold_score: number | null; signal: string | null; confidence: string;
+  hist?: HistPoint[];
+  coverage: number;
+  mode: string; dimensions: Record<string, { score: number; weight: number; effective_weight?: number; hist?: HistPoint[] }>;
+  indicators: GoldIndicator[];
+  top_positive_drivers: string[]; top_negative_drivers: string[];
+  data_quality: string; updated: string;
+  stale?: boolean; stale_since?: string;
+  source_status?: Array<{
+    key: string; label: string; status: "fresh" | "stale" | "missing";
+    fetched_at: string | null; latest_period: string | null;
+    stale_reason?: "fallback" | "observation_lag" | null;
+    age_days?: number | null; max_age_days?: number | null;
+  }>;
+}
+
 export const api = {
   health: () => get<{ ok: boolean }>("/health"),
   indices: () => get<IndexQuote[]>("/indices"),
   marketOverview: () => get<MarketOverview>("/market/overview"),
   liquidity: () => get<LiquidityData>("/market/liquidity"),
   macro: () => get<MacroData>("/market/macro"),
+  goldScore: () => get<GoldScoreData>("/gold/score"),
   emotion: () => get<ShortTermEmotion>("/market/emotion"),
   turnoverTop: () => get<TurnoverTop>("/market/turnover-top"),
   // 传 keys = 只刷新这几个市场（已开盘的）；不传 = 全量快照
@@ -478,9 +789,46 @@ export const api = {
   sectorScoresCache: () => get<SectorScoresData | null>("/sector-scores/cache"),
   sectorScores: (refresh = false) =>
     get<SectorScoresData>(`/sector-scores${refresh ? "?refresh=true" : ""}`),
+  sectorScoresLevel2Cache: () => get<SwLevel2Data | null>("/sector-scores/level2/cache"),
+  sectorScoresLevel2: (refresh = false) =>
+    get<SwLevel2Data>(`/sector-scores/level2${refresh ? "?refresh=true" : ""}`),
+  plateScoresCache: () => get<PlateScoresData | null>("/plate-scores/cache"),
+  plateScores: (refresh = false) =>
+    get<PlateScoresData>(`/plate-scores${refresh ? "?refresh=true" : ""}`),
   search: (q: string) => get<SearchResult[]>(`/search?q=${encodeURIComponent(q)}`),
   myReports: () => get<MyReport[]>("/myreports"),
   uploadReport: (name: string, contentB64: string) =>
     request<MyReport>("/myreports", "POST", { name, content_b64: contentB64 }),
   deleteReport: (id: string) => request<{ ok: boolean }>(`/myreports/${id}`, "DELETE"),
+  // ---- 基金模块 ----
+  fundSearch: (q: string, limit = 20) =>
+    get<FundSearchResult[]>(`/funds/search?q=${encodeURIComponent(q)}&limit=${limit}`),
+  fundQuote: (codes: string[]) =>
+    get<Record<string, FundQuote>>(`/funds/quote?codes=${encodeURIComponent(codes.join(","))}`),
+  fundNav: (code: string, limit = 250) => get<FundNavHistory>(`/funds/nav/${code}?limit=${limit}`),
+  fundMetrics: (code: string) => get<FundMetrics>(`/funds/metrics/${code}`),
+  fundProfile: (code: string) => get<FundProfile>(`/funds/profile/${code}`),
+  fundScreen: (params: { type?: string; r4433?: boolean; sort_by?: string; order?: string;
+                         min_y1?: number; min_m6?: number; min_y3?: number; keyword?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params.type) qs.set("type", params.type);
+    if (params.r4433) qs.set("r4433", "true");
+    if (params.sort_by) qs.set("sort_by", params.sort_by);
+    if (params.order) qs.set("order", params.order);
+    if (params.min_y1 !== undefined) qs.set("min_y1", String(params.min_y1));
+    if (params.min_m6 !== undefined) qs.set("min_m6", String(params.min_m6));
+    if (params.min_y3 !== undefined) qs.set("min_y3", String(params.min_y3));
+    if (params.keyword) qs.set("keyword", params.keyword);
+    if (params.limit) qs.set("limit", String(params.limit));
+    return get<FundScreenData>(`/funds/screen?${qs.toString()}`);
+  },
+  fundPortfolio: () => get<FundPortfolioData>("/fund-portfolio"),
+  addFundHolding: (code: string, shares: number, cost: number) =>
+    request<FundPortfolioData>("/fund-portfolio/holding", "POST", { code, shares, cost }),
+  removeFundHolding: (code: string) =>
+    request<FundPortfolioData>(`/fund-portfolio/holding?code=${code}`, "DELETE"),
+  closeFundPosition: (code: string, date: string, nav: number, shares: number, cost?: number) =>
+    request<FundPortfolioData>("/fund-portfolio/close", "POST", { code, date, nav, shares, ...(cost !== undefined ? { cost } : {}) }),
+  removeFundClosed: (index: number) =>
+    request<FundPortfolioData>(`/fund-portfolio/close?index=${index}`, "DELETE"),
 };

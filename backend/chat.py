@@ -116,13 +116,18 @@ def _check_base_url(url: str) -> None:
                 raise RuntimeError("Base URL 解析到了不允许的内网地址")
 
 
+def _temperature_for(model: str) -> float:
+    """部分模型只接受固定 temperature（如 kimi-k3 仅允许 1）；其余按 0.3 控随机性。"""
+    return 1.0 if model.startswith("kimi") else 0.3
+
+
 def _call_llm(cfg: dict, messages: list, use_tools: bool) -> dict:
     _check_base_url(cfg.get("baseURL", ""))
     base = cfg["baseURL"].rstrip("/")
     if not base.endswith(("/v1", "/v3", "/api/v3")):
         # 多数 OpenAI 兼容端点需要 /v1；已带版本段则不动。
         base = base + "/v1"
-    payload = {"model": cfg["model"], "messages": messages, "temperature": 0.3}
+    payload = {"model": cfg["model"], "messages": messages, "temperature": _temperature_for(cfg["model"])}
     if use_tools:
         payload["tools"] = TOOLS
         payload["tool_choice"] = "auto"
@@ -203,7 +208,7 @@ def _resolve_base(cfg: dict) -> str:
 
 def _call_llm_stream(cfg: dict, messages: list, use_tools: bool):
     _check_base_url(cfg.get("baseURL", ""))
-    payload = {"model": cfg["model"], "messages": messages, "temperature": 0.3, "stream": True}
+    payload = {"model": cfg["model"], "messages": messages, "temperature": _temperature_for(cfg["model"]), "stream": True}
     if use_tools:
         payload["tools"] = TOOLS
         payload["tool_choice"] = "auto"
@@ -240,6 +245,9 @@ def _iter_sse_deltas(resp):
                 j = json.loads(data)
             except json.JSONDecodeError:
                 continue
+            if j.get("error"):
+                msg = (j["error"] or {}).get("message") or str(j["error"])
+                raise RuntimeError(f"模型接口返回错误：{msg[:300]}")
             choices = j.get("choices") or []
             if choices:
                 yield choices[0].get("delta") or {}

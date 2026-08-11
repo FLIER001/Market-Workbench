@@ -8,3 +8,4 @@ requests
 akshare>=1.10
 mootdx>=0.10
 pandas
+efinance>=0.5.3  # 基金实时估值（天天基金盘中估算）

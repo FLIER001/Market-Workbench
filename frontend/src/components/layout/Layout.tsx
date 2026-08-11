@@ -3,7 +3,7 @@ import { Link, Outlet, useLocation } from "react-router-dom";
 import {
   Activity, Radar, LayoutGrid, Wallet, Settings, Search,
   Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github, Globe,
-  Star, FileText, Droplets, Loader2,
+  Star, FileText, Droplets, Loader2, PieChart, Coins,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
@@ -23,8 +23,10 @@ const NAV = [
   { to: "/liquidity", icon: Droplets, label: "资金面" },
   { to: "/intel", icon: Radar, label: "资讯" },
   { to: "/sectors", icon: LayoutGrid, label: "板块", match: "/sectors" },
+  { to: "/gold", icon: Coins, label: "黄金" },
   { to: "/watchlist", icon: Star, label: "自选" },
   { to: "/portfolio", icon: Wallet, label: "持仓" },
+  { to: "/funds", icon: PieChart, label: "基金" },
   { to: "/research", icon: FileText, label: "研究", match: "/research" },
 ];
 
@@ -136,6 +138,9 @@ export function Layout() {
             const active = match ? pathname.startsWith(match) : pathname === to;
             return (
               <div key={to}>
+                {to === "/watchlist" && (
+                  <div className="my-1.5 border-t border-border/50" aria-hidden="true" />
+                )}
                 <Link
                   to={to}
                   title={collapsed ? label : undefined}

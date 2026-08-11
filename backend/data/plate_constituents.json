@@ -1,0 +1,2048 @@
+{
+  "_comment": "30个板块成分股主数据。核心股来自 sectorResearch.ts 代表企业 + 公开认知的龙头。观察股暂不进入指数。",
+  "version": 1,
+  "as_of": "2026-08-09",
+  "boards": [
+    {
+      "board_code": "BK001",
+      "board_name": "半导体",
+      "sector_key": "semiconductor",
+      "board_group": "科技",
+      "constituents": [
+        {
+          "code": "002371",
+          "name": "北方华创",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:semiconductor"
+        },
+        {
+          "code": "688012",
+          "name": "中微公司",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:semiconductor"
+        },
+        {
+          "code": "688072",
+          "name": "拓荆科技",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:semiconductor"
+        },
+        {
+          "code": "688019",
+          "name": "安集科技",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:semiconductor"
+        },
+        {
+          "code": "002409",
+          "name": "雅克科技",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:semiconductor"
+        },
+        {
+          "code": "301269",
+          "name": "华大九天",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:semiconductor"
+        },
+        {
+          "code": "688206",
+          "name": "概伦电子",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:semiconductor"
+        },
+        {
+          "code": "688981",
+          "name": "中芯国际",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:semiconductor"
+        },
+        {
+          "code": "688347",
+          "name": "华虹宏力",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:semiconductor"
+        },
+        {
+          "code": "600584",
+          "name": "长电科技",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:semiconductor"
+        }
+      ],
+      "constituent_count": 10
+    },
+    {
+      "board_code": "BK002",
+      "board_name": "AI算力",
+      "sector_key": "ai-computing",
+      "board_group": "科技",
+      "constituents": [
+        {
+          "code": "688256",
+          "name": "寒武纪",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-computing"
+        },
+        {
+          "code": "688041",
+          "name": "海光信息",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-computing"
+        },
+        {
+          "code": "300308",
+          "name": "中际旭创",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-computing"
+        },
+        {
+          "code": "300502",
+          "name": "新易盛",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-computing"
+        },
+        {
+          "code": "002281",
+          "name": "光迅科技",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-computing"
+        },
+        {
+          "code": "002156",
+          "name": "通富微电",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-computing"
+        },
+        {
+          "code": "600584",
+          "name": "长电科技",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-computing"
+        },
+        {
+          "code": "002463",
+          "name": "沪电股份",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-computing"
+        },
+        {
+          "code": "300476",
+          "name": "胜宏科技",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-computing"
+        },
+        {
+          "code": "002837",
+          "name": "英维克",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-computing"
+        },
+        {
+          "code": "300499",
+          "name": "高澜股份",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-computing"
+        }
+      ],
+      "constituent_count": 11
+    },
+    {
+      "board_code": "BK003",
+      "board_name": "AI应用",
+      "sector_key": "ai-application",
+      "board_group": "科技",
+      "constituents": [
+        {
+          "code": "600588",
+          "name": "用友网络",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-application"
+        },
+        {
+          "code": "688111",
+          "name": "金山办公",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-application"
+        },
+        {
+          "code": "002230",
+          "name": "科大讯飞",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-application"
+        },
+        {
+          "code": "300229",
+          "name": "拓尔思",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-application"
+        },
+        {
+          "code": "300624",
+          "name": "万兴科技",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-application"
+        },
+        {
+          "code": "300315",
+          "name": "掌趣科技",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-application"
+        },
+        {
+          "code": "688777",
+          "name": "中控技术",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-application"
+        },
+        {
+          "code": "300124",
+          "name": "汇川技术",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-application"
+        }
+      ],
+      "constituent_count": 8
+    },
+    {
+      "board_code": "BK004",
+      "board_name": "信创与国产软件",
+      "sector_key": null,
+      "board_group": "科技",
+      "constituents": [
+        {
+          "code": "600588",
+          "name": "用友网络",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "688111",
+          "name": "金山办公",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "002230",
+          "name": "科大讯飞",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600570",
+          "name": "恒生电子",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600536",
+          "name": "中国软件",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "688041",
+          "name": "海光信息",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "300454",
+          "name": "深信服",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "002439",
+          "name": "启明星辰",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600845",
+          "name": "宝信软件",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "300166",
+          "name": "东方国信",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        }
+      ],
+      "constituent_count": 10
+    },
+    {
+      "board_code": "BK005",
+      "board_name": "数据要素与云计算",
+      "sector_key": "data-element",
+      "board_group": "科技",
+      "constituents": [
+        {
+          "code": "603881",
+          "name": "数据港",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:data-element"
+        },
+        {
+          "code": "603019",
+          "name": "中科曙光",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:data-element"
+        },
+        {
+          "code": "300166",
+          "name": "东方国信",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:data-element"
+        },
+        {
+          "code": "688031",
+          "name": "星环科技-U",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:data-element"
+        },
+        {
+          "code": "002439",
+          "name": "启明星辰",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:data-element"
+        },
+        {
+          "code": "300454",
+          "name": "深信服",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:data-element"
+        },
+        {
+          "code": "600602",
+          "name": "云赛智联",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:data-element"
+        },
+        {
+          "code": "300229",
+          "name": "拓尔思",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:data-element"
+        }
+      ],
+      "constituent_count": 8
+    },
+    {
+      "board_code": "BK006",
+      "board_name": "消费电子",
+      "sector_key": "ai-hardware",
+      "board_group": "科技",
+      "constituents": [
+        {
+          "code": "603501",
+          "name": "豪威集团",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-hardware"
+        },
+        {
+          "code": "300223",
+          "name": "北京君正",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-hardware"
+        },
+        {
+          "code": "002273",
+          "name": "水晶光电",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-hardware"
+        },
+        {
+          "code": "000725",
+          "name": "京东方Ａ",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-hardware"
+        },
+        {
+          "code": "002475",
+          "name": "立讯精密",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-hardware"
+        },
+        {
+          "code": "300433",
+          "name": "蓝思科技",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-hardware"
+        },
+        {
+          "code": "002241",
+          "name": "歌尔股份",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-hardware"
+        }
+      ],
+      "constituent_count": 7
+    },
+    {
+      "board_code": "BK007",
+      "board_name": "机器人",
+      "sector_key": "humanoid",
+      "board_group": "高端制造",
+      "constituents": [
+        {
+          "code": "688017",
+          "name": "绿的谐波",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:humanoid"
+        },
+        {
+          "code": "002472",
+          "name": "双环传动",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:humanoid"
+        },
+        {
+          "code": "603009",
+          "name": "北特科技",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:humanoid"
+        },
+        {
+          "code": "300580",
+          "name": "贝斯特",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:humanoid"
+        },
+        {
+          "code": "603728",
+          "name": "鸣志电器",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:humanoid"
+        },
+        {
+          "code": "300124",
+          "name": "汇川技术",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:humanoid"
+        },
+        {
+          "code": "300115",
+          "name": "长盈精密",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:humanoid"
+        },
+        {
+          "code": "603662",
+          "name": "柯力传感",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:humanoid"
+        },
+        {
+          "code": "300024",
+          "name": "机器人",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:humanoid"
+        },
+        {
+          "code": "002747",
+          "name": "埃斯顿",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:humanoid"
+        }
+      ],
+      "constituent_count": 10
+    },
+    {
+      "board_code": "BK008",
+      "board_name": "工业母机与自动化",
+      "sector_key": null,
+      "board_group": "高端制造",
+      "constituents": [
+        {
+          "code": "688017",
+          "name": "绿的谐波",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "300124",
+          "name": "汇川技术",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "002747",
+          "name": "埃斯顿",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "300161",
+          "name": "华中数控",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "688697",
+          "name": "纽威数控",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "601882",
+          "name": "海天精工",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "688558",
+          "name": "国盛智科",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "300083",
+          "name": "创世纪",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        }
+      ],
+      "constituent_count": 8
+    },
+    {
+      "board_code": "BK009",
+      "board_name": "低空经济",
+      "sector_key": "low-altitude",
+      "board_group": "高端制造",
+      "constituents": [
+        {
+          "code": "002085",
+          "name": "万丰奥威",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:low-altitude"
+        },
+        {
+          "code": "600372",
+          "name": "中航机载",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:low-altitude"
+        },
+        {
+          "code": "000801",
+          "name": "四川九洲",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:low-altitude"
+        },
+        {
+          "code": "688631",
+          "name": "莱斯信息",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:low-altitude"
+        },
+        {
+          "code": "300627",
+          "name": "华测导航",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:low-altitude"
+        },
+        {
+          "code": "002465",
+          "name": "海格通信",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:low-altitude"
+        },
+        {
+          "code": "000738",
+          "name": "航发控制",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:low-altitude"
+        }
+      ],
+      "constituent_count": 7
+    },
+    {
+      "board_code": "BK010",
+      "board_name": "商业航天与卫星互联网",
+      "sector_key": "business-space",
+      "board_group": "高端制造",
+      "constituents": [
+        {
+          "code": "003009",
+          "name": "中天火箭",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:business-space"
+        },
+        {
+          "code": "600879",
+          "name": "航天电子",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:business-space"
+        },
+        {
+          "code": "600118",
+          "name": "中国卫星",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:business-space"
+        },
+        {
+          "code": "688568",
+          "name": "中科星图",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:business-space"
+        },
+        {
+          "code": "002025",
+          "name": "航天电器",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:business-space"
+        },
+        {
+          "code": "002179",
+          "name": "中航光电",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:business-space"
+        },
+        {
+          "code": "601698",
+          "name": "中国卫通",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:business-space"
+        },
+        {
+          "code": "300627",
+          "name": "华测导航",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:business-space"
+        }
+      ],
+      "constituent_count": 8
+    },
+    {
+      "board_code": "BK011",
+      "board_name": "军工装备",
+      "sector_key": "defense",
+      "board_group": "高端制造",
+      "constituents": [
+        {
+          "code": "600760",
+          "name": "中航沈飞",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:defense"
+        },
+        {
+          "code": "000768",
+          "name": "中航西飞",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:defense"
+        },
+        {
+          "code": "600893",
+          "name": "航发动力",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:defense"
+        },
+        {
+          "code": "000738",
+          "name": "航发控制",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:defense"
+        },
+        {
+          "code": "600150",
+          "name": "中国船舶",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:defense"
+        },
+        {
+          "code": "600879",
+          "name": "航天电子",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:defense"
+        },
+        {
+          "code": "002179",
+          "name": "中航光电",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:defense"
+        },
+        {
+          "code": "600482",
+          "name": "中国动力",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        }
+      ],
+      "constituent_count": 8
+    },
+    {
+      "board_code": "BK012",
+      "board_name": "智能驾驶与汽车零部件",
+      "sector_key": "smart-driving",
+      "board_group": "高端制造",
+      "constituents": [
+        {
+          "code": "002920",
+          "name": "德赛西威",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:smart-driving"
+        },
+        {
+          "code": "688326",
+          "name": "经纬恒润-W",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:smart-driving"
+        },
+        {
+          "code": "688322",
+          "name": "奥比中光-W",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:smart-driving"
+        },
+        {
+          "code": "002230",
+          "name": "科大讯飞",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:smart-driving"
+        },
+        {
+          "code": "601689",
+          "name": "拓普集团",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:smart-driving"
+        },
+        {
+          "code": "002050",
+          "name": "三花智控",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:smart-driving"
+        },
+        {
+          "code": "601127",
+          "name": "赛力斯",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:smart-driving"
+        },
+        {
+          "code": "002594",
+          "name": "比亚迪",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:smart-driving"
+        }
+      ],
+      "constituent_count": 8
+    },
+    {
+      "board_code": "BK013",
+      "board_name": "新能源汽车",
+      "sector_key": null,
+      "board_group": "高端制造",
+      "constituents": [
+        {
+          "code": "002594",
+          "name": "比亚迪",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "601127",
+          "name": "赛力斯",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "601689",
+          "name": "拓普集团",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "002050",
+          "name": "三花智控",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "603596",
+          "name": "伯特利",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "601238",
+          "name": "广汽集团",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "000625",
+          "name": "长安汽车",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600104",
+          "name": "上汽集团",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "601633",
+          "name": "长城汽车",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600418",
+          "name": "江淮汽车",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        }
+      ],
+      "constituent_count": 10
+    },
+    {
+      "board_code": "BK014",
+      "board_name": "锂电池",
+      "sector_key": "solid-state-battery",
+      "board_group": "新能源",
+      "constituents": [
+        {
+          "code": "300073",
+          "name": "当升科技",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:solid-state-battery"
+        },
+        {
+          "code": "688005",
+          "name": "容百科技",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:solid-state-battery"
+        },
+        {
+          "code": "002709",
+          "name": "天赐材料",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:solid-state-battery"
+        },
+        {
+          "code": "300037",
+          "name": "新宙邦",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:solid-state-battery"
+        },
+        {
+          "code": "300450",
+          "name": "先导智能",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:solid-state-battery"
+        },
+        {
+          "code": "688518",
+          "name": "联赢激光",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:solid-state-battery"
+        },
+        {
+          "code": "300750",
+          "name": "宁德时代",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:solid-state-battery"
+        },
+        {
+          "code": "002074",
+          "name": "国轩高科",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:solid-state-battery"
+        }
+      ],
+      "constituent_count": 8
+    },
+    {
+      "board_code": "BK015",
+      "board_name": "光伏",
+      "sector_key": null,
+      "board_group": "新能源",
+      "constituents": [
+        {
+          "code": "601012",
+          "name": "隆基绿能",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600438",
+          "name": "通威股份",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "002129",
+          "name": "TCL中环",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "300274",
+          "name": "阳光电源",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "688390",
+          "name": "固德威",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "601877",
+          "name": "正泰电器",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600732",
+          "name": "爱旭股份",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "300763",
+          "name": "锦浪科技",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "688599",
+          "name": "天合光能",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "603806",
+          "name": "福斯特",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        }
+      ],
+      "constituent_count": 10
+    },
+    {
+      "board_code": "BK016",
+      "board_name": "风电",
+      "sector_key": null,
+      "board_group": "新能源",
+      "constituents": [
+        {
+          "code": "002202",
+          "name": "金风科技",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "601615",
+          "name": "明阳智能",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "300772",
+          "name": "运达股份",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "603063",
+          "name": "禾望电气",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600905",
+          "name": "三峡能源",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "001289",
+          "name": "龙源电力",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600522",
+          "name": "中天科技",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600487",
+          "name": "亨通光电",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        }
+      ],
+      "constituent_count": 8
+    },
+    {
+      "board_code": "BK017",
+      "board_name": "储能",
+      "sector_key": "energy-storage",
+      "board_group": "新能源",
+      "constituents": [
+        {
+          "code": "300750",
+          "name": "宁德时代",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:energy-storage"
+        },
+        {
+          "code": "002074",
+          "name": "国轩高科",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:energy-storage"
+        },
+        {
+          "code": "300274",
+          "name": "阳光电源",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:energy-storage"
+        },
+        {
+          "code": "688390",
+          "name": "固德威",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:energy-storage"
+        },
+        {
+          "code": "002837",
+          "name": "英维克",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:energy-storage"
+        },
+        {
+          "code": "002126",
+          "name": "银轮股份",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:energy-storage"
+        },
+        {
+          "code": "002335",
+          "name": "科华数据",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:energy-storage"
+        },
+        {
+          "code": "300693",
+          "name": "盛弘股份",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:energy-storage"
+        }
+      ],
+      "constituent_count": 8
+    },
+    {
+      "board_code": "BK018",
+      "board_name": "电网设备",
+      "sector_key": "power-grid",
+      "board_group": "新能源",
+      "constituents": [
+        {
+          "code": "600312",
+          "name": "平高电气",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:power-grid"
+        },
+        {
+          "code": "600089",
+          "name": "特变电工",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:power-grid"
+        },
+        {
+          "code": "600550",
+          "name": "保变电气",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:power-grid"
+        },
+        {
+          "code": "600406",
+          "name": "国电南瑞",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:power-grid"
+        },
+        {
+          "code": "002028",
+          "name": "思源电气",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:power-grid"
+        },
+        {
+          "code": "600522",
+          "name": "中天科技",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:power-grid"
+        },
+        {
+          "code": "600487",
+          "name": "亨通光电",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:power-grid"
+        },
+        {
+          "code": "300274",
+          "name": "阳光电源",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:power-grid"
+        },
+        {
+          "code": "300693",
+          "name": "盛弘股份",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:power-grid"
+        }
+      ],
+      "constituent_count": 9
+    },
+    {
+      "board_code": "BK019",
+      "board_name": "创新药",
+      "sector_key": "innovative-drug",
+      "board_group": "医药",
+      "constituents": [
+        {
+          "code": "600276",
+          "name": "恒瑞医药",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:innovative-drug"
+        },
+        {
+          "code": "688235",
+          "name": "百济神州",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:innovative-drug"
+        },
+        {
+          "code": "688331",
+          "name": "荣昌生物",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:innovative-drug"
+        },
+        {
+          "code": "688506",
+          "name": "百利天恒",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:innovative-drug"
+        },
+        {
+          "code": "603259",
+          "name": "药明康德",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:innovative-drug"
+        },
+        {
+          "code": "300759",
+          "name": "康龙化成",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:innovative-drug"
+        },
+        {
+          "code": "600196",
+          "name": "复星医药",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:innovative-drug"
+        },
+        {
+          "code": "000963",
+          "name": "华东医药",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:innovative-drug"
+        }
+      ],
+      "constituent_count": 8
+    },
+    {
+      "board_code": "BK020",
+      "board_name": "医疗器械",
+      "sector_key": null,
+      "board_group": "医药",
+      "constituents": [
+        {
+          "code": "300760",
+          "name": "迈瑞医疗",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "688271",
+          "name": "联影医疗",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "300633",
+          "name": "开立医疗",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "688029",
+          "name": "南微医学",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "300595",
+          "name": "欧普康视",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "688139",
+          "name": "海尔生物",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "300482",
+          "name": "万孚生物",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "688617",
+          "name": "惠泰医疗",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        }
+      ],
+      "constituent_count": 8
+    },
+    {
+      "board_code": "BK021",
+      "board_name": "CXO",
+      "sector_key": null,
+      "board_group": "医药",
+      "constituents": [
+        {
+          "code": "603259",
+          "name": "药明康德",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "300759",
+          "name": "康龙化成",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "300347",
+          "name": "泰格医药",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "002821",
+          "name": "凯莱英",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "603127",
+          "name": "昭衍新药",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "300363",
+          "name": "博腾股份",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "688202",
+          "name": "美迪西",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "300725",
+          "name": "药石科技",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        }
+      ],
+      "constituent_count": 8
+    },
+    {
+      "board_code": "BK022",
+      "board_name": "生物科技",
+      "sector_key": "ai-pharma",
+      "board_group": "医药",
+      "constituents": [
+        {
+          "code": "600276",
+          "name": "恒瑞医药",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-pharma"
+        },
+        {
+          "code": "000661",
+          "name": "长春高新",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-pharma"
+        },
+        {
+          "code": "688046",
+          "name": "药康生物",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-pharma"
+        },
+        {
+          "code": "300759",
+          "name": "康龙化成",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-pharma"
+        },
+        {
+          "code": "300760",
+          "name": "迈瑞医疗",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-pharma"
+        },
+        {
+          "code": "688271",
+          "name": "联影医疗",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-pharma"
+        },
+        {
+          "code": "603259",
+          "name": "药明康德",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:ai-pharma"
+        }
+      ],
+      "constituent_count": 7
+    },
+    {
+      "board_code": "BK023",
+      "board_name": "白酒",
+      "sector_key": null,
+      "board_group": "消费",
+      "constituents": [
+        {
+          "code": "600519",
+          "name": "贵州茅台",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "000858",
+          "name": "五粮液",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "000568",
+          "name": "泸州老窖",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600809",
+          "name": "山西汾酒",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "002304",
+          "name": "洋河股份",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "000596",
+          "name": "古井贡酒",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600779",
+          "name": "水井坊",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "603589",
+          "name": "口子窖",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        }
+      ],
+      "constituent_count": 8
+    },
+    {
+      "board_code": "BK024",
+      "board_name": "家电与智能家居",
+      "sector_key": null,
+      "board_group": "消费",
+      "constituents": [
+        {
+          "code": "000333",
+          "name": "美的集团",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600690",
+          "name": "海尔智家",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "000651",
+          "name": "格力电器",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "002508",
+          "name": "老板电器",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "002032",
+          "name": "苏泊尔",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "603486",
+          "name": "科沃斯",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "688169",
+          "name": "石头科技",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "002705",
+          "name": "新宝股份",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        }
+      ],
+      "constituent_count": 8
+    },
+    {
+      "board_code": "BK025",
+      "board_name": "旅游酒店与免税",
+      "sector_key": null,
+      "board_group": "消费",
+      "constituents": [
+        {
+          "code": "601888",
+          "name": "中国中免",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600754",
+          "name": "锦江酒店",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600258",
+          "name": "首旅酒店",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "002033",
+          "name": "丽江股份",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "000978",
+          "name": "桂林旅游",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600138",
+          "name": "中青旅",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "300144",
+          "name": "宋城演艺",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600054",
+          "name": "黄山旅游",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        }
+      ],
+      "constituent_count": 8
+    },
+    {
+      "board_code": "BK026",
+      "board_name": "消费出海",
+      "sector_key": null,
+      "board_group": "消费",
+      "constituents": [
+        {
+          "code": "002475",
+          "name": "立讯精密",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "300433",
+          "name": "蓝思科技",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "002241",
+          "name": "歌尔股份",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "603501",
+          "name": "豪威集团",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "002594",
+          "name": "比亚迪",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "601689",
+          "name": "拓普集团",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "300750",
+          "name": "宁德时代",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "002050",
+          "name": "三花智控",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        }
+      ],
+      "constituent_count": 8
+    },
+    {
+      "board_code": "BK027",
+      "board_name": "黄金",
+      "sector_key": null,
+      "board_group": "周期",
+      "constituents": [
+        {
+          "code": "600547",
+          "name": "山东黄金",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "601899",
+          "name": "紫金矿业",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600489",
+          "name": "中金黄金",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "000975",
+          "name": "山金国际",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "601069",
+          "name": "西部黄金",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600988",
+          "name": "赤峰黄金",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "002155",
+          "name": "湖南黄金",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600531",
+          "name": "豫光金铅",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        }
+      ],
+      "constituent_count": 8
+    },
+    {
+      "board_code": "BK028",
+      "board_name": "战略金属",
+      "sector_key": "resources",
+      "board_group": "周期",
+      "constituents": [
+        {
+          "code": "600111",
+          "name": "北方稀土",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:resources"
+        },
+        {
+          "code": "000831",
+          "name": "中国稀土",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:resources"
+        },
+        {
+          "code": "600497",
+          "name": "驰宏锌锗",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:resources"
+        },
+        {
+          "code": "002428",
+          "name": "云南锗业",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:resources"
+        },
+        {
+          "code": "601600",
+          "name": "中国铝业",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:resources"
+        },
+        {
+          "code": "000960",
+          "name": "锡业股份",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:resources"
+        },
+        {
+          "code": "600549",
+          "name": "厦门钨业",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:resources"
+        },
+        {
+          "code": "000657",
+          "name": "中钨高新",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "sectorResearch:resources"
+        }
+      ],
+      "constituent_count": 8
+    },
+    {
+      "board_code": "BK029",
+      "board_name": "地产产业链",
+      "sector_key": null,
+      "board_group": "金融地产",
+      "constituents": [
+        {
+          "code": "600048",
+          "name": "保利发展",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "001979",
+          "name": "招商蛇口",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600383",
+          "name": "金地集团",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "000002",
+          "name": "万科Ａ",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "601155",
+          "name": "新城控股",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600606",
+          "name": "绿地控股",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "000069",
+          "name": "华侨城Ａ",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600325",
+          "name": "华发股份",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        }
+      ],
+      "constituent_count": 8
+    },
+    {
+      "board_code": "BK030",
+      "board_name": "央企高股息",
+      "sector_key": null,
+      "board_group": "金融地产",
+      "constituents": [
+        {
+          "code": "601398",
+          "name": "工商银行",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "601288",
+          "name": "农业银行",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "601988",
+          "name": "中国银行",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "601939",
+          "name": "建设银行",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600028",
+          "name": "中国石化",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "601857",
+          "name": "中国石油",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600900",
+          "name": "长江电力",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "601006",
+          "name": "大秦铁路",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "601088",
+          "name": "中国神华",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        },
+        {
+          "code": "600019",
+          "name": "宝钢股份",
+          "membership_type": "core",
+          "business_relevance": 1.0,
+          "source": "manual"
+        }
+      ],
+      "constituent_count": 10
+    }
+  ]
+}

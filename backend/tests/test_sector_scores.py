@@ -63,7 +63,7 @@ def test_build_scores_uses_sw_monthly_history():
     rows = {row["code"]: row for row in data["industries"]}
     agriculture = rows["801010"]
 
-    assert data["schema_version"] == 5
+    assert data["schema_version"] == 6
     assert data["current_frequency"] == "monthly"
     assert data["methodology"]["classification"] == "申万一级行业（2021版，31个行业）"
     assert data["history_samples"] == 13
@@ -123,6 +123,19 @@ def test_sw_snapshot_rejects_incomplete_data():
         assert "不完整" in str(error)
     else:
         raise AssertionError("不完整的申万一级行业快照应被拒绝")
+
+
+def test_activity_confirmation_is_not_monotonic_reward():
+    assert sector_scores._activity_confirmation(60) == 100
+    assert sector_scores._activity_confirmation(100) == 0
+    assert sector_scores._activity_confirmation(90) < sector_scores._activity_confirmation(70)
+
+
+def test_rank_uses_average_for_ties():
+    rows = [{"code": "A", "x": 1}, {"code": "B", "x": 1}, {"code": "C", "x": 3}]
+    ranks = sector_scores._rank(rows, "x")
+    assert ranks["A"] == ranks["B"] == 25.0
+    assert ranks["C"] == 100.0
 
 
 def test_sector_scores_api_contract(monkeypatch):

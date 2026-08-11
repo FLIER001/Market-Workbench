@@ -12,11 +12,12 @@ interface Props {
   area?: boolean;
   className?: string;
   valueSuffix?: string;
+  showLatest?: boolean;
 }
 
 // 纯 SVG sparkline：没有 canvas，自然不会被 .glass 的 backdrop-filter 擦除/闪烁。
 // 定位点 + 十字参考线 + tooltip 用绝对定位 HTML 元素精确映射。
-export function Sparkline({ data, height = 44, color = "--primary", area = true, className, valueSuffix = "" }: Props) {
+export function Sparkline({ data, height = 44, color = "--primary", area = true, className, valueSuffix = "", showLatest = false }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
 
@@ -72,6 +73,11 @@ export function Sparkline({ data, height = 44, color = "--primary", area = true,
       >
         {area && <path d={areaD} fill={`hsl(${stroke} / 0.12)`} />}
         <path d={pathD} fill="none" stroke={`hsl(${stroke})`} strokeWidth="1.4" vectorEffect="non-scaling-stroke" />
+        {showLatest && points.length > 0 && (
+          <circle cx={points[points.length - 1].x} cy={points[points.length - 1].y} r="3.5"
+            fill={`hsl(${stroke})`} stroke="hsl(var(--background))" strokeWidth="2"
+            vectorEffect="non-scaling-stroke" />
+        )}
         {/* hover 十字线 */}
         {hoverPoint && (
           <>

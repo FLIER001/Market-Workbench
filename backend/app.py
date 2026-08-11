@@ -24,14 +24,19 @@ import astock
 import chat as chat_layer
 import cli_runtime
 import gstock
+import fund
+import fund_portfolio as fpf
 import newsradar
 import portfolio as pf
 import timing
 import users
 import market
+import gold_score as gold_score_layer
 import myreports as mr
 import reflection as reflect_layer
+import plate_scores as plate_scores_layer
 import sector_scores as sector_scores_layer
+import sw_level2_scores as sw_level2_layer
 import tools as tools_layer
 
 app = FastAPI(title="Vibe-Research API", version="0.3.0")
@@ -383,6 +388,137 @@ def portfolio_timing():
         raise HTTPException(502, f"择时信号异常：{e}") from e
 
 
+
+# ---------------------------------------------------------------------------
+# 基金模块（公募：搜索 / 实时估值 / 净值走势 / 指标 / 筛选 / 持仓账本）
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/funds/search")
+def funds_search(q: str = Query(...), limit: int = Query(20, le=50)):
+    """基金模糊搜索（代码/简称/拼音）。"""
+    try:
+        return {"data": fund.search_funds(q, limit)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"基金搜索异常：{e}") from e
+
+
+@app.get("/api/funds/quote")
+def funds_quote(codes: str = Query(...)):
+    """批量实时估值 + 最新净值（逗号分隔代码，最多 50 只）。"""
+    code_list = [c.strip() for c in codes.split(",") if c.strip()][:50]
+    try:
+        return {"data": fund.realtime_estimates(code_list)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"基金行情异常：{e}") from e
+
+
+@app.get("/api/funds/nav/{code}")
+def funds_nav(code: str, limit: int = Query(250, le=4000)):
+    """单位净值走势（升序）。"""
+    try:
+        return {"data": fund.nav_history(code, limit)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"净值走势异常：{e}") from e
+
+
+@app.get("/api/funds/metrics/{code}")
+def funds_metrics(code: str):
+    """近一年业绩指标：年化/最大回撤/波动率/夏普（净值序列自算）。"""
+    try:
+        return {"data": fund.fund_metrics(code)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"基金指标异常：{e}") from e
+
+
+@app.get("/api/funds/profile/{code}")
+def funds_profile(code: str):
+    """基金档案：基本信息 + 最新十大重仓 + 业绩指标。"""
+    try:
+        return {"data": fund.fund_profile(code)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"基金档案异常：{e}") from e
+
+
+@app.get("/api/funds/screen")
+def funds_screen(type: str = Query(""), r4433: bool = Query(False),
+                 sort_by: str = Query("近1年"), order: str = Query("desc"),
+                 min_y1: float | None = Query(None), min_m6: float | None = Query(None),
+                 min_y3: float | None = Query(None), keyword: str = Query(""),
+                 limit: int = Query(100, le=500)):
+    """全市场基金业绩筛选（支持 4433 法则与业绩下限过滤）。"""
+    try:
+        return {"data": fund.screen_funds(type, r4433, sort_by, order,
+                                          min_y1, min_m6, min_y3, keyword, limit)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"基金筛选异常：{e}") from e
+
+
+class FundHoldingIn(BaseModel):
+    code: str
+    shares: float
+    cost: float
+
+
+@app.get("/api/fund-portfolio")
+def fund_portfolio_get():
+    """基金持仓 + 最新净值/盘中估值叠加浮动盈亏。存本地，不上传。"""
+    try:
+        return {"data": fpf.get_portfolio()}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"基金持仓读取异常：{e}") from e
+
+
+@app.post("/api/fund-portfolio/holding")
+def fund_portfolio_add(h: FundHoldingIn):
+    """加一笔基金持仓（份额 + 单位成本净值）；同代码按加权平均合并。"""
+    code = (h.code or "").strip()
+    if not code.isdigit() or len(code) != 6:
+        raise HTTPException(400, "基金代码必须是 6 位数字")
+    if h.shares <= 0:
+        raise HTTPException(400, "份额必须大于 0")
+    return {"data": fpf.add_holding(code, h.shares, h.cost)}
+
+
+@app.delete("/api/fund-portfolio/holding")
+def fund_portfolio_remove(code: str = Query(...)):
+    return {"data": fpf.remove_holding(code.strip())}
+
+
+class FundCloseIn(BaseModel):
+    code: str
+    date: str
+    nav: float
+    shares: float
+    cost: float | None = None
+
+
+@app.post("/api/fund-portfolio/close")
+def fund_portfolio_close(c: FundCloseIn):
+    """记一笔已卖出（按卖出净值算已实现盈亏），并扣减当前份额。"""
+    code = (c.code or "").strip()
+    if not code.isdigit() or len(code) != 6:
+        raise HTTPException(400, "基金代码必须是 6 位数字")
+    if c.nav <= 0 or c.shares <= 0:
+        raise HTTPException(400, "卖出净值与份额必须大于 0")
+    date = (c.date or "").strip()
+    if not date:
+        raise HTTPException(400, "请填卖出日期")
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(400, "卖出日期格式应为 YYYY-MM-DD") from None
+    try:
+        return {"data": fpf.close_position(code, date, c.nav, c.shares, c.cost)}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.delete("/api/fund-portfolio/close")
+def fund_portfolio_close_remove(index: int = Query(...)):
+    return {"data": fpf.remove_closed(index)}
+
+
 @app.get("/api/radar")
 def radar():
     """资讯雷达：12 赛道公开 RSS 资讯（读缓存，无缓存返回赛道骨架）。"""
@@ -424,7 +560,7 @@ def market_overview():
 
 @app.get("/api/sector-scores")
 def sector_scores(refresh: bool = Query(False)):
-    """板块评分：申万一级行业的估值、盈利景气、资本活跃和集中风险。
+    """行业评分：申万一级行业的估值、盈利景气、资本活跃和集中风险。
 
     首次构建读取申万 2021 版分类启用后的月报，并以申万成分分类叠加
     a-stock-data 腾讯个股行情聚合当前值；盘中缓存 5 分钟、其他时段 1 小时。
@@ -438,8 +574,47 @@ def sector_scores(refresh: bool = Query(False)):
 
 @app.get("/api/sector-scores/cache")
 def sector_scores_cache():
-    """板块评分最近一次成功缓存；供前端在后台刷新期间即时展示。"""
+    """行业评分最近一次成功缓存；供前端在后台刷新期间即时展示。"""
     return {"data": sector_scores_layer.get_cached_sector_scores()}
+
+
+@app.get("/api/sector-scores/level2")
+def sector_scores_level2(refresh: bool = Query(False)):
+    """申万二级行业（2021 版 131 个）指标与一级映射。
+
+    当前值取申万二级行业最近交易日日频，历史分位锚取申万月报（约 60 个月）。
+    盘中缓存 5 分钟、其他时段 1 小时；refresh=true 强制刷新。
+    """
+    try:
+        return {"data": sw_level2_layer.get_level2_scores(force=refresh)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"二级行业指标异常：{e}") from e
+
+
+@app.get("/api/sector-scores/level2/cache")
+def sector_scores_level2_cache():
+    """二级行业指标最近一次成功缓存；供前端在后台刷新期间即时展示。"""
+    return {"data": sw_level2_layer.get_cached_level2_scores()}
+
+
+@app.get("/api/plate-scores")
+def plate_scores(refresh: bool = Query(False)):
+    """板块双评分：30 个主题板块的强度分 + 机会分（防追涨体系）。
+
+    成分股来自人工维护的板块主数据（sectorResearch 代表企业 + 公开龙头），
+    行情走腾讯批量接口，基准为中证全指。盘中缓存 5 分钟、其他时段 1 小时。
+    refresh=true 强制刷新。
+    """
+    try:
+        return {"data": plate_scores_layer.get_plate_scores(force=refresh)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"板块评分异常：{e}") from e
+
+
+@app.get("/api/plate-scores/cache")
+def plate_scores_cache():
+    """板块评分最近一次成功缓存；供前端在后台刷新期间即时展示。"""
+    return {"data": plate_scores_layer.get_cached_plate_scores()}
 
 
 @app.get("/api/market/emotion")
@@ -1025,3 +1200,12 @@ def market_macro():
         return {"data": market.get_macro()}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"宏观经济指标异常：{e}") from e
+
+
+@app.get("/api/gold/score")
+def gold_score():
+    """黄金价格多维评分（方案 V2.1）。缓存 30 分钟，last-good 兜底。"""
+    try:
+        return {"data": gold_score_layer.get_gold_score()}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"黄金评分异常：{e}") from e

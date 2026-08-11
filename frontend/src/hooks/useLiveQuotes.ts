@@ -40,6 +40,15 @@ export function isTradingHours(): boolean {
   return (mins >= 9 * 60 + 15 && mins <= 11 * 60 + 30) || (mins >= 13 * 60 && mins <= 15 * 60);
 }
 
+/** 基金确认净值通常在晚间公布，轮询窗口需覆盖收盘后。 */
+export function isFundRefreshHours(): boolean {
+  const bj = beijingNow();
+  const day = bj.getDay();
+  if (day === 0 || day === 6) return false;
+  const mins = bj.getHours() * 60 + bj.getMinutes();
+  return mins >= 9 * 60 && mins <= 23 * 60;
+}
+
 export interface LiveQuotesState {
   quotes: Record<string, Quote>;
   loading: boolean;

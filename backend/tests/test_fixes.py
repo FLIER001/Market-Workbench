@@ -93,6 +93,26 @@ def test_portfolio_partial_close_deducts_holding(tmp_pf):
     client.delete("/api/portfolio/close?index=0")
 
 
+def test_portfolio_fetches_current_and_closed_quotes_once(tmp_pf, monkeypatch):
+    calls = []
+
+    def quote(codes):
+        calls.append(codes)
+        return {c: {"name": f"股{c}", "price": 10.0, "last_close": 9.5} for c in codes}
+
+    monkeypatch.setattr(astock, "tencent_quote", quote)
+    pf._save({
+        "holdings": [{"code": "600519", "shares": 100, "cost": 8.0}],
+        "closed": [{"code": "000001", "name": "平安银行", "date": "2026-07-06",
+                    "price": 9.0, "shares": 100, "cost": 8.0, "pnl": 100.0, "pnl_pct": 12.5}],
+    })
+
+    data = pf.get_portfolio()
+
+    assert calls == [["600519", "000001"]]
+    assert data["closed"][0]["post_close_pct"] == pytest.approx(11.11)
+
+
 def test_portfolio_add_validation(tmp_pf):
     assert client.post("/api/portfolio/holding", json={"code": "abc", "shares": 1, "cost": 1}).status_code == 400
     assert client.post("/api/portfolio/holding", json={"code": "600519", "shares": 0, "cost": 1}).status_code == 400
@@ -277,6 +297,24 @@ def test_sub_cached_keeps_last_good():
     market._SUB_LAST[key] = (0, {"v": 1})
     market._SUB.pop(key, None)
     assert market._sub_cached(key, flaky) == {}
+    market._SUB.pop(key, None)
+    market._SUB_LAST.pop(key, None)
+
+
+def test_gold_series_cache_marks_fallback_stale():
+    import gold_score
+    key = "gold:test:stale"
+    market._SUB.pop(key, None)
+    market._SUB_LAST.pop(key, None)
+    gold_score._SOURCE_STATUS.pop(key, None)
+
+    rows = gold_score._series_cached(key, lambda: [("2026-08-07", 1.0)], ttl=0)
+    assert rows == [("2026-08-07", 1.0)]
+    assert gold_score._SOURCE_STATUS[key]["status"] == "fresh"
+
+    rows = gold_score._series_cached(key, lambda: [], ttl=0)
+    assert rows == [("2026-08-07", 1.0)]
+    assert gold_score._SOURCE_STATUS[key]["status"] == "stale"
     market._SUB.pop(key, None)
     market._SUB_LAST.pop(key, None)
 

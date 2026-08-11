@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import {
@@ -20,6 +20,8 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { DeepAnalysisButton } from "@/components/watchlist/DeepAnalysisButton";
 import { StockSearchInput } from "@/components/ui/StockSearchInput";
+import { FundWatchPanel } from "@/components/funds/FundWatchPanel";
+import { loadFundWatch } from "@/lib/fundWatch";
 import {
   assignCodesToGroup,
   DEFAULT_WATCH_GROUP_ID,
@@ -109,9 +111,10 @@ const saveLive = (on: boolean) => {
 };
 
 export function Watchlist() {
-  const [collection, setCollection] = useState<WatchCollection>("stock");
+  const [collection, setCollection] = useState<WatchCollection | "fund">("stock");
   const [stockGroups, setStockGroups] = useState<WatchGroup[]>(() => loadWatchGroups("stock"));
   const [etfGroups, setEtfGroups] = useState<WatchGroup[]>(() => loadWatchGroups("etf"));
+  const [fundCount, setFundCount] = useState(() => loadFundWatch().length);
   const [activeGroupId, setActiveGroupId] = useState(ALL_GROUPS);
   const [targetGroupId, setTargetGroupId] = useState(DEFAULT_WATCH_GROUP_ID);
   const [input, setInput] = useState("");
@@ -128,9 +131,10 @@ export function Watchlist() {
   const [wSortKey, setWSortKey] = useState<WSortKey | null>(null);
   const [wSortDir, setWSortDir] = useState<WSortDir>("desc");
 
-  const groups = collection === "stock" ? stockGroups : etfGroups;
+  const groups = collection === "stock" ? stockGroups : collection === "etf" ? etfGroups : [];
   const stockCount = useMemo(() => flattenWatchGroups(stockGroups).length, [stockGroups]);
   const etfCount = useMemo(() => flattenWatchGroups(etfGroups).length, [etfGroups]);
+  const refreshFundCount = useCallback(() => setFundCount(loadFundWatch().length), []);
 
   // 持仓标的自动并入自选：股票进“自选股”，ETF 进“自选 ETF”，均放未分组；
   // 已有（含自定义分组里）的只标注不动分组。用户在自选里手动删掉的本次会话不再自动加回。
@@ -163,12 +167,13 @@ export function Watchlist() {
       if (document.hidden) return;
       setStockGroups(loadWatchGroups("stock"));
       setEtfGroups(loadWatchGroups("etf"));
+      refreshFundCount();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
-  }, []);
+  }, [refreshFundCount]);
 
-  const codes = useMemo(() => flattenWatchGroups(groups), [groups]);
+  const codes = useMemo(() => (collection === "fund" ? [] : flattenWatchGroups(groups)), [collection, groups]);
   const activeGroup = groups.find((group) => group.id === activeGroupId);
   const visibleCodes = activeGroupId === ALL_GROUPS ? codes : activeGroup?.codes || [];
   const groupByCode = useMemo(() => {
@@ -220,11 +225,11 @@ export function Watchlist() {
 
   const persist = (next: WatchGroup[]) => {
     if (collection === "stock") setStockGroups(next);
-    else setEtfGroups(next);
-    saveWatchGroups(next, collection);
+    else if (collection === "etf") setEtfGroups(next);
+    if (collection !== "fund") saveWatchGroups(next, collection);
   };
 
-  const switchCollection = (next: WatchCollection) => {
+  const switchCollection = (next: WatchCollection | "fund") => {
     setCollection(next);
     setActiveGroupId(ALL_GROUPS);
     setTargetGroupId(DEFAULT_WATCH_GROUP_ID);
@@ -235,6 +240,7 @@ export function Watchlist() {
     setHint(null);
     setOpenNoteCode(null);
     setNoteDraft("");
+    refreshFundCount();
   };
 
   const selectGroup = (id: string) => {
@@ -387,6 +393,7 @@ export function Watchlist() {
   };
 
   const aiContext = useMemo(() => {
+    if (collection === "fund") return "自选基金：估值与净值数据在下方列表中查看。";
     const populated = groups.filter((group) => group.codes.length > 0);
     const itemLabel = collection === "stock" ? "自选股" : "自选 ETF";
     if (populated.length === 0) return `还没有${itemLabel}。`;
@@ -412,25 +419,27 @@ export function Watchlist() {
     <div>
       <PageHeader
         title="自选"
-        subtitle="自选股与自选 ETF 分开管理"
+        subtitle="自选股 / 自选 ETF / 自选基金分开管理"
         actions={
           <div className="flex items-center gap-2">
-            <button
-              onClick={toggleLive}
-              title={live ? "关闭实时行情" : "开启实时行情（交易时段每 3 秒自动刷新）"}
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs transition-colors",
-                live
-                  ? "border-primary/50 bg-primary/10 text-primary"
-                  : "border-border/60 text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <span className="relative flex h-2 w-2">
-                {polling && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/70" />}
-                <span className={cn("relative inline-flex h-2 w-2 rounded-full", live ? "bg-primary" : "bg-muted-foreground/40")} />
-              </span>
-              实时行情
-            </button>
+            {collection !== "fund" && (
+              <button
+                onClick={toggleLive}
+                title={live ? "关闭实时行情" : "开启实时行情（交易时段每 3 秒自动刷新）"}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs transition-colors",
+                  live
+                    ? "border-primary/50 bg-primary/10 text-primary"
+                    : "border-border/60 text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <span className="relative flex h-2 w-2">
+                  {polling && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/70" />}
+                  <span className={cn("relative inline-flex h-2 w-2 rounded-full", live ? "bg-primary" : "bg-muted-foreground/40")} />
+                </span>
+                实时行情
+              </button>
+            )}
             {codes.length > 0 && (
               <AskAiButton
                 context={aiContext}
@@ -445,10 +454,11 @@ export function Watchlist() {
         }
       />
 
-      <div className="mb-4 grid max-w-md grid-cols-2 gap-2 rounded-xl border border-border/50 bg-muted/20 p-1.5">
+      <div className="mb-4 grid max-w-lg grid-cols-3 gap-2 rounded-xl border border-border/50 bg-muted/20 p-1.5">
         {([
           ["stock", "自选股", stockCount],
           ["etf", "自选 ETF", etfCount],
+          ["fund", "自选基金", fundCount],
         ] as const).map(([id, label, count]) => (
           <button
             key={id}
@@ -466,6 +476,10 @@ export function Watchlist() {
         ))}
       </div>
 
+      {collection === "fund" ? (
+        <FundWatchPanel onChange={refreshFundCount} />
+      ) : (
+        <>
       <GlassCard className="mb-4 p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -762,6 +776,8 @@ export function Watchlist() {
           </div>
         )}
       </GlassCard>
+        </>
+      )}
 
       {collection === "stock" && openNoteCode && createPortal(
         <div

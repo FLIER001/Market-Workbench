@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   BookOpen,
+  ChevronDown,
+  ChevronRight,
   CircleDollarSign,
   Gauge,
   RefreshCw,
@@ -9,11 +11,27 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { api, type SectorScoreRow, type SectorScoresData } from "@/lib/api";
+import {
+  api,
+  type SectorScoreRow,
+  type SectorScoresData,
+  type SwLevel2Data,
+  type SwLevel2Row,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type SortKey = "score" | "valuation" | "prosperity" | "attention" | "crowding";
 const LOCAL_CACHE_KEY = "vr-sector-scores-cache-v1";
+const LEVEL2_CACHE_KEY = "vr-sector-level2-cache-v1";
+
+const loadLevel2Cache = (): SwLevel2Data | null => {
+  try {
+    const cached = JSON.parse(localStorage.getItem(LEVEL2_CACHE_KEY) || "null");
+    return cached?.industries?.length > 0 ? (cached as SwLevel2Data) : null;
+  } catch {
+    return null;
+  }
+};
 
 const loadLocalCache = (): SectorScoresData | null => {
   try {
@@ -103,6 +121,98 @@ function MetricCard({
   );
 }
 
+function Level2SubTable({
+  rows,
+  asOf,
+  loading,
+  error,
+}: {
+  rows: SwLevel2Row[];
+  asOf: string | null;
+  loading: boolean;
+  error: string | null;
+}) {
+  if (loading && rows.length === 0) {
+    return (
+      <div className="flex items-center gap-2 px-2 py-6 text-xs text-muted-foreground">
+        <RefreshCw className="h-3.5 w-3.5 animate-spin text-primary" />
+        正在读取申万二级行业评分…
+      </div>
+    );
+  }
+  if (error && rows.length === 0) {
+    return <p className="px-2 py-4 text-xs text-danger">二级行业评分加载失败：{error}</p>;
+  }
+  if (rows.length === 0) {
+    return <p className="px-2 py-4 text-xs text-muted-foreground">该一级行业下暂无二级行业数据</p>;
+  }
+  return (
+    <div className="overflow-x-auto px-2 py-2">
+      <table className="w-full min-w-[860px] text-left text-[11px]">
+        <thead>
+          <tr className="text-[10px] text-muted-foreground/70">
+            <th className="px-2 py-1.5 font-medium">二级行业</th>
+            <th className="px-2 py-1.5 font-medium">综合</th>
+            <th className="px-2 py-1.5 font-medium">估值赔率</th>
+            <th className="px-2 py-1.5 font-medium">盈利景气</th>
+            <th className="px-2 py-1.5 font-medium">交易确认</th>
+            <th className="px-2 py-1.5 font-medium">集中风险</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border/30">
+          {rows.map((row) => (
+            <tr key={row.code} className="hover:bg-muted/10">
+              <td className="px-2 py-1.5">
+                <span className="font-medium">{row.name}</span>
+                <span className={cn("ml-1.5 font-mono", changeTone(row.latest_return))}>
+                  {signed(row.latest_return, "%")}
+                </span>
+              </td>
+              <td className="px-2 py-1.5">
+                <ScoreBar value={row.score} />
+                <span className={cn("mt-0.5 inline-block rounded px-1 py-0.5 text-[9px]", phaseTone[row.phase])}>
+                  {row.phase}
+                </span>
+              </td>
+              <td className="px-2 py-1.5">
+                <ScoreBar value={row.valuation.score} />
+                <div className="mt-0.5 text-[9px] text-muted-foreground">
+                  PE {format(row.valuation.pe)} / {format(row.valuation.pe_percentile, "%分位")}
+                  {" · "}PB {format(row.valuation.pb)} / {format(row.valuation.pb_percentile, "%分位")}
+                </div>
+              </td>
+              <td className="px-2 py-1.5">
+                <ScoreBar value={row.prosperity.score} />
+                <div className="mt-0.5 whitespace-nowrap text-[9px] text-muted-foreground">
+                  较3个月前 <span className={changeTone(row.prosperity.earnings_3m)}>{signed(row.prosperity.earnings_3m, "%")}</span>
+                  {" · "}较12个月前 <span className={changeTone(row.prosperity.earnings_yoy)}>{signed(row.prosperity.earnings_yoy, "%")}</span>
+                </div>
+              </td>
+              <td className="px-2 py-1.5">
+                <ScoreBar value={row.attention.score} />
+                <div className="mt-0.5 text-[9px] text-muted-foreground">
+                  换手 {format(row.attention.turnover_rate, "%")} / {format(row.attention.turnover_rate_percentile, "%分位")}
+                  {" · "}占比 {format(row.attention.turnover_share, "%")}
+                </div>
+              </td>
+              <td className="px-2 py-1.5">
+                <ScoreBar value={row.crowding.risk} risk />
+                <div className="mt-0.5 text-[9px] text-muted-foreground">
+                  扣 {format(row.crowding.penalty)}
+                  {row.data_quality.missing.length > 0 && ` · 缺${row.data_quality.missing.join("/")}`}
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="px-2 pb-1 pt-1.5 text-[10px] text-muted-foreground/60">
+        申万二级行业 · {asOf ? `${shortDate(asOf)} 日频` : ""} · 与一级评分同一公式，排名在 131 个二级行业内横向比较
+      </p>
+    </div>
+  );
+}
+
 export function SectorScoresPanel() {
   const [data, setData] = useState<SectorScoresData | null>(loadLocalCache);
   const [loading, setLoading] = useState(true);
@@ -110,6 +220,10 @@ export function SectorScoresPanel() {
   const [query, setQuery] = useState("");
   const [phase, setPhase] = useState("全部");
   const [sort, setSort] = useState<SortKey>("score");
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [level2, setLevel2] = useState<SwLevel2Data | null>(loadLevel2Cache);
+  const [level2Loading, setLevel2Loading] = useState(false);
+  const [level2Error, setLevel2Error] = useState<string | null>(null);
 
   const load = useCallback(async (refresh = false) => {
     setLoading(true);
@@ -119,7 +233,7 @@ export function SectorScoresPanel() {
       setData(next);
       saveLocalCache(next);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "板块评分加载失败");
+      setError(err instanceof Error ? err.message : "行业评分加载失败");
     } finally {
       setLoading(false);
     }
@@ -148,6 +262,61 @@ export function SectorScoresPanel() {
     // 仅在页面首次进入时执行；data 是启动瞬间的缓存快照。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const start = async () => {
+      if (!level2) {
+        try {
+          const cached = await api.sectorScoresLevel2Cache();
+          if (!cancelled && cached) {
+            setLevel2(cached);
+            try {
+              localStorage.setItem(LEVEL2_CACHE_KEY, JSON.stringify(cached));
+            } catch {
+              /* 忽略本地存储失败 */
+            }
+          }
+        } catch {
+          /* 无后端缓存时走正常加载 */
+        }
+      }
+      setLevel2Loading(true);
+      try {
+        const next = await api.sectorScoresLevel2(false);
+        if (cancelled) return;
+        setLevel2(next);
+        setLevel2Error(null);
+        try {
+          localStorage.setItem(LEVEL2_CACHE_KEY, JSON.stringify(next));
+        } catch {
+          /* 忽略本地存储失败 */
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setLevel2Error(err instanceof Error ? err.message : "二级行业指标加载失败");
+        }
+      } finally {
+        if (!cancelled) setLevel2Loading(false);
+      }
+    };
+    void start();
+    return () => {
+      cancelled = true;
+    };
+    // 仅首次进入加载；level2 为启动瞬间的缓存快照。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const level2ByLevel1 = useMemo(() => {
+    const grouped = new Map<string, SwLevel2Row[]>();
+    for (const row of level2?.industries || []) {
+      const list = grouped.get(row.level1_code) || [];
+      list.push(row);
+      grouped.set(row.level1_code, list);
+    }
+    return grouped;
+  }, [level2]);
 
   const phases = useMemo(() => {
     const values = new Set(data?.industries.map((row) => row.phase) || []);
@@ -183,7 +352,7 @@ export function SectorScoresPanel() {
   return (
     <div>
       <div className="mb-4 flex items-center justify-between gap-3">
-        <p className="text-xs text-muted-foreground">申万一级行业 · 最新交易日状态 × 月度历史锚</p>
+        <p className="text-xs text-muted-foreground">申万一级行业 · 最新交易日状态 × 月度历史锚 · 点击行业行展开二级行业指标</p>
         <button
           onClick={() => void load(true)}
           disabled={loading}
@@ -247,7 +416,7 @@ export function SectorScoresPanel() {
           </div>
           {data.is_intraday && (
             <div className="mb-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
-              当前为盘中快照，成交与换手尚未形成完整交易日，资本活跃和综合评分会随行情继续变化；收盘后重新计算得到完整日值。
+              当前为盘中快照，成交与换手尚未形成完整交易日，交易确认和综合评分会随行情继续变化；收盘后重新计算得到完整日值。
             </div>
           )}
           {data.current_source !== "tencent_constituent_aggregate" && data.aggregate_error && (
@@ -276,9 +445,9 @@ export function SectorScoresPanel() {
             <MetricCard icon={TrendingUp} label="景气权重" value={`${data.methodology.weights.prosperity}%`} note="较12个月前 70% + 较3个月前 30%" />
             <MetricCard
               icon={CircleDollarSign}
-              label="估值 / 活跃"
+              label="估值 / 交易确认"
               value={`${data.methodology.weights.valuation}% / ${data.methodology.weights.attention}%`}
-              note={`资本活跃使用近 ${data.daily_history_samples || "—"} 个交易日`}
+              note={`交易确认使用近 ${data.daily_history_samples || "—"} 个交易日`}
             />
           </div>
 
@@ -308,7 +477,7 @@ export function SectorScoresPanel() {
                   {sortButton("score", "综合")}
                   {sortButton("valuation", "估值")}
                   {sortButton("prosperity", "景气")}
-                  {sortButton("attention", "活跃")}
+                  {sortButton("attention", "确认")}
                   {sortButton("crowding", "低集中")}
                 </div>
               </div>
@@ -321,15 +490,33 @@ export function SectorScoresPanel() {
                       <th className="px-3 py-2.5 font-medium">综合</th>
                       <th className="px-3 py-2.5 font-medium">估值赔率</th>
                       <th className="px-3 py-2.5 font-medium">盈利景气</th>
-                      <th className="px-3 py-2.5 font-medium">资本活跃</th>
+                      <th className="px-3 py-2.5 font-medium">交易确认</th>
                       <th className="px-3 py-2.5 font-medium">集中风险</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/40">
-                    {rows.map((row) => (
-                      <tr key={row.code} className="transition-colors hover:bg-muted/20">
+                    {rows.map((row) => {
+                      const isOpen = expanded === row.code;
+                      const childRows = level2ByLevel1.get(row.code) || [];
+                      return (
+                      <Fragment key={row.code}>
+                      <tr
+                        className={cn(
+                          "cursor-pointer transition-colors hover:bg-muted/20",
+                          isOpen && "bg-muted/15",
+                        )}
+                        onClick={() => setExpanded(isOpen ? null : row.code)}
+                        aria-expanded={isOpen}
+                      >
                         <td className="px-4 py-2.5">
-                          <div className="font-medium">{row.name}</div>
+                          <div className="flex items-center gap-1.5 font-medium">
+                            {isOpen ? (
+                              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-primary" />
+                            ) : (
+                              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />
+                            )}
+                            {row.name}
+                          </div>
                           <div className="flex items-center gap-1.5 text-[10px]">
                             <span className="font-mono text-muted-foreground/60">{row.code}</span>
                             <span className={changeTone(row.latest_return)}>
@@ -372,7 +559,21 @@ export function SectorScoresPanel() {
                           </div>
                         </td>
                       </tr>
-                    ))}
+                      {isOpen && (
+                        <tr className="bg-muted/10">
+                          <td colSpan={6} className="px-4 py-1">
+                            <Level2SubTable
+                              rows={childRows}
+                              asOf={level2?.as_of || null}
+                              loading={level2Loading}
+                              error={level2Error}
+                            />
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
                 {rows.length === 0 && <p className="py-12 text-center text-sm text-muted-foreground">没有匹配行业</p>}

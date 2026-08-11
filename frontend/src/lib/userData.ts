@@ -49,6 +49,7 @@ export function setUserData(key: string, value: unknown): void {
 const MIGRATABLE_KEYS = [
   "watchlist", "watchlist-groups", "watchlist-notes",
   "etf-watchlist", "etf-watchlist-groups", "notes", "llm", "deep-analysis",
+  "fund-watchlist",
 ];
 
 // 检测本地有哪些数据可导入当前账号（本地有 & 云端还没有）。不自动推，由用户确认后再调 importLocalToAccount。
@@ -140,6 +141,7 @@ export function clearLocalUserData(): void {
 const SYNC_KEYS = new Set([
   "watchlist", "watchlist-groups", "watchlist-notes",
   "etf-watchlist", "etf-watchlist-groups", "notes", "llm", "deep-analysis",
+  "fund-watchlist",
 ]);
 
 export function syncKeyToBackend(localStorageKey: string, rawValue: string): void {

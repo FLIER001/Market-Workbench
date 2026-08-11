@@ -7,7 +7,8 @@ import { api, type LiquidityData, type LiquidityUsItem, type HistPoint, type Ind
 import { storageGet, storageSet, storageRemove } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 
-const CACHE_KEY = "vr-liquidity-v2";
+const CACHE_KEY = "vr-liquidity-v4";
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
 // ---- 缓存结构校验：localStorage 里可能是旧版格式，字段缺失会把渲染弄崩 ----
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -59,8 +60,9 @@ function loadCached(): LiquidityData | null {
   try {
     const raw = storageGet(CACHE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as LiquidityData;
-    if (isValidLiquidity(parsed)) return parsed;
+    const cached = JSON.parse(raw) as { savedAt?: number; data?: LiquidityData };
+    if (isNum(cached.savedAt) && Date.now() - cached.savedAt <= CACHE_TTL_MS &&
+        isValidLiquidity(cached.data ?? null)) return cached.data!;
     storageRemove(CACHE_KEY);
     return null;
   } catch {
@@ -95,6 +97,10 @@ function UsCard({ item }: { item: LiquidityUsItem }) {
         )}
       </div>
       <Sparkline data={item.hist} height={48} className="mt-2" valueSuffix={` ${item.unit}`} />
+      <p className={cn("mt-1 text-[9px]", item.stale ? "text-warning" : "text-muted-foreground/40")}>
+        {item.source ?? "数据源未标注"}{item.frequency ? ` · ${item.frequency}` : ""}
+        {item.stale ? ` · 缓存${item.fetched_at ? ` ${item.fetched_at}` : ""}` : ""}
+      </p>
     </GlassCard>
   );
 }
@@ -113,7 +119,7 @@ function CnMetric({ label, value, sub, hist, color }: {
   );
 }
 
-// 国内主力净流入卡片（三指数 + 合计）
+// 国内指数大单流向卡片（供应商口径，仅作辅助观察）
 function IndexFlowCard({ flow }: { flow: IndexFlow }) {
   if (!flow?.latest || !isNum(flow.latest.v)) return null;
   const latest = flow.latest;
@@ -125,11 +131,14 @@ function IndexFlowCard({ flow }: { flow: IndexFlow }) {
       </div>
       <p className={cn("font-mono text-xl font-bold", tone(latest.v))}>{yi(latest.v)}</p>
       <Sparkline data={flow.hist} height={44} className="mt-2" />
+      <p className={cn("mt-1 text-[9px]", flow.stale ? "text-warning" : "text-muted-foreground/40")}>
+        {flow.source ?? "供应商资金流口径"}{flow.stale ? " · 缓存" : ""}
+      </p>
     </GlassCard>
   );
 }
 
-// 美联储加息概率条
+// 目标利率上限阈值概率条
 function FedOddsBar({ strikes }: { strikes: { strike: number; prob: number }[] }) {
   const valid = (strikes ?? []).filter((s) => isNum(s?.strike) && isNum(s?.prob));
   if (valid.length === 0) return null;
@@ -158,20 +167,18 @@ function FedOddsBar({ strikes }: { strikes: { strike: number; prob: number }[] }
   );
 }
 
-// 综合指数卡片：分位 + 趋势 + 解读；点击卡片展开子指标（默认折叠），关联明细在卡片行下方的整行面板
-function IndexCard({ idx, open, onToggle, detail }: {
-  idx: CompositeIndex; open: boolean; onToggle: () => void; detail?: string;
+// 综合指数卡片：统一五档；仅 50 为中性。
+function IndexCard({ idx, open, onToggle }: {
+  idx: CompositeIndex; open: boolean; onToggle: () => void;
 }) {
-  // 分档 → 有利/不利/中性（按指数自身方向：favorable=low 分低有利，high 分高有利）
   if (!isNum(idx?.value)) return null;
-  const lowGood = idx.favorable !== "high";
-  const favorableZone = lowGood ? idx.value < 30 : idx.value > 70;
-  const unfavorableZone = lowGood ? idx.value > 70 : idx.value < 30;
-  const zoneColor = favorableZone ? "text-success" : unfavorableZone ? "text-danger" : "text-muted-foreground";
-  const zoneBg = favorableZone ? "bg-success/10" : unfavorableZone ? "bg-danger/10" : "bg-muted/20";
-  const zoneLabel = favorableZone ? "有利" : unfavorableZone ? "不利" : "中性";
+  const delta = idx.favorable === "high" ? idx.value - 50 : 50 - idx.value;
+  const zoneLabel = delta >= 20 ? "有利" : delta > 0 ? "偏多" : delta === 0 ? "中性" : delta > -20 ? "偏空" : "不利";
+  const zoneColor = delta > 0 ? "text-danger" : delta < 0 ? "text-success" : "text-muted-foreground";
+  const zoneBg = delta > 0 ? "bg-danger/10" : delta < 0 ? "bg-success/10" : "bg-muted/20";
+  const barColor = delta > 0 ? "bg-danger/60" : delta < 0 ? "bg-success/60" : "bg-primary/40";
   const comps = Array.isArray(idx.components) ? idx.components : [];
-  const expandable = comps.length > 0 || Boolean(detail);
+  const expandable = comps.length > 0;
   return (
     <GlassCard
       className={cn(
@@ -195,13 +202,17 @@ function IndexCard({ idx, open, onToggle, detail }: {
       {/* 分位条 */}
       <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted/20">
         <div
-          className={cn("h-full rounded-full transition-all", favorableZone ? "bg-success/60" : unfavorableZone ? "bg-danger/60" : "bg-primary/40")}
+          className={cn("h-full rounded-full transition-all", barColor)}
           style={{ width: `${idx.value}%` }}
         />
       </div>
       <p className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground/60">{idx.desc}</p>
       <Sparkline data={idx.hist} height={40} className="mt-2" />
       <p className="mt-1 text-[9px] text-muted-foreground/40">{idx.interpretation}</p>
+      <p className={cn("mt-1 text-[9px]", idx.stale ? "text-warning" : "text-muted-foreground/40")}>
+        {idx.source ?? "数据源未标注"}{idx.frequency ? ` · ${idx.frequency}` : ""}
+        {idx.stale ? ` · 缓存${idx.fetched_at ? ` ${idx.fetched_at}` : ""}` : ""}
+      </p>
       {open && comps.length > 0 && (
         <div className="mt-2 space-y-1 border-t border-border/40 pt-2">
           {comps.map((c) => (
@@ -209,7 +220,11 @@ function IndexCard({ idx, open, onToggle, detail }: {
               <div className="flex items-center gap-2 text-[10px]">
                 <span className="min-w-0 flex-1 truncate text-muted-foreground/70" title={c.label}>{c.label}</span>
                 <span className="shrink-0 font-mono text-muted-foreground">{c.value}</span>
-                <span className={cn("w-9 shrink-0 text-right font-mono", c.pct > 70 ? "text-danger" : c.pct < 30 ? "text-success" : "text-muted-foreground/60")}>
+                <span className={cn("w-9 shrink-0 text-right font-mono",
+                  (idx.favorable === "high" ? c.pct - 50 : 50 - c.pct) > 0
+                    ? "text-danger"
+                    : (idx.favorable === "high" ? c.pct - 50 : 50 - c.pct) < 0
+                      ? "text-success" : "text-muted-foreground/60")}>
                   {c.pct.toFixed(0)}
                 </span>
               </div>
@@ -218,11 +233,8 @@ function IndexCard({ idx, open, onToggle, detail }: {
               )}
             </div>
           ))}
-          <p className="pt-0.5 text-right text-[9px] text-muted-foreground/40">右列为各子指标分位</p>
+          <p className="pt-0.5 text-right text-[9px] text-muted-foreground/40">右列为仅使用当时可得数据计算的滚动分位</p>
         </div>
-      )}
-      {open && detail && (
-        <p className="mt-1.5 text-[9px] text-muted-foreground/40">{detail}明细见下方展开面板</p>
       )}
     </GlassCard>
   );
@@ -238,7 +250,10 @@ export function Liquidity() {
     setLoading(true);
     setErr(false);
     api.liquidity()
-      .then((d) => { setData(d); if (isValidLiquidity(d)) storageSet(CACHE_KEY, JSON.stringify(d)); })
+      .then((d) => {
+        setData(d);
+        if (isValidLiquidity(d)) storageSet(CACHE_KEY, JSON.stringify({ savedAt: Date.now(), data: d }));
+      })
       .catch(() => setErr(true))
       .finally(() => setLoading(false));
   };
@@ -250,10 +265,10 @@ export function Liquidity() {
   const fedOdds = data?.fed_odds;
   const usIndices = data?.us_indices ? Object.values(data.us_indices) : [];
 
-  const rateCards = us ? (["effr", "fed_target_u", "fed_target_l", "sofr", "dgs3m", "dgs2", "dgs10", "dgs30"]
+  const rateCards = us ? (["effr", "sofr", "tgcr", "iorb", "fed_target_u", "fed_target_l", "dgs3m", "dgs2", "dgs10", "dgs30"]
     .filter((k) => us[k]).map((k) => us[k])) : [];
   const spreadCards = us ? (["t10y3m", "t10y2y"].filter((k) => us[k]).map((k) => us[k])) : [];
-  const fedBalanceCards = us ? (["walcl", "rrp"].filter((k) => us[k]).map((k) => us[k])) : [];
+  const fedBalanceCards = us ? (["walcl", "reserves", "rrp", "tga"].filter((k) => us[k]).map((k) => us[k])) : [];
   const indexFlows = cnData?.index_flows ? Object.values(cnData.index_flows) : [];
   const cnIndices = data?.cn_indices ? Object.values(data.cn_indices) : [];
 
@@ -261,7 +276,7 @@ export function Liquidity() {
     <div>
       <PageHeader
         title="资金面"
-        subtitle="国内外重要流动性指标 · 含历史趋势与美联储利率"
+        subtitle="国内资金状态 · 美国金融条件"
         actions={
           <button onClick={load} className="text-muted-foreground hover:text-primary" title="刷新">
             <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
@@ -269,16 +284,20 @@ export function Liquidity() {
         }
       />
 
-      {err && !data && (
+      {err && (
         <GlassCard className="mb-6 p-6 text-center text-sm text-muted-foreground">
-          数据加载失败，请稍后重试。
+          本轮刷新失败。{data ? "当前仍显示本机短期缓存，请核对下方来源状态。" : "暂无可用缓存，请稍后重试。"}
         </GlassCard>
       )}
 
       {/* 后端回退到 last-good 缓存：数据仍展示，仅提示缓存时间；点右上角刷新重试 */}
       {data?.stale && (
         <GlassCard className="mb-6 flex items-center gap-2 border-warning/30 bg-warning/5 p-3 text-xs text-warning">
-          <span>数据源暂不可用，当前显示缓存数据{data.stale_since ? `（${data.stale_since}）` : ""}，稍后可点右上角刷新重试。</span>
+          <span>
+            {data.freshness?.stale_count ?? 0} 项数据源正在使用最近成功值
+            {data.stale_since ? `（最早缓存 ${data.stale_since}）` : ""}：
+            {(data.freshness?.stale_sources ?? []).slice(0, 4).map((x) => x.label).join("、") || "详见指标卡"}。
+          </span>
         </GlassCard>
       )}
 
@@ -287,21 +306,20 @@ export function Liquidity() {
         <>
           <div className="mb-3 flex items-center gap-2">
             <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
-              <Gauge className="h-4 w-4" /> 国内 · 综合指数
+              <Gauge className="h-4 w-4" /> 国内 · 资金状态
             </h3>
-            <span className="text-[11px] text-muted-foreground/50">多子指标加权合成 · 0-100 分位 · 各指数方向见卡片说明 · 点击卡片展开子指标与趋势图</span>
-            {data?.updated && <span className="ml-auto text-[11px] text-muted-foreground/50">{data.updated}</span>}
+            <span className="text-[11px] text-muted-foreground/50">0–100滚动分位 · 点击展开</span>
+            {data?.assembled_at && <span className="ml-auto text-[11px] text-muted-foreground/50">组装 {data.assembled_at}</span>}
           </div>
           <div className="mb-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             {cnIndices.map((idx) => (
               <IndexCard key={idx.label} idx={idx} open={openIdx === idx.label}
-                detail={idx.label === "杠杆情绪" ? "杠杆资金" : idx.label === "主力动量" ? "主力资金流" : undefined}
                 onToggle={() => setOpenIdx((cur) => (cur === idx.label ? null : idx.label))} />
             ))}
           </div>
 
           {/* 展开面板：杠杆资金明细（文字 + 趋势图），占满整行 */}
-          {openIdx === "杠杆情绪" && (
+          {openIdx === "杠杆温度" && (
             <GlassCard className="mb-3 p-4">
               <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                 <Droplets className="h-3.5 w-3.5" /> 杠杆资金
@@ -334,23 +352,14 @@ export function Liquidity() {
           )}
 
           {/* 展开面板：主力资金流明细（文字 + 趋势图），占满整行 */}
-          {openIdx === "主力动量" && (
+          {openIdx === "大单流向（辅助）" && (
             <GlassCard className="mb-3 p-4">
               <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                <Activity className="h-3.5 w-3.5" /> 主力资金流
-                <span className="font-normal text-muted-foreground/50">三大指数主力净流入 · 盘中实时（东财）</span>
+                <Activity className="h-3.5 w-3.5" /> 指数大单流向（辅助）
+                <span className="font-normal text-muted-foreground/50">供应商算法口径 · 指数成分重叠 · 不作全市场加总</span>
               </p>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {indexFlows.map((f) => <IndexFlowCard key={f.name} flow={f} />)}
-                {cnData?.total_main_net_yi != null && (
-                  <GlassCard className="p-4">
-                    <p className="text-xs text-muted-foreground">全市场合计</p>
-                    <p className={cn("mt-0.5 font-mono text-xl font-bold", tone(cnData.total_main_net_yi))}>
-                      {yi(cnData.total_main_net_yi)}
-                    </p>
-                    <p className="mt-0.5 text-[10px] text-muted-foreground/50">三大指数主力净流入加总</p>
-                  </GlassCard>
-                )}
               </div>
             </GlassCard>
           )}
@@ -364,9 +373,9 @@ export function Liquidity() {
         <>
           <div className="mb-3 flex items-center gap-2">
             <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
-              <Gauge className="h-4 w-4" /> 国外（美国）· 综合指数
+              <Gauge className="h-4 w-4" /> 美国 · 金融条件
             </h3>
-            <span className="text-[11px] text-muted-foreground/50">多子指标加权合成 · 0-100 分位 · 各指数方向见卡片说明 · 点击卡片展开子指标与趋势图</span>
+            <span className="text-[11px] text-muted-foreground/50">0–100滚动分位 · 点击展开</span>
           </div>
           <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             {usIndices.map((idx) => (
@@ -377,12 +386,12 @@ export function Liquidity() {
         </>
       )}
 
-      {/* 国外（美国）· 美联储加息概率 */}
+      {/* 美国 · 目标利率分布 */}
       {fedOdds && Array.isArray(fedOdds.strikes) && fedOdds.strikes.length > 0 && (
         <>
           <div className="mb-3 flex items-center gap-2">
             <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
-              <Landmark className="h-4 w-4" /> 美联储加息概率
+              <Landmark className="h-4 w-4" /> 美国 · 目标利率分布
             </h3>
             <span className="text-[11px] text-muted-foreground/50">
               {fedOdds.event}{fedOdds.meeting ? ` · ${fedOdds.meeting}` : ""} · Kalshi 市场
@@ -402,56 +411,37 @@ export function Liquidity() {
         </>
       )}
 
-      {/* 国外（美国）· 美联储利率 */}
+      {/* 美国 · 美联储利率 */}
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
-          <Landmark className="h-4 w-4" /> 国外（美国）· 美联储利率
+          <Landmark className="h-4 w-4" /> 美国 · 美联储利率
         </h3>
-        <span className="text-[11px] text-muted-foreground/50">联邦基金利率 / 目标区间上下限 / SOFR · FRED，近 1 年趋势</span>
+        <span className="text-[11px] text-muted-foreground/50">FRED · 近1年</span>
       </div>
       <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {rateCards.slice(0, 8).map((item) => <UsCard key={item.label} item={item} />)}
+        {rateCards.map((item) => <UsCard key={item.label} item={item} />)}
       </div>
 
-      {/* 国外（美国）· 利差 */}
+      {/* 美国 · 利差 */}
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
-          <TrendingUp className="h-4 w-4" /> 国外（美国）· 收益率曲线利差
+          <TrendingUp className="h-4 w-4" /> 美国 · 收益率曲线利差
         </h3>
-        <span className="text-[11px] text-muted-foreground/50">10Y−3M / 10Y−2Y · 倒挂为负（衰退信号）</span>
+        <span className="text-[11px] text-muted-foreground/50">10Y−3M / 10Y−2Y</span>
       </div>
       <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {spreadCards.map((item) => <UsCard key={item.label} item={item} />)}
-        <GlassCard className="p-4">
-          <p className="text-xs text-muted-foreground">曲线形态解读</p>
-          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/60">
-            10Y−3M 利差 {us?.t10y3m ? (us.t10y3m.value > 0 ? "为正（正常向上）" : "为负（倒挂，衰退信号）") : "—"}；
-            10Y−2Y 利差 {us?.t10y2y ? (us.t10y2y.value > 0 ? "为正" : "倒挂") : "—"}。
-            倒挂通常预示未来 12-18 个月经济衰退概率上升。
-          </p>
-        </GlassCard>
       </div>
 
       {/* 国外（美国）· 美联储资产负债表 */}
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
-          <TrendingDown className="h-4 w-4" /> 国外（美国）· 美联储资产负债表
+          <TrendingDown className="h-4 w-4" /> 美国 · 系统流动性与资产负债表
         </h3>
-        <span className="text-[11px] text-muted-foreground/50">总资产 / 隔夜逆回购 · FRED，近 1 年趋势</span>
+        <span className="text-[11px] text-muted-foreground/50">FRED · 总资产 / 准备金 / ON RRP / TGA</span>
       </div>
       <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {fedBalanceCards.map((item) => <UsCard key={item.label} item={item} />)}
-        <GlassCard className="p-4">
-          <p className="text-xs text-muted-foreground">缩表进程</p>
-          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground/60">
-            {us?.walcl && isNum(us.walcl.value) ? `总资产 ${fmt(us.walcl.value, " 亿")}，较 1 年前 ${
-              Array.isArray(us.walcl.hist) && us.walcl.hist.length > 1
-                ? `${us.walcl.hist[0].v > us.walcl.value ? "减少" : "增加"} ${fmt(Math.abs(us.walcl.hist[0].v - us.walcl.value), " 亿")}`
-                : "—"
-            }` : "—"}
-            。逆回购 {us?.rrp ? `${fmt(us.rrp.value, " 十亿$")}` : "—"} 反映市场过剩流动性。
-          </p>
-        </GlassCard>
       </div>
     </div>
   );

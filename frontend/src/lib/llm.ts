@@ -1,6 +1,7 @@
 // 用户 LLM 配置（只存本地 localStorage，不上传、不进仓库）+ 系统 AI 对话调用。
 
 import { storageSet, storageRemove } from "@/lib/storage";
+import { syncKeyToBackend } from "@/lib/userData";
 
 import { ApiError, authHeaders } from "./api";
 import { isCliProvider, type ProviderId } from "./ai-models";
@@ -39,11 +40,16 @@ export function loadLlm(): LlmConfig | null {
 }
 
 export function saveLlm(cfg: LlmConfig) {
-  storageSet(KEY, JSON.stringify(cfg));
+  const raw = JSON.stringify(cfg);
+  storageSet(KEY, raw);
+  // 登录后同步到后端，否则下次 pullBackendToLocal 会用后端旧值覆盖本地
+  syncKeyToBackend(KEY, raw);
 }
 
 export function clearLlm() {
   storageRemove(KEY);
+  // 登录后也清后端，避免 pullBackendToLocal 把旧配置又拉回来
+  syncKeyToBackend(KEY, JSON.stringify(null));
 }
 
 export function hasLlm(): boolean {

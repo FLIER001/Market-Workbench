@@ -116,3 +116,21 @@ def test_hk_cashflow_shape():
         assert "经营活动现金流净额" in cf["item_order"]
         assert {"report_date", "items", "currency"} <= set(cf["periods"][0])
     assert gstock.hk_cashflow("AAPL") == {}  # 美股不走此接口
+
+
+@pytest.mark.live
+def test_wgc_real_gold_reference_shape():
+    """Goldhub 应直接返回 ICE LBMA AM/PM 与 SGE PM，不接受推导代理。"""
+    from datetime import datetime, timedelta
+    import gold_score
+
+    end = datetime.now(gold_score.BEIJING).date()
+    start = end - timedelta(days=370)
+    raw = gold_score._curl(
+        f"{gold_score._WGC_REFERENCE}?startDate={start}&endDate={end}", timeout=30
+    ).decode("utf-8", "ignore")
+    rows = gold_score._parse_wgc_reference(raw)
+
+    assert all(len(rows.get(key, [])) >= 200 for key in (
+        "lbma_am_usd", "lbma_pm_usd", "sge_pm_cny"
+    ))

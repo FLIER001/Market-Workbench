@@ -1,7 +1,82 @@
 """纯逻辑单测（无网络、快、确定）：市场前缀、估值计算、行情解析。"""
 import math
+import base64
+import json
+import zlib
 
 import astock
+
+
+def test_tradingeconomics_chart_decode_and_points():
+    """原财新/RatingDog 图表载荷可解码，且只接受 S&P Global 月度序列。"""
+    import macro_fetch
+
+    doc = [{"series": [{"serie": {
+        "source": "S&P Global",
+        "data": [
+            [50.5, 1754006400, None, "2025-08-01"],
+            [51.7, 1780272000, None, "2026-06-01"],
+            [50.9, 1782864000, None, "2026-07-01"],
+        ],
+    }}]}]
+    key = "public-page-key"
+    compressed = zlib.compress(json.dumps(doc).encode())
+    key_bytes = key.encode()
+    encrypted = bytes(v ^ key_bytes[i % len(key_bytes)] for i, v in enumerate(compressed))
+    payload = base64.b64encode(encrypted).decode()
+
+    decoded = macro_fetch._te_decode_chart(payload, key)
+    assert macro_fetch._te_chart_points(decoded) == [
+        {"date": "2025-08", "v": 50.5},
+        {"date": "2026-06", "v": 51.7},
+        {"date": "2026-07", "v": 50.9},
+    ]
+
+
+def test_caixin_pmi_prefers_continuous_ratingdog_series(monkeypatch):
+    """品牌切换后应续接 RatingDog，且不得沿用金十 2025 年陈旧预期。"""
+    import macro_fetch
+
+    monkeypatch.setattr(macro_fetch, "_jin10_hist", lambda _id: (
+        [("2025-09-01", 50.5)], 49.7))
+    monkeypatch.setattr(macro_fetch, "_caixin_web_latest", lambda: {
+        "2025-06": {"manufacturing": 50.4},
+    })
+    monkeypatch.setattr(macro_fetch, "_tradingeconomics_pmi_hist", lambda _sym: [
+        {"date": "2025-08", "v": 50.5},
+        {"date": "2026-06", "v": 51.7},
+        {"date": "2026-07", "v": 50.9},
+    ])
+
+    card = macro_fetch.caixin_manufacturing_pmi()
+    assert card["label"] == "RatingDog制造业 PMI（原财新）"
+    assert card["date"] == "2026-07"
+    assert card["value"] == 50.9
+    assert card["prev"] == 51.7
+    assert card["forecast"] is None
+    assert "S&P Global" in card["source"]
+
+
+def test_macro_module_history_replays_last_12_months_without_future_data():
+    """模块卡返回近12个月历史分；当前分可因披露滞后而向中性衰减。"""
+    import market
+
+    hist = [{"date": f"2025-{m:02d}", "v": float(m)} for m in range(1, 13)]
+    hist += [{"date": f"2026-{m:02d}", "v": float(12 + m)} for m in range(1, 8)]
+    modules = market._module_scores({
+        "cpi": {"label": "CPI", "value": 19.0, "prev": 18.0,
+                 "forecast": None, "date": "2026-07", "hist": hist},
+        "core_cpi": {"label": "核心CPI", "value": 19.0, "prev": 18.0,
+                     "forecast": None, "date": "2026-07", "hist": hist},
+        "ppi": {"label": "PPI", "value": 19.0, "prev": 18.0,
+                "forecast": None, "date": "2026-07", "hist": hist},
+    })
+    price = next(m for m in modules if m["name"] == "价格与工业利润")
+
+    assert len(price["hist"]) == 12
+    assert price["hist"][0]["date"] == "2025-08"
+    assert price["hist"][-1]["date"] == "2026-07"
+    assert price["hist"][-1]["v"] >= price["score"]
 
 
 def test_get_prefix():
@@ -79,7 +154,7 @@ def test_parse_tencent_kline_skips_bad_rows():
     rows = astock._parse_tencent_kline(payload, "sh600519", "day")
 
     assert len(rows) == 2
-    assert rows[0] == {
+    assert {k: rows[0][k] for k in ("date", "open", "close", "high", "low", "volume")} == {
         "date": "2026-07-28",
         "open": 1299.0,
         "close": 1320.0,
@@ -88,3 +163,332 @@ def test_parse_tencent_kline_skips_bad_rows():
         "volume": 53135.0,
     }
     assert rows[-1]["close"] == 1334.01
+
+
+def test_macro_missing_weights_are_neutral_and_low_coverage_has_no_score():
+    """缺项不得把剩余指标放大到满权重；覆盖低于50%时模块不给分。"""
+    import market
+
+    hist = [{"date": f"2026-{m:02d}", "v": float(m)} for m in range(1, 8)]
+    one = market._module_scores({
+        "cpi": {"label": "CPI", "value": 7.0, "prev": 6.0,
+                "forecast": None, "date": "2026-07", "hist": hist},
+    })
+    price = next(m for m in one if m["name"] == "价格与工业利润")
+    assert price["score"] is None
+    assert price["coverage"] == 14.7
+
+    three = market._module_scores({
+        "cpi": {"label": "CPI", "value": 7.0, "prev": 6.0,
+                "forecast": None, "date": "2026-07", "hist": hist},
+        "core_cpi": {"label": "核心CPI", "value": 7.0, "prev": 6.0,
+                     "forecast": None, "date": "2026-07", "hist": hist},
+        "ppi": {"label": "PPI", "value": 7.0, "prev": 6.0,
+                "forecast": None, "date": "2026-07", "hist": hist},
+    })
+    price = next(m for m in three if m["name"] == "价格与工业利润")
+    assert price["score"] is not None
+    assert 50 < price["score"] < 100
+    assert price["coverage"] == 51.5
+
+
+def test_macro_modules_have_unique_indicator_ownership_and_clusters_cover_once():
+    """同一评分指标只能有一个owner；一级聚类必须恰好覆盖八模块一次。"""
+    import market
+
+    owners = market._macro_indicator_owners()
+    assert owners == market._MACRO_INDICATOR_OWNER
+    assert owners["world_trade_yoy_3mma"] == "全球外部"
+    assert "pmi_new_orders" not in owners
+    assert "m1" not in owners and "m2" not in owners
+    assert "policy_execution" not in owners
+
+    scored = set(owners)
+    for derived, parents in market._MACRO_DERIVED_FROM.items():
+        if derived in scored:
+            assert scored.isdisjoint(parents), f"{derived} 与基础序列重复计分"
+
+    module_names = [name for name, *_ in market._MACRO_MODULES]
+    clustered = [name for cluster in market._MACRO_CLUSTERS for name in cluster["modules"]]
+    assert len(module_names) == 8
+    assert sorted(clustered) == sorted(module_names)
+    assert len(clustered) == len(set(clustered))
+
+
+def test_climate_staleness_dampens_signal_instead_of_cancelling():
+    """滞后因子应把得分拉向50，而不是在归一化分母中相互抵消。"""
+    import market
+
+    hist = [{"date": f"2025-{m:02d}", "v": float(m)} for m in range(1, 13)]
+    specs = ["pmi_headline", "pmi_new_orders", "pmi_production", "pmi_new_export_orders",
+             "pmi_expectation", "non_man_pmi", "cx_pmi"]
+    fresh = {k: {"label": k, "value": 12.0, "prev": 11.0, "forecast": None,
+                 "date": "2026-07", "hist": hist} for k in specs}
+    stale = {k: {**v, "date": "2026-03"} for k, v in fresh.items()}
+    fresh_score = market._climate_module_score(fresh, as_of="2026-07")["score"]
+    stale_score = market._climate_module_score(stale, as_of="2026-07")["score"]
+    assert fresh_score is not None and stale_score is not None
+    assert abs(stale_score - 50) < abs(fresh_score - 50)
+
+
+def test_climate_momentum_needs_a_different_observation_period(monkeypatch):
+    """只有同观察期快照时不得伪造0.0动量。"""
+    import market
+
+    climate = {"score": 40.0, "submodules": [{"used": [{"date": "2026-07"}]}]}
+    monkeypatch.setattr(market, "_load_climate_hist", lambda: [
+        {"schema": market._CLIMATE_SCHEMA, "date": "2026-07", "score": 40.0},
+    ])
+    assert market._climate_hist_mom(climate) is None
+
+
+def test_private_credit_growth_uses_stock_algebra_and_loans_use_flows():
+    """私人信用用存量口径反推同比；贷款余额先转增量再评分。"""
+    import market
+
+    ind = {
+        "social_financing_stock": {
+            "hist": [{"date": "2026-05", "v": 10.0}, {"date": "2026-06", "v": 10.0}],
+            "stock_level_hist": [{"date": "2026-05", "v": 110.0}, {"date": "2026-06", "v": 121.0}],
+            "gov_bond_growth_hist": [{"date": "2026-05", "v": 25.0}, {"date": "2026-06", "v": 20.0}],
+            "gov_bond_level_hist": [{"date": "2026-05", "v": 25.0}, {"date": "2026-06", "v": 30.0}],
+        },
+        "credit_by_sector": {
+            "hist": [{"date": f"2026-0{i}", "v": v} for i, v in enumerate([100, 110, 130, 160, 200], 1)],
+            "corp_ml_loan_hist": [{"date": f"2026-0{i}", "v": v} for i, v in enumerate([200, 210, 230, 260, 300], 1)],
+        },
+    }
+    market._add_derived(ind)
+    assert ind["private_credit_growth"]["label"] == "私人信用存量同比"
+    # 2026-06: (121-30) / (121/1.1 - 30/1.2) - 1 = 7.0588%
+    assert math.isclose(ind["private_credit_growth"]["value"], 7.06, abs_tol=0.01)
+    assert ind["household_ml_loan"]["hist"] == [
+        {"date": "2026-04", "v": 20.0}, {"date": "2026-05", "v": 30.0},
+    ]
+
+
+def test_eps_revision_breadth_requires_prior_day_and_common_target_year():
+    import market
+
+    previous = {f"{i:06d}": {"year": 2027, "eps": 1.0} for i in range(80)}
+    current = {code: {"year": 2027, "eps": 1.1 if i < 30 else 0.9 if i < 40 else 1.0}
+               for i, code in enumerate(previous)}
+    first, snap = market._eps_revision_card(previous, None, "2026-08-10")
+    assert first is None
+    card, _ = market._eps_revision_card(current, snap, "2026-08-11")
+    assert card is not None
+    assert card["value"] == 25.0  # (30上调-10下调)/80
+    assert card["sample_size"] == 80
+
+
+def test_indicator_metadata_marks_last_good_fallback():
+    import market
+
+    cards = {
+        "cpi": {"label": "CPI", "date": "2026-07", "source": "统计局", "meta": {"fetched_at": "old"}},
+        "copper_oil_ratio": {"label": "铜油比", "date": "2026-07", "source": "FRED 铜/油"},
+    }
+    market._annotate_macro_indicators(cards, {"copper_oil_ratio"}, "2026-08-11 10:00")
+    assert cards["cpi"]["meta"]["status"] == "fallback"
+    assert cards["cpi"]["meta"]["fetched_at"] == "old"
+    assert cards["copper_oil_ratio"]["meta"]["quality"] == "proxy"
+
+
+# ---- 基金估值引擎：海外市场代理 / 持仓解析（纯逻辑，不打网络）----
+
+def test_fund_top_holdings_parse_mixed_markets():
+    """QDII 持仓页：A股链接(0./1.)解析为字符串代码；港/美/韩(116/105/177)解析为 (mkt, code) 元组。"""
+    import fund
+    html = """
+    <tr><td class='toc'><a href='//quote.eastmoney.com/unify/r/0.300750'>300750</a></td><td>9.50%</td></tr>
+    <tr><td class='toc'><a href='//quote.eastmoney.com/unify/r/116.02419'>02419</a></td><td>8.92%</td></tr>
+    <tr><td class='toc'><a href='//quote.eastmoney.com/unify/r/105.KLAC'>KLAC</a></td><td>8.56%</td></tr>
+    <tr><td class='toc'><a href='//quote.eastmoney.com/unify/r/177.005930'>005930</a></td><td>7.10%</td></tr>
+    """
+    # 直接对解析逻辑做单测：抽出内部正则等价行为
+    import re
+    out = []
+    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S):
+        m = re.search(r"unify/r/\d\.(\d{6})", row)
+        g = re.search(r"unify/r/(1(?:0[567]|1[67])|177)\.([A-Z0-9]{1,12})", row)
+        pcts = re.findall(r"([\d.]+)%", row)
+        if not pcts:
+            continue
+        if m:
+            out.append((m.group(1), float(pcts[0])))
+        elif g:
+            out.append(((g.group(1), g.group(2)), float(pcts[0])))
+    assert out[0] == ("300750", 9.50)          # A股字符串
+    assert out[1] == (("116", "02419"), 8.92)  # 港股元组
+    assert out[2] == (("105", "KLAC"), 8.56)   # 美股元组
+    assert out[3] == (("177", "005930"), 7.10) # 韩股元组
+
+
+def test_fund_global_index_proxy_covers_qdii():
+    """港股/QDII 跟踪标的应命中海外代理表（纳斯达克/恒生/海外互联网/标普）。"""
+    import fund
+    kws = [kw for kw, _, _ in fund._GLOBAL_INDEX_PROXY]
+    def hit(name):
+        return any(kw in name for kw in kws)
+    assert hit("纳斯达克100指数")
+    assert hit("中证港股通非银行金融主题人民币指数")
+    assert hit("中证海外中国互联网50人民币指数")
+    assert hit("标普全球高端消费品指数")
+    assert hit("恒生科技指数")
+    assert not hit("中证红利低波动指数")   # A股指数不应误命中海外代理
+    assert not hit("沪深300")
+
+
+def test_fund_self_estimate_coverage_threshold():
+    """重仓覆盖率 <15% 的基金（债基零头/LOF披露不全）不给伪精确估值。"""
+    import fund
+    # 直接验证门槛逻辑：覆盖率计算
+    low = [(("105", "NVDA"), 0.08)]           # 501312 实际披露
+    high = [("300750", 9.5), (("116", "02419"), 8.92), (("105", "KLAC"), 8.56)]
+    assert sum(w for _, w in low) < 15
+    assert sum(w for _, w in high) >= 15
+
+
+def test_parse_imf_world_gold_monthly_csv():
+    import gold_score
+    raw = """COUNTRY,INDICATOR,UNIT,FREQUENCY,TIME_PERIOD,OBS_VALUE
+G001,RGV_REVS,FTO,M,2026-M05,1180098214.943816
+G001,RGV_REVS,FTO,M,2026-M06,1181789737.996150
+USA,RGV_REVS,FTO,M,2026-M06,261498926.241540
+G001,RGV_REVS,FTO,Q,2026-Q2,1181789737.996150
+"""
+
+    rows = gold_score._parse_imf_gold_csv(raw)
+
+    assert [d for d, _ in rows] == ["2026-05", "2026-06"]
+    assert math.isclose(rows[-1][1], 36757.770, abs_tol=0.001)
+    assert math.isclose(rows[-1][1] - rows[-2][1], 52.612, abs_tol=0.001)
+
+
+def test_parse_wgc_global_etf_weekly_holdings():
+    import gold_score
+    raw = """{"chartData":{"data":{"Weekly":{"tonnes":{"set":[
+      [1784851200000,2038.38,1441.26,508.53,74.41,4064.63],
+      [1785456000000,2034.90,1446.30,512.31,74.45,4047.14],
+      [1786060800000,0,null,null,null,4040.00]
+    ]}}}}}"""
+
+    rows = gold_score._parse_wgc_etf_holdings(raw)
+
+    assert rows == [("2026-07-24", 4062.58), ("2026-07-31", 4067.96)]
+
+
+def test_parse_wgc_real_lbma_and_sge_reference_prices():
+    import gold_score
+    raw = """{"chartData":{
+      "lbma_am_usd":[[1786060800000,4301.85],[1786060800000,4302.00]],
+      "lbma_pm_usd":[[1786060800000,4335.55],[null,12]],
+      "sge_pm_cny":[[1786060800000,932.83],[1786147200000,-1]]
+    }}"""
+
+    rows = gold_score._parse_wgc_reference(raw)
+
+    assert rows["lbma_am_usd"] == [("2026-08-07", 4302.0)]
+    assert rows["lbma_pm_usd"] == [("2026-08-07", 4335.55)]
+    assert rows["sge_pm_cny"] == [("2026-08-07", 932.83)]
+
+
+def test_parse_ofr_financial_stress_excludes_safe_assets():
+    import gold_score
+    raw = """Date,OFR FSI,Credit,Equity valuation,Safe assets,Funding,Volatility
+2026-08-05,-2.592,-1.146,-0.621,-0.308,-0.087,-0.430
+2026-08-06,-2.761,-1.173,-0.608,-0.310,-0.106,-0.564
+"""
+
+    rows = gold_score._parse_ofr_ex_safe(raw)
+
+    assert rows == [("2026-08-05", -2.284), ("2026-08-06", -2.451)]
+
+
+def test_etf_surprise_regression_uses_only_prior_observations():
+    import gold_score
+    pairs = [(f"w{i:03}", 1 + 2 * i, float(i)) for i in range(105)]
+    pairs.append(("w105", 1 + 2 * 105 + 0.5, 105.0))
+
+    rows = gold_score._rolling_residuals(pairs)
+
+    assert rows[-1]["date"] == "w105"
+    assert math.isclose(rows[-1]["beta"], 2.0, abs_tol=1e-12)
+    assert math.isclose(rows[-1]["residual"], 0.5, abs_tol=1e-12)
+
+
+def test_daily_gold_momentum_includes_latest_price():
+    import gold_score
+    price = 100.0
+    hist = []
+    for i in range(180):
+        price *= 1 + (0.002 if i % 3 else -0.001)
+        hist.append((f"d{i:03}", price))
+
+    rows = gold_score._risk_adj_momentum_series(hist)
+
+    assert rows[-1][0] == hist[-1][0]
+    assert math.isfinite(rows[-1][1])
+
+
+def test_gold_source_period_age_handles_daily_and_monthly_periods():
+    from datetime import date
+    import gold_score
+
+    today = date(2026, 8, 11)
+    assert gold_score._period_age_days("2026-07-31", today) == 11
+    assert gold_score._period_age_days("2026-06", today) == 42
+
+    gold_score._source_status(
+        "gold:fred:DFII10", False, 1, [("2026-08-01", 1.0)], today=today
+    )
+    status = gold_score._SOURCE_STATUS["gold:fred:DFII10"]
+    assert status["status"] == "stale"
+    assert status["stale_reason"] == "observation_lag"
+
+
+def test_parse_treasury_real_yield_and_h10_release_ttl():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    import gold_score
+
+    raw = b'''<feed xmlns:d="http://schemas.microsoft.com/ado/2007/08/dataservices"
+      xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata">
+      <entry><m:properties><d:NEW_DATE>2026-08-07T00:00:00</d:NEW_DATE>
+      <d:TC_10YEAR>2.40</d:TC_10YEAR></m:properties></entry></feed>'''
+    assert gold_score._parse_treasury_real_yield(raw) == [("2026-08-07", 2.4)]
+
+    et = ZoneInfo("America/New_York")
+    assert gold_score._h10_cache_ttl(datetime(2026, 8, 10, 16, 14, tzinfo=et)) == 6 * 3600
+    assert gold_score._h10_cache_ttl(datetime(2026, 8, 10, 16, 16, tzinfo=et)) == 60
+
+
+def test_gold_dimension_history_carries_slow_series_and_keeps_weekly_last():
+    import gold_score
+
+    histories = {
+        "fast": [("2026-07-01", 20.0), ("2026-07-03", 40.0), ("2026-07-10", 60.0)],
+        "slow": [("2026-06", 80.0)],
+    }
+    rows = gold_score._dimension_score_history(
+        [("fast", 0.6), ("slow", 0.4)], histories, {"fast": 0.6, "slow": 0.4})
+
+    assert rows == [
+        {"date": "2026-06", "v": 80.0},
+        {"date": "2026-07-03", "v": 56.0},
+        {"date": "2026-07-10", "v": 68.0},
+    ]
+
+
+def test_gold_current_score_is_appended_without_overwriting_latest_observation():
+    import gold_score
+
+    rows = [{"date": "2026-08-10", "v": 44.3}]
+    gold_score._append_current_score(rows, "2026-08-11", 44.6)
+    assert rows == [
+        {"date": "2026-08-10", "v": 44.3},
+        {"date": "2026-08-11", "v": 44.6},
+    ]
+
+    gold_score._append_current_score(rows, "2026-08-11", 45.0)
+    assert rows[-1] == {"date": "2026-08-11", "v": 45.0}

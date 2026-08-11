@@ -2,17 +2,20 @@ import { useState } from "react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SectorAnalysis } from "@/pages/Sectors";
 import { SectorScoresPanel } from "@/pages/SectorScores";
+import { PlateScoresPanel } from "@/pages/PlateScores";
 import { cn } from "@/lib/utils";
 
-type SectorTab = "scores" | "analysis";
+type SectorTab = "plates" | "industries" | "analysis";
 
 const TAB_KEY = "vr-sector-tab";
 
 const loadTab = (): SectorTab => {
   try {
-    return localStorage.getItem(TAB_KEY) === "analysis" ? "analysis" : "scores";
+    const saved = localStorage.getItem(TAB_KEY);
+    if (saved === "industries" || saved === "analysis") return saved;
+    return "plates";
   } catch {
-    return "scores";
+    return "plates";
   }
 };
 
@@ -30,12 +33,13 @@ export function SectorHub() {
     <div>
       <PageHeader
         title="板块"
-        subtitle="板块评分与板块分析 · 申万行业打分、产业链环节与代表企业"
+        subtitle="板块评分 · 行业评分 · 板块分析"
       />
 
-      <div className="mb-4 grid max-w-md grid-cols-2 gap-2 rounded-xl border border-border/50 bg-muted/20 p-1.5">
+      <div className="mb-4 grid max-w-lg grid-cols-3 gap-2 rounded-xl border border-border/50 bg-muted/20 p-1.5">
         {([
-          ["scores", "板块评分"],
+          ["plates", "板块评分"],
+          ["industries", "行业评分"],
           ["analysis", "板块分析"],
         ] as const).map(([id, label]) => (
           <button
@@ -53,7 +57,7 @@ export function SectorHub() {
         ))}
       </div>
 
-      {tab === "scores" ? <SectorScoresPanel /> : <SectorAnalysis />}
+      {tab === "plates" ? <PlateScoresPanel /> : tab === "industries" ? <SectorScoresPanel /> : <SectorAnalysis />}
     </div>
   );
 }

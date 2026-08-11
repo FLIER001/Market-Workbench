@@ -38,9 +38,13 @@ export function Settings() {
       setModelName(id);
     }
     setBaseURL(PROVIDER_BASE[m.provider] || "");
+    // 换服务商/模型时清空 key，避免把上一家（或旧快照）的 key 带过去覆盖新配置
+    setApiKey("");
   };
 
   const saveApi = () => {
+    // 保存就是纯粹的"页面填什么存什么"——不做任何与已存值的"智能"合并，
+    // 否则旧 key 会被当成"最新值"写回，把用户刚输入的新 key 覆盖掉。
     if (!baseURL.trim() || !apiKey.trim() || !modelName.trim()) {
       toast.error("请填完 Base URL、API Key、Model");
       return;

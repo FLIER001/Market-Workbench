@@ -6,7 +6,7 @@ a-stock-data 腾讯个股行情按申万方法聚合，并统一在申万 2021 �
 
 - 估值赔率：最新 PE/PB 在本行业近 60 个月历史中的分位；
 - 盈利景气代理：最新指数点位 / PE 得到的隐含盈利因子，其 3 月、12 月变化；
-- 资本活跃度：最近约 30 个交易日内的换手率、成交额占比分位；
+- 交易确认：最近约 30 个交易日内的换手率、成交额占比分位，经非线性拥挤修正；
 - 集中风险：日频换手率与成交额占比同时处于近期高位时，只作扣分项。
 
 评分用于把不同量纲压到同一观察尺度。盈利景气是市场口径代理，并非行业实际
@@ -56,7 +56,7 @@ _FALLBACK_AGGREGATE_FILE = os.path.join(
 _TTL = 60 * 60
 _INTRADAY_TTL = 5 * 60
 _LOCK = threading.Lock()
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 _MAX_MONTHS = 60
 _CLASSIFICATION_START = date(2021, 7, 31)
 _HEADERS = {
@@ -136,10 +136,18 @@ def _rank(rows: list[dict], field: str) -> dict[str, float]:
         return {}
     if len(pairs) == 1:
         return {pairs[0][0]: 50.0}
-    return {
-        code: round(index / (len(pairs) - 1) * 100, 1)
-        for index, (code, _) in enumerate(pairs)
-    }
+    out = {}
+    index = 0
+    while index < len(pairs):
+        end = index + 1
+        while end < len(pairs) and pairs[end][1] == pairs[index][1]:
+            end += 1
+        average_rank = (index + end - 1) / 2
+        score = round(average_rank / (len(pairs) - 1) * 100, 1)
+        for offset in range(index, end):
+            out[pairs[offset][0]] = score
+        index = end
+    return out
 
 
 def _weighted(parts: list[tuple[float | None, float]]) -> float | None:
@@ -148,6 +156,13 @@ def _weighted(parts: list[tuple[float | None, float]]) -> float | None:
         return None
     total = sum(weight for _, weight in usable)
     return sum(value * weight for value, weight in usable) / total
+
+
+def _activity_confirmation(level: float | None) -> float | None:
+    """交易活跃度在约60分最有确认意义；过低无共识，过高转为拥挤。"""
+    if level is None:
+        return None
+    return level / 60 * 100 if level <= 60 else (100 - level) / 40 * 100
 
 
 def _request_json(url: str, params: dict) -> dict:
@@ -349,18 +364,15 @@ def _aggregate_tencent_snapshot(classification: dict) -> tuple[str, dict[str, di
             max(0.0, quote.get("amount_wan") or 0)
             for quote in industry_quotes
         )
-        float_shares_yi = sum(
-            float_cap(quote) / quote["price"]
-            for quote in industry_quotes
-        )
+        # 用流通市值加权个股换手率；按股数相加会让低价股因拆股单位不同而获得过高权重。
         turnover_rate = (
             sum(
                 max(0.0, quote.get("turnover_pct") or 0)
-                * (float_cap(quote) / quote["price"])
+                * float_cap(quote)
                 for quote in industry_quotes
             )
-            / float_shares_yi
-            if float_shares_yi > 0
+            / current_float_cap
+            if current_float_cap > 0
             else None
         )
         pe = _positive_harmonic(industry_quotes, "pe_static")
@@ -637,8 +649,6 @@ def build_scores_from_snapshots(
 
     earnings_3m_rank = _rank(raw, "earnings_3m")
     earnings_yoy_rank = _rank(raw, "earnings_yoy")
-    turnover_share_rank = _rank(raw, "turnover_share")
-
     rows = []
     for row in raw:
         code = row["code"]
@@ -646,21 +656,18 @@ def build_scores_from_snapshots(
             (earnings_yoy_rank.get(code), 0.7),
             (earnings_3m_rank.get(code), 0.3),
         ])
-        attention = _weighted([
-            (row.get("turnover_rate_percentile"), 0.45),
-            (row.get("turnover_share_percentile"), 0.35),
-            (turnover_share_rank.get(code), 0.2),
-        ])
-        crowding = _weighted([
+        activity_level = _weighted([
             (row.get("turnover_rate_percentile"), 0.5),
             (row.get("turnover_share_percentile"), 0.5),
         ])
+        attention = _activity_confirmation(activity_level)
+        crowding = activity_level
         base = _weighted([
             (row.get("valuation_score"), 0.3),
             (prosperity, 0.4),
             (attention, 0.3),
         ])
-        penalty = max(0.0, ((crowding or 0) - 80) * 0.5)
+        penalty = max(0.0, ((crowding or 0) - 80))
         score = (
             max(0.0, min(100.0, (base or 0) - penalty))
             if base is not None
@@ -687,7 +694,7 @@ def build_scores_from_snapshots(
         if prosperity is None:
             missing.append("盈利景气")
         if attention is None:
-            missing.append("资本活跃")
+            missing.append("交易确认")
         rows.append({
             "code": code,
             "name": row["name"],
@@ -713,6 +720,7 @@ def build_scores_from_snapshots(
                 "turnover_rate_percentile": row.get("turnover_rate_percentile"),
                 "turnover_share": row.get("turnover_share"),
                 "turnover_share_percentile": row.get("turnover_share_percentile"),
+                "activity_level": round(activity_level, 1) if activity_level is not None else None,
                 "daily_history_samples": row["activity_sample_count"],
             },
             "crowding": {
@@ -739,12 +747,12 @@ def build_scores_from_snapshots(
             "classification": "申万一级行业（2021版，31个行业）",
             "frequency": "当前值由申万成分分类叠加腾讯个股行情聚合；历史估值与景气锚使用申万月报；申万日频仅作备用",
             "weights": {"valuation": 30, "prosperity": 40, "attention": 30},
-            "penalty": "集中风险超过 80 分后，每超 1 分扣 0.5 分",
+            "penalty": "拥挤风险超过 80 分后，每超 1 分扣 1 分，最多扣 20 分",
             "definitions": [
                 "估值赔率：最近申万官方行业 PE/PB 按腾讯成分股流通市值涨幅滚动，并对比近 60 个月申万历史；PE 分位占 70%，PB 分位占 30%。",
                 "盈利景气代理：用行业指数点位 / PE 构造隐含盈利因子，分别与约 3 个月前、12 个月前的申万月报锚点比较并横向排名。",
-                "资本活跃度：成分股成交量/流通股本聚合换手率，其历史分位占 45%；行业成交额占全市场比例历史分位占 35%，当日行业排名占 20%。",
-                "集中风险：日换手率与成交额占比同时处于近期高位时扣分，不把高热度直接当作优势。",
+                "交易确认：换手率与行业成交额占比历史分位各半；活跃度约60分时确认度最高，过低表示共识不足，过高转为拥挤而不再正向加分。",
+                "拥挤风险：与交易确认共享原始数据但采用单调风险刻度，超过80分后每超1分扣1分。",
             ],
             "sources": [
                 {
@@ -831,7 +839,7 @@ def _build() -> dict:
     except Exception as error:
         aggregate_error = str(error)
 
-    # 申万日频只负责为资本活跃指标提供历史启动窗口；腾讯聚合快照优先覆盖同日数据。
+    # 申万日频只负责为交易确认指标提供历史启动窗口；腾讯聚合快照优先覆盖同日数据。
     daily_map = {day: rows for day, rows in sws_daily_snapshots}
     aggregate_cache = _load_aggregate_snapshots()
     if aggregate_day and aggregate_rows and aggregate_meta:

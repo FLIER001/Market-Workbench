@@ -10,12 +10,16 @@ interface Props {
   placeholder?: string;
   className?: string;
   disabled?: boolean;
+  /** 限定可选项（如仅当前持仓）：提供后不再走全局搜索，只在 options 内本地过滤 */
+  options?: SearchResult[];
+  /** options 模式下的匹配规则（代码/名称/首字母等由调用方决定），默认匹配代码或名称 */
+  filter?: (o: SearchResult, q: string) => boolean;
 }
 
 /** 券商式自动提示输入框：代码 / 中文 / 拼音首字母 → 下拉选择。
  *  下拉用 createPortal 挂到 document.body + fixed 定位，跳出父级 stacking context，
  *  避免被 GlassCard 等容器遮挡。 */
-export function StockSearchInput({ value, onChange, onPick, placeholder, className, disabled }: Props) {
+export function StockSearchInput({ value, onChange, onPick, placeholder, className, disabled, options, filter }: Props) {
   const [suggestions, setSuggestions] = useState<SearchResult[]>([]);
   const [showDrop, setShowDrop] = useState(false);
   const [hlIdx, setHlIdx] = useState(-1);
@@ -25,16 +29,22 @@ export function StockSearchInput({ value, onChange, onPick, placeholder, classNa
   const inputRef = useRef<HTMLInputElement>(null);
   const dropRef = useRef<HTMLDivElement>(null);
 
-  // debounce 300ms 自动搜索
+  // debounce 300ms 自动搜索；给了 options 则只在限定范围内本地过滤（代码/名称/拼音首字母）
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     const q = value.trim();
     if (!q) { setSuggestions([]); setShowDrop(false); return; }
+    if (options) {
+      const f = filter || ((o: SearchResult) => o.code.includes(q) || o.name.includes(q));
+      setSuggestions(options.filter((o) => f(o, q)));
+      setShowDrop(true);
+      return;
+    }
     debounceRef.current = setTimeout(() => {
       api.search(q).then(setSuggestions).catch(() => setSuggestions([]));
     }, 300);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, [value]);
+  }, [value, options]);
 
   // 点外部关闭下拉（portal 里的下拉也要算"内部"，否则点选项会先触发关闭）
   useEffect(() => {

@@ -1,11 +1,14 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { ShieldCheck, RefreshCw, Loader2, Trash2, AlertCircle, ChevronsUpDown, ChevronUp, ChevronDown, LineChart } from "lucide-react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
+import { RefreshCw, Loader2, Trash2, AlertCircle, X, ChevronsUpDown, ChevronUp, ChevronDown, LineChart } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { StockSearchInput } from "@/components/ui/StockSearchInput";
+import { FundPortfolioPanel } from "@/components/funds/FundPortfolioPanel";
 import { isTradingHours } from "@/hooks/useLiveQuotes";
-import { api, ApiError, type PortfolioData, type Holding, type TimingSignal } from "@/lib/api";
+import { useSWR } from "@/hooks/useSWR";
+import { api, ApiError, type PortfolioData, type Holding, type TimingSignal, type FundPortfolioData } from "@/lib/api";
 import { publishHoldingCodes } from "@/hooks/useHoldingCodes";
 import { cn } from "@/lib/utils";
 
@@ -36,12 +39,27 @@ const SIGNAL_STYLE: Record<string, string> = {
 };
 
 export function Portfolio() {
-  const [data, setData] = useState<PortfolioData | null>(null);
+  // 子栏目：场内证券（股票/ETF 持仓）与场外基金（公募基金持仓）分开记账
+  const [kind, setKind] = useState<"securities" | "fund">("securities");
   const [err, setErr] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
+  const onLoadError = useCallback((e: unknown) => {
+    setErr(e instanceof ApiError ? e.message : "加载失败");
+  }, []);
+  const { data, setData, revalidating: refreshing, revalidate } = useSWR<PortfolioData>(
+    "portfolio",
+    () => api.portfolio(),
+    [],
+    onLoadError,
+    { persist: true },
+  );
+  // 场外基金数据：与 FundPortfolioPanel 共用 key，秒开 + 并发去重；这里仅用于 tab 计数与 AI 上下文
+  const { data: fundPortfolio, revalidating: fundRefreshing, revalidate: revalidateFund } = useSWR<FundPortfolioData>("fund:portfolio", () => api.fundPortfolio(), [], undefined, { persist: true });
+  // 页面头部的「刷新」在场外子栏目时通过信号转发给 FundPortfolioPanel 执行
+  const [fundRefreshTick, setFundRefreshTick] = useState(0);
   const [code, setCode] = useState("");
   const [shares, setShares] = useState("");
   const [cost, setCost] = useState("");
+  const sharesRef = useRef<HTMLInputElement>(null);
   const [, setAdding] = useState(false);
   // 清仓录入
   const [cCode, setCCode] = useState("");
@@ -54,6 +72,36 @@ export function Portfolio() {
   // 择时信号：随持仓加载后懒拉一次；展开某只看规则细节
   const [signals, setSignals] = useState<Record<string, TimingSignal>>({});
   const [openSignal, setOpenSignal] = useState<string | null>(null);
+  // 清仓弹窗状态
+  const [closeTarget, setCloseTarget] = useState<string | null>(null);
+
+  const todayStr = () => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  };
+
+  // 打开清仓弹窗：自动填充当天日期、现价、全部股数
+  const openClose = (c: string) => {
+    const h = data?.holdings.find((x) => x.code === c);
+    setCCode(c);
+    setCDate(todayStr());
+    setCPrice(h ? fmtPx(h.price) : "");
+    setCShares(h ? String(h.shares) : "");
+    setCloseTarget(c);
+    setErr(null);
+  };
+
+  // 快捷选择清仓股数：全部 / 1/2 / 1/3 / 1/4（按当前持仓总股数计算）
+  const pickCloseShares = (fraction: 1 | 2 | 3 | 4) => {
+    const h = data?.holdings.find((x) => x.code === closeTarget);
+    if (!h) return;
+    const value = fraction === 1 ? h.shares : h.shares / fraction;
+    setCShares(String(parseFloat(value.toFixed(2))));
+  };
+
+  const closeClose = () => {
+    setCloseTarget(null); setCCode(""); setCDate(""); setCPrice(""); setCShares("");
+  };
 
   // 持仓代码广播给自选等页面（自动并入自选 + 持仓标注）
   useEffect(() => {
@@ -61,27 +109,30 @@ export function Portfolio() {
   }, [data]);
 
   const load = useCallback(async (manual = false) => {
-    if (manual) setRefreshing(true);
-    try {
-      const d = manual ? await api.refreshPortfolio() : await api.portfolio();
-      setData(d);
-      setErr(null);
-      if (d.holdings.length > 0) {
-        api.portfolioTiming()
-          .then((r) => setSignals(r.signals || {}))
-          .catch(() => { /* 信号失败不影响持仓主数据 */ });
-      } else {
-        setSignals({});
-      }
-    } catch (e) {
-      setErr(e instanceof ApiError ? e.message : "加载失败");
-    } finally {
-      if (manual) setRefreshing(false);
-    }
-  }, []);
+    await revalidate(manual);
+    api.portfolioTiming()
+      .then((r) => setSignals(r.signals || {}))
+      .catch(() => { /* 信号失败不影响持仓主数据 */ });
+  }, [revalidate]);
 
   useEffect(() => {
-    load();
+    if (data) setErr(null);
+  }, [data]);
+
+  const holdingCodes = data?.holdings.map((h) => h.code).join(",") || "";
+  useEffect(() => {
+    if (!holdingCodes) {
+      setSignals({});
+      return;
+    }
+    let alive = true;
+    api.portfolioTiming()
+      .then((r) => { if (alive) setSignals(r.signals || {}); })
+      .catch(() => { /* 信号失败不影响持仓主数据 */ });
+    return () => { alive = false; };
+  }, [holdingCodes]);
+
+  useEffect(() => {
     // 定时刷新只在「A股交易时段 + 页面在前台」时执行：收盘后/切到后台时持仓盈亏不变，不必刷。
     const tick = () => {
       if (!document.hidden && isTradingHours()) load();
@@ -109,6 +160,17 @@ export function Portfolio() {
     }
   };
 
+  // 下拉选中股票后：拉取最新行情填成本价，光标跳转到数量框
+  const pickStock = (c: string) => {
+    setCode(c);
+    api.quote(c).then((quotes) => {
+      const q = quotes[c];
+      if (q && q.price) setCost(fmtPx(q.price));
+    }).catch(() => {});
+    // 光标跳到数量输入框（等 DOM 更新后）
+    setTimeout(() => sharesRef.current?.focus(), 100);
+  };
+
   const remove = async (c: string) => {
     try { setData(await api.removeHolding(c)); } catch { /* ignore */ }
   };
@@ -123,7 +185,7 @@ export function Portfolio() {
     try {
       // 成本不传：后端用添加持仓时录入的成本计算已实现盈亏，并从当前持仓扣减股数
       setData(await api.closePosition(c, cDate, p, s));
-      setCCode(""); setCDate(""); setCPrice(""); setCShares("");
+      closeClose();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "添加清仓记录失败");
     } finally {
@@ -158,35 +220,82 @@ export function Portfolio() {
   };
 
   const aiContext = totals
-    ? `我的持仓（本地数据）：\n` + holdings.map((h) => `${h.name}(${h.code}) ${h.shares}股 成本${h.cost} 现价${h.price} 浮盈${h.pnl}(${h.pnl_pct}%)`).join("\n") +
+    ? `【场内证券】（本地数据）：\n` + holdings.map((h) => `${h.name}(${h.code}) ${h.shares}股 成本${h.cost} 现价${h.price} 浮盈${h.pnl}(${h.pnl_pct}%)`).join("\n") +
       `\n汇总：市值${totals.market_value} 总浮盈${totals.pnl}(${totals.pnl_pct}%)`
-    : "我的持仓：暂无记录。";
+    : "【场内证券】：暂无记录。";
+  // 整体持仓上下文：场内证券 + 场外基金合并给 AI
+  const combinedAiContext = [
+    aiContext,
+    "",
+    "【场外基金】",
+    fundPortfolio && fundPortfolio.holdings.length > 0
+      ? fundPortfolio.holdings.map((h) => `${h.name}(${h.code}) ${h.shares}份 成本${h.cost} 净值${h.nav} 浮盈${h.pnl}(${h.pnl_pct}%)`).join("\n") +
+        `\n汇总：市值${fundPortfolio.totals.market_value} 总浮盈${fundPortfolio.totals.pnl}(${fundPortfolio.totals.pnl_pct}%)`
+      : "暂无记录。",
+    "",
+    "整体汇总：场内市值 " + (totals?.market_value ?? 0) +
+      " + 场外市值 " + (fundPortfolio?.totals.market_value ?? 0) +
+      " = " + fmt((totals?.market_value ?? 0) + (fundPortfolio?.totals.market_value ?? 0)) +
+      "；总浮盈 " + fmt((totals?.pnl ?? 0) + (fundPortfolio?.totals.pnl ?? 0)),
+  ].join("\n");
+  const hasAnyHolding = (holdings.length > 0 || (fundPortfolio?.holdings.length ?? 0) > 0);
 
   return (
     <div>
       <PageHeader
         title="持仓"
-        subtitle="自己录、存在本地，实时看浮动盈亏"
+        subtitle="场内证券 / 场外基金分开记账，行情实时计算"
         actions={
           <div className="flex items-center gap-2">
-            {holdings.length > 0 && (
-              <AskAiButton context={aiContext} taskId="portfolio" label="让 AI 看我的持仓"
-                suggestions={["我的持仓集中在哪些方向", "结构上有什么风险", "帮我梳理一下"]} />
+            {hasAnyHolding && (
+              <AskAiButton context={combinedAiContext} taskId="portfolio" label="让 AI 看我的整体持仓"
+                suggestions={["整体持仓集中在哪些方向", "场内场外结构上有什么风险", "帮我梳理一下"]} />
             )}
-            <button onClick={() => load(true)} disabled={refreshing}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50">
-              {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            <button
+              onClick={() => {
+                if (kind === "securities") {
+                  load(true);
+                } else {
+                  setFundRefreshTick((t) => t + 1);
+                  revalidateFund(true);
+                }
+              }}
+              disabled={kind === "securities" ? refreshing : fundRefreshing}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
+            >
+              {(kind === "securities" ? refreshing : fundRefreshing) ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               刷新
             </button>
           </div>
         }
       />
 
-      <div className="mb-4 flex items-start gap-2 rounded-lg border border-success/25 bg-success/5 p-3 text-xs text-muted-foreground">
-        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />
-        <span>持仓<b className="text-foreground">只存在你本地</b>，不上传、不进仓库。行情每半小时自动刷新，也可手动刷新。「择时」列按你的中短期择时策略文档用规则计算，供执行纪律参考，非投资建议。</span>
+      {/* 子栏目切换：场内证券 / 场外基金（风格同自选栏目） */}
+      <div className="mb-4 grid max-w-lg grid-cols-2 gap-2 rounded-xl border border-border/50 bg-muted/20 p-1.5">
+        {([
+          ["securities", "场内证券", holdings.length],
+          ["fund", "场外基金", fundPortfolio?.holdings.length ?? 0],
+        ] as const).map(([id, label, count]) => (
+          <button
+            key={id}
+            onClick={() => setKind(id)}
+            className={cn(
+              "flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors",
+              kind === id
+                ? "bg-primary/15 text-primary shadow-sm"
+                : "text-muted-foreground hover:bg-muted/40 hover:text-foreground",
+            )}
+          >
+            {label}
+            <span className="rounded-full bg-background/50 px-1.5 py-0.5 text-[10px] opacity-70">{count}</span>
+          </button>
+        ))}
       </div>
 
+      {kind === "fund" ? (
+        <FundPortfolioPanel refreshSignal={fundRefreshTick} />
+      ) : (
+      <>
       {/* 汇总 */}
       {totals && holdings.length > 0 && (
         <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
@@ -205,72 +314,27 @@ export function Portfolio() {
         </div>
       )}
 
-      {/* 录入：添加持仓 / 添加清仓记录，并列放在持仓明细上方 */}
-      <div className="mb-4 grid gap-4 lg:grid-cols-[3fr_4fr]">
-        <GlassCard>
-          <h3 className="mb-3 text-sm font-semibold">添加持仓</h3>
-          <div className="flex flex-wrap items-end gap-1.5">
-            <div>
-              <label className="mb-1 block text-xs text-muted-foreground">股票代码</label>
-              <StockSearchInput value={code} onChange={setCode} onPick={(c) => add(c)} placeholder="代码 / 中文 / 首字母" className="w-28" />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-muted-foreground">数量（股）</label>
-              <input value={shares} onChange={(e) => setShares(e.target.value.replace(/[^\d.]/g, ""))} placeholder="如 100"
-                className="w-20 rounded-lg border border-border bg-black/20 px-2.5 py-2 text-sm outline-none focus:border-primary/50" />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-muted-foreground">成本价</label>
-              <input value={cost} onChange={(e) => setCost(e.target.value.replace(/[^\d.-]/g, "").replace(/(?!^)-/g, ""))} placeholder="如 12.5，可负"
-                className="w-24 rounded-lg border border-border bg-black/20 px-2.5 py-2 text-sm outline-none focus:border-primary/50" />
-            </div>
-            <button onClick={() => add()}
-              className="rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">
-              添加
-            </button>
-          </div>
-          <p className="mt-2 text-[11px] text-muted-foreground/60">同一代码再次添加会按加权平均成本合并（加仓）。</p>
-        </GlassCard>
-
-        <GlassCard className="overflow-x-auto">
-          <h3 className="mb-3 text-sm font-semibold">添加清仓记录</h3>
-          <div className="flex flex-nowrap items-end gap-1.5">
-            <div>
-              <label className="mb-1 block text-xs text-muted-foreground">股票代码</label>
-              <StockSearchInput value={cCode} onChange={setCCode} onPick={(c) => addClose(c)} placeholder="代码 / 中文 / 首字母" className="w-32" />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-muted-foreground">清仓日期</label>
-              <input type="date" value={cDate} onChange={(e) => setCDate(e.target.value)}
-                className="rounded-lg border border-border bg-black/20 px-2 py-2 text-sm outline-none focus:border-primary/50" />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-muted-foreground">清仓价</label>
-              <input value={cPrice} onChange={(e) => setCPrice(e.target.value.replace(/[^\d.]/g, ""))} placeholder="卖出价"
-                className="w-20 rounded-lg border border-border bg-black/20 px-2.5 py-2 text-sm outline-none focus:border-primary/50" />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-muted-foreground">股数</label>
-              <input value={cShares} onChange={(e) => setCShares(e.target.value.replace(/[^\d.]/g, ""))} placeholder="如 100"
-                className="w-20 rounded-lg border border-border bg-black/20 px-2.5 py-2 text-sm outline-none focus:border-primary/50" />
-            </div>
-            <button onClick={() => addClose()}
-              className="rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">
-              添加
-            </button>
-          </div>
-          <p className="mt-2 text-[11px] text-muted-foreground/60">成本自动取添加持仓时录入的买入成本，股数会同步从当前持仓扣减。</p>
-        </GlassCard>
-      </div>
-
-      {err && (
-        <div className="mb-4 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-          <AlertCircle className="h-4 w-4 shrink-0" /> {err}
+      {/* 录入：添加持仓（内联条，同场外基金风格） */}
+      {/* 录入：添加持仓（内联条，同场外基金风格） */}
+      <GlassCard className="relative z-10 mb-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <StockSearchInput value={code} onChange={setCode} onPick={pickStock} placeholder="搜股票 / ETF：代码 / 中文 / 首字母" className="w-64" />
+          <input value={shares} onChange={(e) => setShares(e.target.value.replace(/[^\d.]/g, ""))} placeholder="数量（股）"
+                 ref={sharesRef}
+                 className="w-28 rounded-xl border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/60" />
+          <input value={cost} onChange={(e) => setCost(e.target.value.replace(/[^\d.-]/g, "").replace(/(?!^)-/g, ""))} placeholder="成本价，可负"
+                 className="w-28 rounded-xl border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/60" />
+          <button onClick={() => add()} className="rounded-xl bg-primary/80 px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:bg-primary">
+            添加
+          </button>
         </div>
-      )}
+        {err && (
+          <div className="mt-3 flex items-center gap-2 text-sm text-danger"><AlertCircle className="h-4 w-4 shrink-0" /> {err}</div>
+        )}
+      </GlassCard>
 
       {/* 持仓表 */}
-      <GlassCard glow>
+      <GlassCard glow className="mb-4">
         <div className="mb-2 flex items-center justify-between">
           <h3 className="font-semibold">持仓明细</h3>
           {data?.updated && <span className="text-xs text-muted-foreground/60">更新于 {data.updated}</span>}
@@ -306,7 +370,8 @@ export function Portfolio() {
                   <SignalRows key={h.code} h={h} sig={signals[h.code]}
                     open={openSignal === h.code}
                     onToggle={() => setOpenSignal(openSignal === h.code ? null : h.code)}
-                    onRemove={() => remove(h.code)} />
+                    onRemove={() => remove(h.code)}
+                    onClose={() => openClose(h.code)} />
                 ))}
               </tbody>
             </table>
@@ -314,16 +379,97 @@ export function Portfolio() {
         )}
       </GlassCard>
 
-      {/* 已清仓列表 */}
-      <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-muted-foreground">已清仓</h3>
-        {closed.length > 0 && data && (
-          <span className="text-sm">
-            已实现盈亏合计 <b className={cn("font-mono", pnlColor(data.realized_pnl))}>{data.realized_pnl > 0 ? "+" : ""}{fmt(data.realized_pnl)}</b>
-          </span>
-        )}
-      </div>
-      <GlassCard>
+      {/* 清仓弹窗：屏幕中央 */}
+      {closeTarget && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeClose();
+          }}
+          role="presentation"
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="securities-close-title"
+            className="w-full max-w-md rounded-2xl border border-border/70 bg-background/95 p-5 shadow-2xl"
+          >
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <h3 id="securities-close-title" className="text-base font-semibold">清仓</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {data?.holdings.find((x) => x.code === closeTarget)?.name || closeTarget} ·{" "}
+                  <span className="font-mono">{closeTarget}</span>
+                </p>
+              </div>
+              <button onClick={closeClose} className="rounded-md p-1 text-muted-foreground hover:bg-muted/60 hover:text-foreground" title="关闭">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3.5">
+              <div className="grid grid-cols-3 gap-2.5">
+                <label className="block">
+                  <span className="mb-1 block text-xs text-muted-foreground">清仓日期</span>
+                  <input type="date" value={cDate} onChange={(e) => setCDate(e.target.value)}
+                         className="w-full rounded-xl border border-border bg-muted/20 px-2.5 py-2 text-sm outline-none focus:border-primary/60" />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-muted-foreground">清仓价</span>
+                  <input value={cPrice} onChange={(e) => setCPrice(e.target.value.replace(/[^\d.]/g, ""))} placeholder="卖出价"
+                         className="w-full rounded-xl border border-border bg-muted/20 px-2.5 py-2 text-sm font-mono outline-none focus:border-primary/60" />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs text-muted-foreground">股数</span>
+                  <input value={cShares} onChange={(e) => setCShares(e.target.value.replace(/[^\d.]/g, ""))} placeholder="如 100"
+                         className="w-full rounded-xl border border-border bg-muted/20 px-2.5 py-2 text-sm font-mono outline-none focus:border-primary/60" />
+                </label>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] text-muted-foreground">快捷股数：</span>
+                {([
+                  [1, "全部"],
+                  [2, "1/2"],
+                  [3, "1/3"],
+                  [4, "1/4"],
+                ] as const).map(([fraction, label]) => (
+                  <button
+                    key={fraction}
+                    onClick={() => pickCloseShares(fraction)}
+                    className="rounded-lg border border-border/60 bg-muted/20 px-2.5 py-1 text-xs text-muted-foreground transition hover:border-primary/50 hover:text-primary"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {err && (
+                <div className="flex items-center gap-2 text-sm text-danger">
+                  <AlertCircle className="h-4 w-4 shrink-0" /> {err}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 border-t border-border/40 pt-3">
+                <button onClick={closeClose} className="h-8 rounded-lg px-3 text-xs text-muted-foreground hover:bg-muted/50">取消</button>
+                <button onClick={() => addClose()} className="h-8 rounded-lg bg-primary/80 px-4 text-xs font-semibold text-primary-foreground transition hover:bg-primary">确认清仓</button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* 已清仓列表：和持仓明细一样，标题放进卡片内 */}
+      <GlassCard className="mb-4">
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="font-semibold">已清仓</h3>
+          {closed.length > 0 && data && (
+            <span className="text-sm">
+              已实现盈亏合计 <b className={cn("font-mono", pnlColor(data.realized_pnl))}>{data.realized_pnl > 0 ? "+" : ""}{fmt(data.realized_pnl)}</b>
+            </span>
+          )}
+        </div>
         {closed.length === 0 ? (
           <p className="py-6 text-center text-sm text-muted-foreground/60">还没有清仓记录。卖出后在上面记一笔，作为已实现盈亏的历史。</p>
         ) : (
@@ -331,7 +477,7 @@ export function Portfolio() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border/50 text-left text-xs text-muted-foreground">
-                  {["名称", "清仓日期", "清仓价", "股数", "成本", "已实现盈亏", "盈亏%", ""].map((h) => (
+                  {["名称", "清仓日期", "清仓价", "股数", "成本", "已实现盈亏", "盈亏%", "清仓后", ""].map((h) => (
                     <th key={h} className="whitespace-nowrap px-2 py-2 font-medium">{h}</th>
                   ))}
                 </tr>
@@ -349,6 +495,9 @@ export function Portfolio() {
                     <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmtPx(c.cost)}</td>
                     <td className={cn("px-2 py-2.5 font-mono", pnlColor(c.pnl))}>{c.pnl > 0 ? "+" : ""}{fmt(c.pnl)}</td>
                     <td className={cn("px-2 py-2.5 font-mono", pnlColor(c.pnl))}>{c.pnl_pct > 0 ? "+" : ""}{c.pnl_pct}%</td>
+                    <td className={cn("px-2 py-2.5 font-mono", pnlColor(c.post_close_pct ?? 0))}>
+                      {c.post_close_pct == null ? "—" : `${c.post_close_pct > 0 ? "+" : ""}${c.post_close_pct}%`}
+                    </td>
                     <td className="px-2 py-2.5">
                       <button onClick={() => removeClosed(i)} className="text-muted-foreground/50 hover:text-destructive" title="删除">
                         <Trash2 className="h-3.5 w-3.5" />
@@ -362,17 +511,20 @@ export function Portfolio() {
         )}
       </GlassCard>
 
+      </>
+      )}
     </div>
   );
 }
 
 /** 持仓明细行 + 可展开的择时信号详情行。 */
-function SignalRows({ h, sig, open, onToggle, onRemove }: {
+function SignalRows({ h, sig, open, onToggle, onRemove, onClose }: {
   h: Holding;
   sig: TimingSignal | undefined;
   open: boolean;
   onToggle: () => void;
   onRemove: () => void;
+  onClose: () => void;
 }) {
   const style = sig?.signal ? SIGNAL_STYLE[sig.signal] : "border-border bg-black/20 text-muted-foreground";
   return (
@@ -408,9 +560,12 @@ function SignalRows({ h, sig, open, onToggle, onRemove }: {
           )}
         </td>
         <td className="px-2 py-2.5">
-          <button onClick={onRemove} className="text-muted-foreground/50 hover:text-destructive" title="删除">
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
+          <div className="flex items-center justify-end gap-1">
+            <button onClick={onClose} className="rounded-lg px-2 py-1 text-xs text-muted-foreground transition hover:bg-black/20 hover:text-foreground">清仓</button>
+            <button onClick={onRemove} className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-black/20 hover:text-destructive" title="删除">
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </td>
       </tr>
       {open && sig && (
@@ -424,6 +579,7 @@ function SignalRows({ h, sig, open, onToggle, onRemove }: {
             </ul>
             <p className="mt-1.5 text-[11px] text-muted-foreground/60">
               数据截至 {sig.as_of || "—"}
+              {sig.since && ` · 信号触发于 ${sig.since}${sig.age_days > 0 ? `（第 ${sig.age_days} 个交易日，强度随时间衰减）` : "（当日）"}`}
               {sig.pending && "（盘中：信号以收盘确认为准，当前仅预警）"}
               {" "}· {sig.rule} · 规则化技术指标提示，非投资建议
             </p>

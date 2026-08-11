@@ -1,4 +1,8 @@
-"""择时信号规则测（离线）：打桩前复权日 K，验证加仓/减仓/观望分支与强度。"""
+"""择时信号规则测（离线）：打桩前复权日 K，验证事件式信号与强度。
+
+核心约束（对应用户反馈）：信号是"事件"，不是"位置镜像"——
+跌多了不会更强，涨多了不会自动变加仓；事件过期后回到观望。
+"""
 import app as app_module
 import timing
 from fastapi.testclient import TestClient
@@ -23,11 +27,48 @@ def test_breakout_add_signal():
 
 
 def test_reduce_below_ma20():
-    # 高位平台后连续 25 日下跌：收盘跌破 MA20×0.99 且量能转弱 → 减仓
-    closes = [10.0] * 30 + [10.0 - 0.15 * k for k in range(1, 26)]
+    # 高位平台后刚开始下跌：最后一日收盘跌破 MA20×0.99 且量能转弱 → 当日触发减仓
+    closes = [10.0] * 30 + [9.8]
     sig = timing.compute_signal("000001", _rows(closes))
     assert sig["signal"] == "reduce"
-    assert "20 日均线" in sig["action"]
+    assert sig["age_days"] == 0
+    assert "跌破" in sig["action"]
+
+
+def test_reduce_signal_decays_over_days():
+    # 同一跌破事件：触发当日强度最高，随后逐日衰减（过期不重复报警）
+    base = [10.0] * 30 + [9.8]
+    day0 = timing.compute_signal("000004", _rows(base))
+    day4 = timing.compute_signal("000004", _rows(base + [base[-1]] * 4))
+    assert day0["strength"] > day4["strength"] > 0
+    assert day4["age_days"] == 4
+
+
+def test_aging_downtrend_is_watch_not_reduce():
+    # 跌破发生在 25 个交易日前（信号早已过期）：当前只是"位置在 20 日线下方"，
+    # 不应再显示减仓——跌了不代表要减，过期事件闭嘴
+    closes = [10.0] * 30 + [10.0 - 0.1 * k for k in range(1, 26)] + [7.6] * 12
+    sig = timing.compute_signal("000002", _rows(closes))
+    assert sig["signal"] == "watch", sig
+    assert "不因下跌补仓" in sig["action"]
+
+
+def test_reduce_strength_not_deeper_not_stronger():
+    # 同一跌破事件后，跌得更深不应使强度更高（与"越跌越减"相反）
+    base = [10.0] * 30 + [10.0 - 0.1 * k for k in range(1, 6)]
+    shallow = timing.compute_signal("000003", _rows(base))
+    deeper = timing.compute_signal("000003", _rows(base + [base[-1] - 0.5]))
+    assert shallow["signal"] == deeper["signal"] == "reduce"
+    assert deeper["strength"] <= shallow["strength"]
+
+
+def test_breakout_then_hold_decays():
+    # 突破当日强加仓；10 个交易日后仍维持 → 降为"持有"且强度衰减
+    closes = [10.0] * 55 + [10.6] + [10.6] * 9
+    sig = timing.compute_signal("600000", _rows(closes))
+    assert sig["signal"] == "add"
+    assert sig["signal_label"] == "持有"
+    assert sig["strength"] < 3
 
 
 def test_watch_inside_band():
