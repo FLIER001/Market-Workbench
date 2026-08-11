@@ -1,84 +1,70 @@
-# Vibe-Research Backend
+# Backend
 
-A股数据层 + 可插拔 AI 层。全部只读、无状态；不预置任何标的、不推荐、不预测。
+FastAPI service for Vibe-Research. It provides market data, user-local research data, AI request routing and an MCP server. The service is intended for local or self-hosted use.
 
-## 安装
+## Run locally
 
 ```bash
 cd backend
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-```
-
-> 行情 + 研报只需 `fastapi / uvicorn / requests`（秒装、必可用）。
-> 一致预期 / 新闻 / 公告需 `akshare`，财务及旧版原始 K 线接口需 `mootdx`；图表 K 线默认使用腾讯前复权数据，主源失败时才降级到 `mootdx`。
-
-## 1. HTTP API（给网页前端 + 系统 AI）
-
-```bash
 .venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8900
+curl -fsS http://127.0.0.1:8900/api/health
 ```
 
-| 端点 | 说明 | 依赖 |
-|---|---|---|
-| `GET /api/health` | 健康检查 | — |
-| `GET /api/indices` | 大盘指数实时行情 | stdlib |
-| `GET /api/quote?codes=600519,000858` | 实时行情（PE/PB/市值/涨跌停…） | stdlib |
-| `GET /api/valuation?code=600519` | 完整估值（前向PE/PEG/消化年数） | requests+akshare |
-| `GET /api/valuation/percentile?code=600519` | 估值历史分位（近5年·百度股市通） | akshare |
-| `GET /api/financials?code=600519` | 财务关键指标（同花顺摘要，最新报告期，前端个股页用） | akshare |
-| `GET /api/reports?code=600519` | 个股研报列表（含 PDF 链接） | requests |
-| `GET /api/announcements?code=600519` | 近期公告（东财） | requests |
-| `GET /api/news?code=600519` | 个股新闻 | akshare |
-| `GET /api/kline?code=600519` | K线 | mootdx |
-| `GET /api/kline/chart?code=600519&period=day&count=250` | 图表 OHLCV（日/周/月，前复权主源） | 腾讯 / mootdx 备用 |
-| — | *（AI 工具层走腾讯 K 线，mootdx 仅作备份：mootdx 是 TCP 7709，部分网络连不通要等十几秒超时）* | — |
-| `GET /api/finance?code=600519` | 季报财务快照（mootdx，前端未用 / 备用） | mootdx |
-| **资金面·筹码·信号（v3.3）** | `/api/margin` · `/block-trade` · `/holders` · `/dividend` · `/fund-flow` · `/dragon-tiger` · `/lockup` · `/blocks` · `/hot-concepts` · `/investor-qa` · `/industry` | requests |
-| `GET /api/market/overview` · `/api/radar` | 市场情绪+板块资金 · 资讯雷达 | akshare / stdlib |
-| `GET /api/sector-scores` | 申万一级行业评分：申万成分分类 × 腾讯个股行情聚合当前值 + 申万月度历史锚；申万日频备用 | 申万宏源研究、腾讯财经 |
-| `POST /api/chat` | 系统 AI 对话（function calling，AI 自己调数据工具） | requests |
-| `POST /api/reflect` | **反思审计**（流式 NDJSON）：对一段已写好的分析做推理审计 | requests |
+The frontend development server proxies `/api` to this address by default.
 
-`/api/reflect` 请求体：`{"source": "待审的分析文本", "title": "可选标题", "llm": {...}}`。
+## HTTP API
 
-> 两个端点都**不产出买卖结论**：AI 只负责读数据与审计推理，结论留给用户自己。
+OpenAPI is available at <http://127.0.0.1:8900/docs> while the service is running. The main route groups are:
 
-> 上表为主要端点；完整路由清单见 `app.py`。要更全量的 A 股数据（打板 / ETF期权 / 全市场行业排名等），用根目录 [`a-stock-data/`](../a-stock-data/SKILL.md) 工具箱。
+| Group | Routes |
+|---|---|
+| Health and accounts | `/api/health`, `/api/auth/*` |
+| AI | `/api/chat`, `/api/reflect`, `/api/deep-analysis` |
+| Portfolio and reports | `/api/portfolio*`, `/api/fund-portfolio*`, `/api/myreports*` |
+| Funds | `/api/funds/search`, `/api/funds/quote`, `/api/funds/nav/{code}`, `/api/funds/metrics/{code}`, `/api/funds/profile/{code}`, `/api/funds/screen` |
+| Market and research | `/api/market/*`, `/api/radar*`, `/api/sector-scores*`, `/api/plate-scores*`, `/api/gold/score` |
+| Securities | `/api/search`, `/api/quote`, `/api/kline*`, `/api/valuation*`, `/api/financials`, `/api/reports`, `/api/announcements`, `/api/news` |
+| Capital and events | `/api/margin`, `/api/fund-flow`, `/api/holders`, `/api/dividend`, `/api/dragon-tiger`, `/api/lockup`, `/api/blocks` |
+| Global markets | `/api/global/indices`, `/api/global/minute`, `/api/global/stock`, `/api/global/hk/cashflow` |
 
-`/api/chat` 请求体：
-```json
-{
-  "messages": [{"role": "user", "content": "茅台估值贵不贵？"}],
-  "context": "本页上下文（可空）",
-  "llm": {"baseURL": "https://api.deepseek.com", "apiKey": "sk-…", "model": "deepseek-chat"}
-}
-```
-`llm` 由前端从本地配置随请求带上，后端不持久化 key。
+Several market sources are fetched on demand and may be delayed, unavailable or rate-limited. API responses include the data that is currently available; callers should not turn them into trading recommendations.
 
-## 2. MCP Server（给 Claude Code / 高手 agent）
+## MCP server
 
-零第三方依赖，复用同一套数据工具。挂进 Claude Code：
+From `backend/`, register the server with a local client such as Claude Code:
 
 ```bash
 claude mcp add vibe-research -- \
   "$(pwd)/.venv/bin/python" "$(pwd)/mcp_server.py"
 ```
 
-挂上后，你的 agent 直接拥有 `query_quote / query_valuation / query_reports / query_news` 四个工具，
-用你自己的订阅额度调数据、多步分析——无需 API key、不占本产品成本。
+The MCP server reads the same version and uses the same data-tool layer as the HTTP API. It does not need an API key for a local installation.
 
-### 完整 A 股数据工具箱（随仓库自带）
+## Configuration
 
-MCP 的 4 个工具是「零配置、开箱即用」的常用项。若 agent 需要更全的 A 股数据（龙虎榜 / 融资融券 / 大宗交易 / 股东户数 / 分红 / 资金流 / 解禁 / 概念板块 / 打板情绪 / ETF 期权 / 互动易 / 全市场行业排名 …共 **47 个端点**），本仓库根目录**自带完整数据源** [`a-stock-data/`](../a-stock-data/SKILL.md)（a-stock-data v3.6.0）：
+Copy [`.env.example`](.env.example) if you need configuration. Local development works with the defaults. For an internet-facing deployment, set both `VR_ALLOW_ORIGINS` and a strong `VR_API_KEY`.
 
-- 要调哪个接口，直接看 [`a-stock-data/SKILL.md`](../a-stock-data/SKILL.md)——每个端点都有 copy-paste 即用的代码（内嵌全部调用逻辑，零第三方数据封装依赖，东财接口已内置限流防封）。
-- 运行依赖：`pip install mootdx requests pandas stockstats`（自包含，v3.0 起已移除 akshare）。
-- 上游与更新：[github.com/simonlin1212/a-stock-data](https://github.com/simonlin1212/a-stock-data)（不更新也能一直用，自带的是固定可用快照）。
-- 分工：**MCP 4 工具** = 网页 / 轻量常用；**自带数据源 40+ 端点** = agent 深度自助调研的全量工具箱。二者同源，按需取用。
+| Variable | Purpose |
+|---|---|
+| `VR_ALLOW_ORIGINS` | Comma-separated CORS allowlist; `*` is the local-development default |
+| `VR_API_KEY` | Enables bearer-token protection for `/api/*` except health |
+| `VR_DATA_DIR` | Base directory for local portfolio, reports and user data |
+| `VR_REPORTS_DIR` | Overrides the report archive directory only |
+| `VR_DATA_PROXY` | Set to `1` only when data sources must use the system proxy |
+| `IWENCAI_API_KEY` | Optional key for iWenCai report search |
 
-## 合规
+See the root [configuration guide](../docs/configuration.md) for storage and deployment details.
 
-- 数据端点只返回客观行情/研报/财报/新闻，不含任何建议、排名、预测。
-- `/api/chat` 的 system prompt 内置中立红线：不荐股、不预测涨跌、不给买卖时机、不构成投资建议。
-- 分析结论一律由用户配置的模型 / agent 给出，本产品只提供数据与工具。
+## Tests
+
+```bash
+.venv/bin/python -m pytest tests -q
+```
+
+## Data and security notes
+
+- Account data is stored in SQLite at `~/.vibe-research/users.db` by default. Passwords are salted and hashed; browser sessions use random tokens.
+- Portfolio and report files are stored under `~/.vibe-research/` unless redirected by environment variables.
+- The service is not a multi-tenant hosted platform. Do not expose it publicly without configuring CORS, an API key, TLS and your own access controls.
