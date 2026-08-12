@@ -95,6 +95,7 @@ export interface Quote {
 export interface Valuation {
   name: string; code: string; price: number; mcap_yi: number;
   pe_ttm: number; pb: number;
+  exchange?: string;
   eps_26e: number | null; eps_27e: number | null; pe_26e: number | null;
   cagr_pct: number | null; peg: number | null; digest_years: number | null;
   analyst_count: number; forecast_note?: string;
@@ -806,6 +807,68 @@ export interface GoldScoreData {
   }>;
 }
 
+// 实时金价（伦敦金 XAU / 纽约金 GC，腾讯 hf_ 行情）
+export interface GoldSpotQuote {
+  name: string;
+  price: number;
+  change_pct: number | null;
+  prev_close: number | null;
+  high: number | null;
+  low: number | null;
+  time: string;
+  date: string;
+}
+export interface GoldSpotData {
+  xau: GoldSpotQuote | null;
+  gc: GoldSpotQuote | null;
+  fetched_at: string | null;
+  stale?: boolean;
+}
+
+// ---- 全球预期概率（Polymarket + Kalshi 双源，globalpercent 移植） ----
+export interface PulseMarket {
+  question: string | null;
+  question_zh: string | null;
+  topic: string;
+  outcomes: string[];
+  prices: (number | null)[];
+  prob_yes: number | null;
+  pick_label?: string | null;
+  change_24h: number | null;
+  change_7d: number | null;
+  volume_24h: number | null;
+  liquidity: number | null;
+  end_date: string | null;
+  slug: string | null;
+  series_ticker?: string | null;
+  token_id_yes: string | null;
+  source: "polymarket" | "kalshi";
+  kalshi_category?: string | null;
+}
+
+export interface PulseModule {
+  key: string;
+  core: boolean;
+  market_count: number;
+  volume_24h: number;
+  source_counts: Partial<Record<"polymarket" | "kalshi", number>>;
+  markets: PulseMarket[];
+}
+
+export interface PulseOverview {
+  as_of: string;
+  sources: string[];
+  module_order: string[];
+  core_modules: string[];
+  modules: PulseModule[];
+  updating?: boolean;
+}
+
+export interface PulseHistoryPoint {
+  t: number | null;
+  p: number | null;
+}
+
 export const api = {
   health: () => get<{ ok: boolean }>("/health"),
   indices: () => get<IndexQuote[]>("/indices"),
@@ -813,6 +876,11 @@ export const api = {
   liquidity: (refresh = false) => get<LiquidityData>(`/market/liquidity${refresh ? "?refresh=true" : ""}`),
   macro: (refresh = false) => get<MacroData>(`/market/macro${refresh ? "?refresh=true" : ""}`),
   goldScore: (refresh = false) => get<GoldScoreData>(`/gold/score${refresh ? "?refresh=true" : ""}`),
+  goldSpot: () => get<GoldSpotData>("/gold/spot"),
+  pulseOverview: (refresh = false) => get<PulseOverview>(`/pulse/overview${refresh ? "?refresh=true" : ""}`),
+  pulseHistory: (tokenId: string, interval = "1w") =>
+    get<{ history: PulseHistoryPoint[] }>(`/pulse/history?token_id=${encodeURIComponent(tokenId)}&interval=${interval}`)
+      .then((d) => d.history),
   emotion: () => get<ShortTermEmotion>("/market/emotion"),
   turnoverTop: () => get<TurnoverTop>("/market/turnover-top"),
   // 传 keys = 只刷新这几个市场（已开盘的）；不传 = 全量快照

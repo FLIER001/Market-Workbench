@@ -43,6 +43,9 @@
     --chart-grid: 220 20% 14%;
     --chart-text: 215 15% 55%;
     --chart-axis: 220 20% 24%;
+    /* 全球预期概率面板：Polymarket 紫 / Kalshi 天蓝 来源徽章 */
+    --pm: 262 70% 66%;
+    --kalshi: 199 78% 60%;
   }
 
   .light {
@@ -75,6 +78,8 @@
     --chart-grid: 214 20% 88%;
     --chart-text: 215 16% 42%;
     --chart-axis: 214 20% 78%;
+    --pm: 262 60% 52%;
+    --kalshi: 199 78% 46%;
   }
 
   * { @apply border-border; }

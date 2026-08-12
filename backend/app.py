@@ -42,6 +42,7 @@ import tools as tools_layer
 import cache_runtime
 import stock_cache
 import score_scheduler
+import pulse.market_pulse as pulse_market_pulse
 
 from version import read_version
 
@@ -1258,6 +1259,36 @@ def deep_analysis(req: DeepAnalysisReq):
     return {"data": {"content": content}}
 
 
+@app.get("/api/pulse/overview")
+async def pulse_overview(refresh: bool = Query(False)):
+    """全球宏观预期概率总览（Polymarket + Kalshi 双源合并，按模块分组）。
+
+    数据来自两站公开只读 API（免登录、零鉴权），作为全球宏观情绪温度计。
+    普通加载直接返回磁盘快照（秒开）；refresh=true 触发后台异步重建（Kalshi
+    全量事件书约 1-8 分钟），立即返回当前快照并带 updating=true，前端轮询
+    as_of 变化。移植自 https://github.com/simonlin1212/globalpercent（Apache-2.0）。
+    """
+    try:
+        return {"data": await pulse_market_pulse.fetch_overview(force=refresh)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"全球预期概率总览异常：{e}") from e
+
+
+@app.get("/api/pulse/history")
+async def pulse_history(
+    token_id: str = Query(..., min_length=1, max_length=128),
+    interval: str = Query("1w", pattern="^(1d|1w|1m|max)$"),
+):
+    """单条 Polymarket 事件 Yes 概率历史（趋势图）。Kalshi 无等效简单接口。"""
+    try:
+        history = await pulse_market_pulse.polymarket_signals.fetch_history(
+            token_id=token_id, interval=interval,
+        )
+        return {"data": {"history": history}}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"Polymarket 概率历史异常：{e}") from e
+
+
 @app.get("/api/market/macro")
 def market_macro(refresh: bool = False):
     """宏观经济指标（GDP/CPI/PPI/PMI/M2/工业增加值/进出口/贸易差额/社融）。缓存 1 小时。"""
@@ -1274,3 +1305,12 @@ def gold_score(refresh: bool = False):
         return {"data": gold_score_layer.get_gold_score(force=refresh)}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"黄金评分异常：{e}") from e
+
+
+@app.get("/api/gold/spot")
+def gold_spot():
+    """实时金价：伦敦金（XAU）与纽约金（GC），20 秒缓存。"""
+    try:
+        return {"data": gold_score_layer.gold_spot()}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"实时金价异常：{e}") from e
