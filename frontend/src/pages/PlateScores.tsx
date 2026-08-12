@@ -13,6 +13,7 @@ import {
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, type PlateScoreRow, type PlateScoresData } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { resolveRefreshing } from "@/hooks/useSWR";
 
 type SortKey = "priority" | "strength" | "opportunity";
 const LOCAL_CACHE_KEY = "vr-plate-scores-cache-v1";
@@ -245,7 +246,8 @@ export function PlateScoresPanel() {
     setLoading(true);
     setError(null);
     try {
-      const next = await api.plateScores(refresh);
+      const first = await api.plateScores(refresh);
+      const next = await resolveRefreshing(first, () => api.plateScores(false));
       setData(next);
       saveLocalCache(next);
     } catch (err) {
@@ -274,6 +276,13 @@ export function PlateScoresPanel() {
     void start();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [load]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (!document.hidden) void load(false);
+    }, 15 * 60_000);
+    return () => window.clearInterval(timer);
   }, [load]);
 
   const states = useMemo(() => {

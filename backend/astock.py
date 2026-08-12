@@ -16,6 +16,7 @@ import math
 import os
 import random
 import re
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -23,6 +24,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+_QUOTE_CACHE: dict[tuple[str, ...], tuple[float, dict[str, dict]]] = {}
+_QUOTE_LOCK = threading.Lock()
+_INDEX_CACHE: tuple[float, list[dict]] | None = None
 
 
 def _number(value) -> float | None:
@@ -115,8 +119,17 @@ def _parse_gtimg(data: str) -> dict[str, dict]:
 
 def tencent_quote(codes: list[str]) -> dict[str, dict]:
     """批量个股实时行情：现价 / 涨跌 / PE / PB / 市值 / 换手 / 涨跌停。"""
-    prefixed = [f"{get_prefix(c)}{c}" for c in codes]
-    return _parse_gtimg(_fetch_gtimg(prefixed))
+    key = tuple(sorted(set(codes)))
+    now = time.time()
+    with _QUOTE_LOCK:
+        hit = _QUOTE_CACHE.get(key)
+        if hit and now - hit[0] < 3:
+            return hit[1]
+        prefixed = [f"{get_prefix(c)}{c}" for c in key]
+        result = _parse_gtimg(_fetch_gtimg(prefixed))
+        if result:
+            _QUOTE_CACHE[key] = (time.time(), result)
+        return result
 
 
 # A股大盘指数（前缀规则与个股不同，固定带前缀代码）
@@ -148,13 +161,20 @@ def a_index_em_secid(prefixed_code: str) -> str | None:
 
 def index_quote() -> list[dict]:
     """A股大盘指数实时行情（上证/深证成指/创业板指/沪深300）。"""
-    parsed = _parse_gtimg(_fetch_gtimg(A_INDICES))
-    out = []
-    for full in A_INDICES:
-        q = parsed.get(full[2:])
-        if q:
-            out.append({"name": q["name"], "price": q["price"], "change_pct": q["change_pct"], "change_amt": q["change_amt"]})
-    return out
+    global _INDEX_CACHE
+    now = time.time()
+    with _QUOTE_LOCK:
+        if _INDEX_CACHE and now - _INDEX_CACHE[0] < 5:
+            return _INDEX_CACHE[1]
+        parsed = _parse_gtimg(_fetch_gtimg(A_INDICES))
+        out = []
+        for full in A_INDICES:
+            q = parsed.get(full[2:])
+            if q:
+                out.append({"name": q["name"], "price": q["price"], "change_pct": q["change_pct"], "change_amt": q["change_amt"]})
+        if out:
+            _INDEX_CACHE = (time.time(), out)
+        return out
 
 
 # ---------------------------------------------------------------------------

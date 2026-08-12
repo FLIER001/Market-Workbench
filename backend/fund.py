@@ -31,15 +31,22 @@ _LOCK = threading.Lock()
 BEIJING = timezone(timedelta(hours=8))
 
 
-def _cached(key: str, ttl: float, fetch):
+def _cached(key: str, ttl: float, fetch, force: bool = False):
     with _LOCK:
         hit = _CACHE.get(key)
-        if hit and time.time() - hit[0] < ttl:
+        if not force and hit and time.time() - hit[0] < ttl:
             return hit[1]
     data = fetch()
     with _LOCK:
         _CACHE[key] = (time.time(), data)
     return data
+
+
+def invalidate(*prefixes: str) -> None:
+    """按前缀清进程内缓存（后台定时预热前调用，保证重算拿的是真新数据）。"""
+    with _LOCK:
+        for k in [k for k in _CACHE if any(k.startswith(p) for p in prefixes)]:
+            del _CACHE[k]
 
 
 def _num(v) -> Optional[float]:
@@ -125,7 +132,7 @@ def fund_meta(code: str) -> Optional[dict]:
 # 实时估值 / 最新净值
 # ---------------------------------------------------------------------------
 
-def realtime_estimates(codes: list[str]) -> dict[str, dict]:
+def realtime_estimates(codes: list[str], bypass: bool = False) -> dict[str, dict]:
     """批量盘中估值 + 最新公布净值。缓存 60s（交易时段天天基金估值约分钟级更新）。
 
     返回 {code: {name, estimate_pct, estimate_time, nav, nav_date}}。
@@ -185,7 +192,7 @@ def realtime_estimates(codes: list[str]) -> dict[str, dict]:
                       if k in {"nav", "nav_date"} or k.startswith(("today_", "yesterday_"))})
         return base
 
-    return _cached(key, 60, _fetch)
+    return _cached(key, 60, _fetch, force=bypass)
 
 
 def _recent_nav_rows(code: str) -> list[dict]:

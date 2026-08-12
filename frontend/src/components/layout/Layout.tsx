@@ -10,6 +10,7 @@ import { useDarkMode } from "@/hooks/useDarkMode";
 import { storageGet, storageSet } from "@/lib/storage";
 import { loadUser, clearSession, auth } from "@/lib/auth";
 import { clearLocalUserData } from "@/lib/userData";
+import { clearUserSWRCache } from "@/hooks/useSWR";
 import { api, type SearchResult } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
 import { LogOut } from "lucide-react";
@@ -23,11 +24,11 @@ const NAV = [
   { to: "/macro", icon: Globe, label: "宏观面" },
   { to: "/liquidity", icon: Droplets, label: "资金面" },
   { to: "/intel", icon: Radar, label: "资讯" },
-  { to: "/sectors", icon: LayoutGrid, label: "板块", match: "/sectors" },
-  { to: "/gold", icon: Coins, label: "黄金" },
   { to: "/watchlist", icon: Star, label: "自选" },
   { to: "/portfolio", icon: Wallet, label: "持仓" },
-  { to: "/funds", icon: PieChart, label: "基金" },
+  { to: "/sectors", icon: LayoutGrid, label: "板块研究", match: "/sectors" },
+  { to: "/funds", icon: PieChart, label: "标的筛选" },
+  { to: "/gold", icon: Coins, label: "黄金" },
   { to: "/research", icon: FileText, label: "研究", match: "/research" },
 ];
 
@@ -51,6 +52,7 @@ export function Layout() {
     clearSession();
     // 退出时清空本地缓存的用户数据，避免下一个账号读到这个账号的自选/笔记
     clearLocalUserData();
+    clearUserSWRCache();
     nav("/login", { replace: true });
   };
 
@@ -139,7 +141,7 @@ export function Layout() {
             const active = match ? pathname.startsWith(match) : pathname === to;
             return (
               <div key={to}>
-                {to === "/watchlist" && (
+                {(to === "/watchlist" || to === "/sectors") && (
                   <div className="my-1.5 border-t border-border/50" aria-hidden="true" />
                 )}
                 <Link

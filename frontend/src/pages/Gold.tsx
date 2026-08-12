@@ -5,10 +5,8 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { Sparkline } from "@/components/ui/Sparkline";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { api, type GoldScoreData, type GoldIndicator, type HistPoint } from "@/lib/api";
-import { storageGet, storageSet, storageRemove } from "@/lib/storage";
 import { cn } from "@/lib/utils";
-
-const CACHE_KEY = "vr-gold-v3";
+import { useSWR } from "@/hooks/useSWR";
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const isHist = (v: unknown): v is HistPoint[] =>
@@ -21,19 +19,6 @@ function isValid(d: GoldScoreData | null): d is GoldScoreData {
     if (!i || typeof i.key !== "string" || !isHist(i.hist)) return false;
   }
   return true;
-}
-
-function loadCached(): GoldScoreData | null {
-  try {
-    const raw = storageGet(CACHE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as GoldScoreData;
-    if (isValid(parsed)) return parsed;
-    storageRemove(CACHE_KEY);
-    return null;
-  } catch {
-    return null;
-  }
 }
 
 // 分数 → 信号色（分越高越利多黄金；用站点既有语义色，高=利多=红暖、低=利空=绿冷）
@@ -91,29 +76,23 @@ function IndicatorCard({ ind }: { ind: GoldIndicator }) {
 }
 
 export function Gold() {
-  const [data, setData] = useState<GoldScoreData | null>(() => loadCached());
-  const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-
-  const load = async () => {
-    setLoading(true);
-    setErr(null);
-    try {
-      const d = await api.goldScore();
-      if (isValid(d)) {
-        setData(d);
-        storageSet(CACHE_KEY, JSON.stringify(d));
-      } else {
-        setErr("数据格式异常");
-      }
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "加载失败");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { load(); }, []);
+  const { data, loading, revalidating, revalidate } = useSWR<GoldScoreData>(
+    "gold:v4",
+    async (fresh) => {
+      const d = await api.goldScore(fresh);
+      if (!isValid(d)) throw new Error("数据格式异常");
+      return d;
+    }, [], (e) => setErr(e instanceof Error ? e.message : "加载失败"), { persist: true },
+  );
+  const load = () => { setErr(null); void revalidate(true); };
+  useEffect(() => {
+    const tick = () => { if (!document.hidden) void revalidate(); };
+    const timer = window.setInterval(tick, 60 * 60_000);
+    const onVisible = () => { if (!document.hidden) void revalidate(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
+  }, [revalidate]);
 
   const total = data?.gold_score ?? null;
   const totalHist = isHist(data?.hist) ? data.hist : [];
@@ -155,10 +134,10 @@ export function Gold() {
             )}
             <button
               onClick={load}
-              disabled={loading}
+              disabled={loading || revalidating}
               className="flex items-center gap-1.5 rounded-lg border border-border/60 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:opacity-50"
             >
-              <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+              <RefreshCw className={cn("h-3.5 w-3.5", (loading || revalidating) && "animate-spin")} />
               刷新
             </button>
           </div>

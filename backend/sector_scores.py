@@ -28,6 +28,7 @@ import requests
 import urllib3
 
 import astock
+import cache_runtime
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -54,8 +55,7 @@ _FALLBACK_AGGREGATE_FILE = os.path.join(
     "sector_score_aggregate_snapshots.json",
 )
 _TTL = 60 * 60
-_INTRADAY_TTL = 5 * 60
-_LOCK = threading.Lock()
+_INTRADAY_TTL = 15 * 60
 _SCHEMA_VERSION = 6
 _MAX_MONTHS = 60
 _CLASSIFICATION_START = date(2021, 7, 31)
@@ -1028,25 +1028,9 @@ def get_cached_sector_scores() -> dict | None:
 
 
 def get_sector_scores(force: bool = False) -> dict:
-    with _LOCK:
-        cached = _load_cache()
-        if not force and cached:
-            generated = cached.get("generated_at")
-            try:
-                generated_at = datetime.strptime(
-                    generated,
-                    "%Y-%m-%d %H:%M",
-                ).replace(tzinfo=BEIJING)
-                age = time.time() - generated_at.timestamp()
-            except (TypeError, ValueError):
-                age = _TTL + 1
-            if age < _cache_ttl(cached):
-                return cached
-        try:
-            data = _build()
-            _save_cache(data)
-            return data
-        except Exception as error:
-            if cached:
-                return {**cached, "stale": True, "refresh_error": str(error)}
-            raise
+    cached = _load_cache()
+    return cache_runtime.get(
+        "sector_scores:v6", _build,
+        valid=lambda value: bool(value.get("industries")),
+        ttl=_cache_ttl(cached or {}), warm=_load_cache, save=_save_cache, force=force,
+    )

@@ -8,11 +8,12 @@ import { StockSearchInput } from "@/components/ui/StockSearchInput";
 import { FundPortfolioPanel } from "@/components/funds/FundPortfolioPanel";
 import { isTradingHours } from "@/hooks/useLiveQuotes";
 import { useSWR } from "@/hooks/useSWR";
-import { api, ApiError, type PortfolioData, type Holding, type TimingSignal, type FundPortfolioData } from "@/lib/api";
+import { useFreshOnEnter } from "@/hooks/useFreshOnEnter";
+import { api, ApiError, type PortfolioData, type Holding, type TimingSignal, type FundPortfolioData, type LegacyPortfolioStatus } from "@/lib/api";
 import { publishHoldingCodes } from "@/hooks/useHoldingCodes";
 import { cn } from "@/lib/utils";
 
-const REFRESH_MS = 30 * 60 * 1000; // 每半小时自动刷新
+const REFRESH_MS = 3000; // 可见且交易时段内，证券行情按 3 秒快照更新
 const pnlColor = (v: number) => (v > 0 ? "text-danger" : v < 0 ? "text-success" : "text-muted-foreground");
 const fmt = (v: number) => v.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
 // 单价类（现价/成本/清仓价）最多 4 位小数：ETF/基金常见 3-4 位，截断成 2 位会与市值/盈亏对不上账
@@ -41,19 +42,27 @@ const SIGNAL_STYLE: Record<string, string> = {
 export function Portfolio() {
   // 子栏目：场内证券（股票/ETF 持仓）与场外基金（公募基金持仓）分开记账
   const [kind, setKind] = useState<"securities" | "fund">("securities");
+  const [legacy, setLegacy] = useState<LegacyPortfolioStatus | null>(null);
+  const [importingLegacy, setImportingLegacy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const onLoadError = useCallback((e: unknown) => {
     setErr(e instanceof ApiError ? e.message : "加载失败");
   }, []);
   const { data, setData, revalidating: refreshing, revalidate } = useSWR<PortfolioData>(
     "portfolio",
-    () => api.portfolio(),
+    (fresh?: boolean) => api.portfolio(fresh),
     [],
     onLoadError,
-    { persist: true },
+    { persist: true, scope: "user" },
   );
   // 场外基金数据：与 FundPortfolioPanel 共用 key，秒开 + 并发去重；这里仅用于 tab 计数与 AI 上下文
-  const { data: fundPortfolio, revalidating: fundRefreshing, revalidate: revalidateFund } = useSWR<FundPortfolioData>("fund:portfolio", () => api.fundPortfolio(), [], undefined, { persist: true });
+  const { data: fundPortfolio, revalidating: fundRefreshing, revalidate: revalidateFund } = useSWR<FundPortfolioData>("fund:portfolio", (fresh?: boolean) => api.fundPortfolio(fresh), [], undefined, { persist: true, scope: "user" });
+  // 5 分钟缓存窗口：点进持仓栏目，距上次刷新超过 5 分钟就真重算，5 分钟内直接看缓存。
+  useFreshOnEnter("portfolio", revalidate);
+  useFreshOnEnter("fund:portfolio", revalidateFund);
+  useEffect(() => {
+    api.portfolioLegacyStatus().then(setLegacy).catch(() => setLegacy(null));
+  }, []);
   // 页面头部的「刷新」在场外子栏目时通过信号转发给 FundPortfolioPanel 执行
   const [fundRefreshTick, setFundRefreshTick] = useState(0);
   const [code, setCode] = useState("");
@@ -134,15 +143,22 @@ export function Portfolio() {
 
   useEffect(() => {
     // 定时刷新只在「A股交易时段 + 页面在前台」时执行：收盘后/切到后台时持仓盈亏不变，不必刷。
-    const tick = () => {
-      if (!document.hidden && isTradingHours()) load();
+    let timer: number | null = null;
+    let cancelled = false;
+    const tick = async () => {
+      if (!document.hidden && isTradingHours()) await revalidate(true);
+      if (!cancelled) timer = window.setTimeout(tick, REFRESH_MS);
     };
-    const t = setInterval(tick, REFRESH_MS);
+    timer = window.setTimeout(tick, REFRESH_MS);
     // 页面切回前台 / 开盘时补刷一次
-    const onVisible = () => { if (!document.hidden) load(); };
+    const onVisible = () => { if (!document.hidden) void revalidate(true); };
     document.addEventListener("visibilitychange", onVisible);
-    return () => { clearInterval(t); document.removeEventListener("visibilitychange", onVisible); };
-  }, [load]);
+    return () => {
+      cancelled = true;
+      if (timer != null) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [revalidate]);
 
   const add = async (overrideCode?: string) => {
     const c = (overrideCode || code).trim();
@@ -200,6 +216,11 @@ export function Portfolio() {
   const holdings = data?.holdings || [];
   const totals = data?.totals;
   const closed = data?.closed || [];
+  // 累计盈亏 = 浮动盈亏 + 已实现盈亏
+  const cumulativePnl = (totals?.pnl ?? 0) + (data?.realized_pnl ?? 0);
+  const cumulativePnlPct = totals && totals.cost > 0
+    ? ((totals.pnl + (data?.realized_pnl ?? 0)) / totals.cost) * 100
+    : 0;
   const sortedHoldings = useMemo(() => {
     if (!sortKey) return holdings;
     const dir = sortDir === "asc" ? 1 : -1;
@@ -270,6 +291,38 @@ export function Portfolio() {
         }
       />
 
+      {legacy && ((kind === "securities" && legacy.securities.available && legacy.securities.target_empty) ||
+        (kind === "fund" && legacy.fund.available && legacy.fund.target_empty)) && (() => {
+        const status = kind === "securities" ? legacy.securities : legacy.fund;
+        const field = kind === "securities" ? "securities" : "fund";
+        return (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning/35 bg-warning/10 px-4 py-3 text-sm">
+            <span className="text-warning">
+              检测到旧版{kind === "securities" ? "场内证券" : "场外基金"}账本：{status.holdings} 项持仓、{status.closed} 条卖出记录。旧文件仍只读保留。
+            </span>
+            <button
+              disabled={importingLegacy}
+              onClick={async () => {
+                setImportingLegacy(true);
+                try {
+                  await api.importLegacyPortfolio(kind);
+                  setLegacy((current) => current ? { ...current, [field]: { ...status, target_empty: false } } : current);
+                  if (kind === "securities") await revalidate(true);
+                  else await revalidateFund(true);
+                } catch (error) {
+                  setErr(error instanceof ApiError ? error.message : "导入旧账本失败");
+                } finally {
+                  setImportingLegacy(false);
+                }
+              }}
+              className="rounded-lg border border-warning/40 px-3 py-1.5 text-xs text-warning hover:bg-warning/10 disabled:opacity-50"
+            >
+              {importingLegacy ? "导入中…" : "导入当前账号"}
+            </button>
+          </div>
+        );
+      })()}
+
       {/* 子栏目切换：场内证券 / 场外基金（风格同自选栏目） */}
       <div className="mb-4 grid max-w-lg grid-cols-2 gap-2 rounded-xl border border-border/50 bg-muted/20 p-1.5">
         {([
@@ -299,18 +352,18 @@ export function Portfolio() {
       {/* 汇总 */}
       {totals && holdings.length > 0 && (
         <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
-          {[
-            { k: "当日盈亏", v: (totals.day_pnl > 0 ? "+" : "") + fmt(totals.day_pnl), c: pnlColor(totals.day_pnl) },
-            { k: "当日盈亏比例", v: (totals.day_pnl_pct > 0 ? "+" : "") + totals.day_pnl_pct + "%", c: pnlColor(totals.day_pnl) },
-            { k: "总市值", v: fmt(totals.market_value), c: "text-foreground" },
-            { k: "浮动盈亏", v: (totals.pnl > 0 ? "+" : "") + fmt(totals.pnl), c: pnlColor(totals.pnl) },
-            { k: "盈亏比例", v: (totals.pnl_pct > 0 ? "+" : "") + totals.pnl_pct + "%", c: pnlColor(totals.pnl) },
-          ].map((m) => (
-            <GlassCard key={m.k} className="p-3">
-              <p className="text-xs text-muted-foreground">{m.k}</p>
-              <p className={cn("mt-1 font-mono text-lg font-bold", m.c)}>{m.v}</p>
-            </GlassCard>
-          ))}
+          <StatCard label="总市值" value={fmt(totals.market_value)} cls="text-foreground" />
+          <StatCard label="浮动盈亏" value={(totals.pnl > 0 ? "+" : "") + fmt(totals.pnl)} cls={pnlColor(totals.pnl)}
+                   sub={(totals.pnl_pct > 0 ? "+" : "") + totals.pnl_pct + "%"} subCls={pnlColor(totals.pnl)} />
+          <StatCard label="累计盈亏" value={(cumulativePnl > 0 ? "+" : "") + fmt(cumulativePnl)} cls={pnlColor(cumulativePnl)}
+                   sub={(cumulativePnlPct > 0 ? "+" : "") + cumulativePnlPct.toFixed(2) + "%"} subCls={pnlColor(cumulativePnl)} />
+          <StatCard label="当日盈亏" value={(totals.day_pnl > 0 ? "+" : "") + fmt(totals.day_pnl)} cls={pnlColor(totals.day_pnl)}
+                   sub={(totals.day_pnl_pct > 0 ? "+" : "") + totals.day_pnl_pct + "%"} subCls={pnlColor(totals.day_pnl)} />
+          <StatCard label="本年盈亏"
+                   value={(data?.ytd_pnl != null ? (data.ytd_pnl > 0 ? "+" : "") + fmt(data.ytd_pnl) : "—")}
+                   cls={data?.ytd_pnl != null ? pnlColor(data.ytd_pnl) : ""}
+                   sub={data?.ytd_pnl_pct != null ? (data.ytd_pnl_pct > 0 ? "+" : "") + data.ytd_pnl_pct + "%" : undefined}
+                   subCls={data?.ytd_pnl != null ? pnlColor(data.ytd_pnl) : undefined} />
         </div>
       )}
 
@@ -514,6 +567,19 @@ export function Portfolio() {
       </>
       )}
     </div>
+  );
+}
+
+/** 汇总卡片：标题 + 主数值 + 可选百分比（场外基金同款样式）。 */
+function StatCard({ label, value, cls, sub, subCls }: {
+  label: string; value: string; cls?: string; sub?: string; subCls?: string;
+}) {
+  return (
+    <GlassCard className="p-3">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className={cn("mt-1 font-mono text-lg font-bold", cls)}>{value}</p>
+      {sub && <p className={cn("mt-0.5 text-xs", subCls)}>{sub}</p>}
+    </GlassCard>
   );
 }
 

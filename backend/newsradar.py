@@ -14,14 +14,20 @@ import os
 import re
 import urllib.request
 import xml.etree.ElementTree as ET
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
+import cache_runtime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SOURCES_FILE = os.path.join(HERE, "news_sources.json")
-CACHE_DIR = os.path.join(HERE, ".cache")
+DATA_DIR = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
+CACHE_DIR = DATA_DIR
 CACHE_FILE = os.path.join(CACHE_DIR, "radar.json")
+LEGACY_CACHE_FILE = os.path.join(HERE, ".cache", "radar.json")
+TTL = 2 * 3600
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -120,10 +126,23 @@ def fetch_radar() -> dict:
     with ThreadPoolExecutor(max_workers=40) as ex:
         results = list(ex.map(lambda t: (t[0], _fetch_source(t[1], per, cutoff, redline)), tasks))
 
+    previous = load_cache() or {}
+    previous_by_source = {
+        item.get("source"): []
+        for industry in previous.get("industries", []) for item in industry.get("items", [])
+        if item.get("source")
+    }
+    for industry in previous.get("industries", []):
+        for item in industry.get("items", []):
+            if item.get("source"):
+                previous_by_source.setdefault(item["source"], []).append(item)
     failed = 0
-    for idx, items in results:
+    stale_sources = []
+    for (idx, src), (_, items) in zip(tasks, results):
         if items is None:
             failed += 1
+            stale_sources.append(src["name"])
+            industries[idx]["items"].extend(previous_by_source.get(src["name"], []))
             continue
         industries[idx]["items"].extend(items)
     for ind in industries:
@@ -133,7 +152,8 @@ def fetch_radar() -> dict:
         "generated_at": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M"),
         "recent_days": days,
         "industries": industries,
-        "stats": {"industries": len(cfg["industries"]), "total_sources": len(cfg["sources"]), "failed_sources": failed},
+        "stats": {"industries": len(cfg["industries"]), "total_sources": len(cfg["sources"]),
+                  "failed_sources": failed, "stale_sources": stale_sources},
     }
     os.makedirs(CACHE_DIR, exist_ok=True)
     tmp = CACHE_FILE + ".tmp"
@@ -144,11 +164,13 @@ def fetch_radar() -> dict:
 
 
 def load_cache():
-    try:
-        with open(CACHE_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return None
+    for path in (CACHE_FILE, LEGACY_CACHE_FILE):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            continue
+    return None
 
 
 def skeleton() -> dict:
@@ -166,6 +188,17 @@ def skeleton() -> dict:
 
 
 def get_radar(force: bool = False) -> dict:
-    if force:
-        return fetch_radar()
-    return load_cache() or skeleton()
+    value = cache_runtime.get(
+        "rss_radar:v2", fetch_radar,
+        valid=lambda data: bool(data.get("industries")), ttl=TTL,
+        warm=load_cache, force=force,
+    )
+    return value if value.get("industries") else skeleton()
+
+
+def start_scheduler() -> None:
+    def loop():
+        while True:
+            time.sleep(TTL)
+            get_radar(force=True)
+    threading.Thread(target=loop, daemon=True, name="rss-radar-scheduler").start()

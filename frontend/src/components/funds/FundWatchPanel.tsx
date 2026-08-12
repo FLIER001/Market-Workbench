@@ -3,13 +3,12 @@ import { Loader2, RefreshCw, Star, Trash2 } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, type FundQuote } from "@/lib/api";
 import { loadFundWatch, saveFundWatch, toggleFundWatch, type FundWatchItem } from "@/lib/fundWatch";
-import { isFundRefreshHours } from "@/hooks/useLiveQuotes";
+import { fundRefreshIntervalMs } from "@/hooks/useLiveQuotes";
 import { cn } from "@/lib/utils";
 import { useSWR } from "@/hooks/useSWR";
 import { FundSearchInput } from "./FundSearchInput";
 import { FundDetail } from "./FundDetail";
 
-const REFRESH_MS = 5 * 60 * 1000; // 交易时段 5 分钟刷一次估值
 const pctColor = (v: number | null | undefined) =>
   v == null ? "text-muted-foreground" : v > 0 ? "text-danger" : v < 0 ? "text-success" : "text-muted-foreground";
 
@@ -33,9 +32,15 @@ export function FundWatchPanel({ onChange }: { onChange?: () => void }) {
   }, [setQuoteMap]);
 
   useEffect(() => {
-    const tick = () => { if (!document.hidden && isFundRefreshHours()) revalidate(); };
-    const t = setInterval(tick, REFRESH_MS);
-    return () => clearInterval(t);
+    let cancelled = false;
+    let timer: number | null = null;
+    const tick = async () => {
+      const interval = fundRefreshIntervalMs();
+      if (!document.hidden && interval != null) await revalidate(true);
+      if (!cancelled) timer = window.setTimeout(tick, interval ?? 60_000);
+    };
+    timer = window.setTimeout(tick, fundRefreshIntervalMs() ?? 60_000);
+    return () => { cancelled = true; if (timer != null) window.clearTimeout(timer); };
   }, [revalidate]);
 
   const add = (f: { code: string; name: string; type: string }) => {

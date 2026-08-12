@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from collections import Counter
 from datetime import datetime, timezone, timedelta
@@ -15,25 +16,47 @@ from datetime import datetime, timezone, timedelta
 import astock
 import gstock
 import macro_fetch
+import cache_runtime
 
 BEIJING = timezone(timedelta(hours=8))
 _CACHE: dict = {}
+_CACHE_LOCK = threading.Lock()
+_CACHE_INFLIGHT: set[str] = set()
 _TTL = 300  # 5 分钟；全站共享，省数据源压力
 
 
-def _cached(key: str, fn, valid=bool):
+def _cached(key: str, fn, valid=bool, ttl: int | None = None):
     """TTL 缓存。数据源故障的空结果不缓存（valid 判否），下次请求直接重试。
 
     入口见 get_liquidity 的 last-good 语义（失败回退旧值）；本函数语义保持"空结果不缓存"，
     供 overview/emotion 等其他调用方继续按原约定使用。
     """
     now = time.time()
-    hit = _CACHE.get(key)
-    if hit and now - hit[0] < _TTL:
-        return hit[1]
+    limit = ttl if ttl is not None else _TTL
+    with _CACHE_LOCK:
+        hit = _CACHE.get(key)
+        if hit and now - hit[0] < limit:
+            return hit[1]
+        if hit:
+            if key not in _CACHE_INFLIGHT:
+                _CACHE_INFLIGHT.add(key)
+
+                def refresh():
+                    try:
+                        value = fn()
+                        if valid(value):
+                            with _CACHE_LOCK:
+                                _CACHE[key] = (time.time(), value)
+                    finally:
+                        with _CACHE_LOCK:
+                            _CACHE_INFLIGHT.discard(key)
+
+                threading.Thread(target=refresh, daemon=True, name=f"market-cache:{key}").start()
+            return hit[1]
     val = fn()
     if valid(val):
-        _CACHE[key] = (now, val)
+        with _CACHE_LOCK:
+            _CACHE[key] = (now, val)
     return val
 
 
@@ -102,47 +125,25 @@ _REFRESH_THREADS: set = set()
 _RETRY_BACKOFF = (40, 80, 160, 320, 600)
 _SUB_TTL = 6 * 3600   # 利率/债券等低频序列：6 小时内直接用缓存，0 外呼
 _SUB_STALE_TTL = 900  # 过期后源故障：继续用 last-good 最多 15 分钟，同时后台重试
+_SOURCE_REFRESH = threading.local()
 
 
-def _layered_get(key: str, build, valid, warm=None, ttl=_TTL):
-    """last-good 语义：新鲜值 TTL 内直接返回；过期则重建；
+def source_refresh_forced() -> bool:
+    return bool(getattr(_SOURCE_REFRESH, "force", False))
 
-    重建失败/结果无效时，回退最近一次成功的 last-good 并标注 stale；
-    故障期按 next_retry 退避，不每请求重建。首次冷启动用 warm()（磁盘快照）兜底。
-    本轮部分源故障时，由 build() 内部通过 last_good(key) 逐段合并。
-    """
-    now = time.time()
-    e = _LAYERED.setdefault(key, {})
-    fresh = e.get("fresh")
-    if fresh and now - fresh[0] < ttl:
-        return fresh[1]
-    # 无 last-good 时先装磁盘快照：即使即将重建，也让 build 失败路径立即可回退
-    if not e.get("last_good") and warm:
-        warm_val = warm()
-        if warm_val is not None:
-            warm_ts, warm_data = warm_val if isinstance(warm_val, tuple) else (now, warm_val)
-            e["last_good"] = (warm_ts, warm_data)
-    if now < e.get("next_retry", 0):
-        lg = e.get("last_good")
-        if lg:
-            return _with_stale(lg[1], lg[0])
-        # 无 last-good、无快照：放行至 build（有机会拿到部分/全部数据）
+
+def _run_source_refresh(fn, force: bool):
+    previous = source_refresh_forced()
+    _SOURCE_REFRESH.force = force
     try:
-        val = build()
-    except Exception:
-        val = None
-    if val is not None and valid(val):
-        e["fresh"] = (now, val)
-        e["last_good"] = (now, val)
-        e["next_retry"] = 0
-        _FAILED_STREAK.pop(key, None)
-        return val
-    _FAILED_STREAK[key] = _FAILED_STREAK.get(key, 0) + 1
-    e["next_retry"] = now + _RETRY_BACKOFF[min(_FAILED_STREAK[key], len(_RETRY_BACKOFF)) - 1]
-    lg = e.get("last_good")
-    if lg:
-        return _with_stale(lg[1], lg[0])
-    return val if isinstance(val, dict) else {}
+        return fn()
+    finally:
+        _SOURCE_REFRESH.force = previous
+
+
+def _layered_get(key: str, build, valid, warm=None, ttl=_TTL, force: bool = False):
+    """Compatibility wrapper for the shared stale-while-revalidate cache."""
+    return cache_runtime.get(key, build, valid=valid, warm=warm, ttl=ttl, force=force)
 
 
 def _merge(prev, cur, key: str):
@@ -155,9 +156,7 @@ def _merge(prev, cur, key: str):
 
 
 def _last_good(key: str):
-    e = _LAYERED.get(key) or {}
-    lg = e.get("last_good")
-    return lg[1] if lg else None
+    return cache_runtime.peek(key)
 
 
 def _kick_bg(key: str, fn) -> None:
@@ -200,7 +199,7 @@ def _sub_cached(key: str, fn, ttl: float = _SUB_TTL, valid=bool,
     """
     now = time.time()
     hit = _SUB.get(key)
-    if hit and now - hit[0] < ttl:
+    if hit and not source_refresh_forced() and now - hit[0] < ttl:
         return (_status_copy(hit[1], stale=bool(hit[1].get("stale")), fetched_at=hit[0])
                 if mark_stale else hit[1])
     try:
@@ -327,13 +326,11 @@ def _sectors() -> list[dict]:
 
 def get_overview() -> dict:
     """市场情绪 + 板块资金（含缓存）。资金轮动由前端从 sectors 头尾取。"""
-    def build():
-        return {
-            "sentiment": _sentiment(),
-            "sectors": _sectors(),
-            "updated": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M"),
-        }
-    return _cached("overview", build, valid=lambda v: bool(v.get("sentiment") or v.get("sectors")))
+    return {
+        "sentiment": _cached("market_sentiment", _sentiment, valid=bool, ttl=60),
+        "sectors": _cached("sector_flows", _sectors, valid=bool, ttl=300),
+        "updated": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M"),
+    }
 
 
 def _emotion() -> dict:
@@ -403,8 +400,8 @@ def _emotion() -> dict:
 
 
 def get_short_term_emotion() -> dict:
-    """短线情绪（含缓存，5 分钟）。"""
-    return _cached("emotion", _emotion)
+    """短线情绪（含缓存，2 分钟）。"""
+    return _cached("emotion", _emotion, ttl=120)
 
 
 def get_turnover_top() -> dict:
@@ -414,12 +411,12 @@ def get_turnover_top() -> dict:
             "stocks": astock.market_turnover_rank(20),
             "updated": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M"),
         }
-    return _cached("turnover_top", build, valid=lambda v: bool(v.get("stocks")))
+    return _cached("turnover_top", build, valid=lambda v: bool(v.get("stocks")), ttl=60)
 
 
 def get_global_indices() -> list[dict]:
     """全球指数快照（美股 / 港股，含缓存 5 分钟）。空结果不缓存。"""
-    return _cached("global_indices", gstock.global_indices, valid=bool)
+    return _cached("global_indices", gstock.global_indices, valid=bool, ttl=60)
 
 
 def get_global_indices_for(keys: list[str]) -> list[dict]:
@@ -432,7 +429,7 @@ def get_global_indices_for(keys: list[str]) -> list[dict]:
     if not valid_keys:
         return []
     return _cached("global_indices:" + ",".join(valid_keys),
-                   lambda: gstock.global_indices(valid_keys), valid=bool)
+                   lambda: gstock.global_indices(valid_keys), valid=bool, ttl=60)
 
 
 
@@ -1384,15 +1381,15 @@ def _us_risk_appetite_index(us: dict) -> dict:
         date, hist, [us["vix"], us["dxy"], us["term_premium"]])
 
 
-def get_liquidity() -> dict:
+def get_liquidity(force: bool = False) -> dict:
     """资金供给指标汇总（独立页面，含历史趋势 + 美联储利率；缓存 5 分钟）。
 
     last-good 语义：任一源故障只影响该层，整页/各指数回退最近一次成功值（stale 标注），
     指标不再随源波动"时有时无"；冷启动从磁盘快照恢复。
     """
-    return _layered_get("liquidity", _liquidity_build,
+    return _layered_get("liquidity", lambda: _run_source_refresh(_liquidity_build, force),
                         valid=lambda v: bool(v.get("cn") or v.get("us")),
-                        warm=_load_liquidity_snapshot)
+                        warm=_load_liquidity_snapshot, ttl=300, force=force)
 
 
 def _merge_liquidity_group(prev: dict | None, cur: dict | None, label: str) -> dict:
@@ -1536,7 +1533,7 @@ def _liquidity_build() -> dict:
 # 宏观面 —— 国内重要宏观经济指标（GDP/CPI/PPI/PMI/M2/工业增加值/进出口等）
 # ---------------------------------------------------------------------------
 
-_MACRO_TTL = 3600  # 宏观数据多为月度/季度，1 小时刷新足够
+_MACRO_TTL = 1800  # 聚合层 30 分钟检查；月/季底层源另有 12 小时缓存
 _MACRO_SNAPSHOT = os.path.join(
     os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research"),
     "macro_snapshot.json")
@@ -2512,6 +2509,9 @@ def _module_scores(ind: dict, as_of: str | None = None) -> list[dict]:
                 pct = _pct_rank(vals, vals[-1])
             elif ind_card.get("prev") is not None:
                 pct = 65.0 if ind_card["value"] > ind_card["prev"] else 35.0
+            elif len(vals) >= 1:
+                # 有当前值但历史不足（新指标上线初期），按中性 50 参与计分，避免拉低覆盖率。
+                pct = 50.0
             else:
                 continue
             if direction == "down":
@@ -2708,7 +2708,7 @@ def _add_derived(ind: dict) -> None:
             }
 
 
-def _macro_build() -> dict:
+def _macro_build(force_sources: bool = False) -> dict:
     def build():
         ak = astock._akshare()
         from concurrent.futures import ThreadPoolExecutor
@@ -2767,7 +2767,7 @@ def _macro_build() -> dict:
         # ---- 扩展指标：macro_fetch 爬取的官方统计（PMI 分项/核心 CPI/工业利润/
         #      房地产/设备投资/财政/社融存量/信贷收支/银行家问卷/世界贸易量/专项债） ----
         try:
-            ext = macro_fetch.fetch_all()
+            ext = macro_fetch.fetch_all(force=force_sources)
         except Exception:
             ext = {}
         # 把扩展指标并入 indicators（键名统一，供分组引用）
@@ -2915,12 +2915,12 @@ def _macro_build() -> dict:
     return val
 
 
-def get_macro() -> dict:
+def get_macro(force: bool = False) -> dict:
     """国内重要宏观经济指标汇总（GDP/CPI/PPI/PMI/M2/工业增加值/进出口/贸易差额/社融）。
 
     last-good 语义同 get_liquidity：源故障回退最近成功值并标注 stale；
     月度/季度数据 1 小时刷新足够。冷启动从磁盘快照恢复。
     """
-    return _layered_get("macro", _macro_build,
+    return _layered_get("macro", lambda: _macro_build(force_sources=force),
                         valid=lambda v: bool(v.get("cn") or v.get("groups")),
-                        warm=_load_macro_snapshot, ttl=_MACRO_TTL)
+                        warm=_load_macro_snapshot, ttl=_MACRO_TTL, force=force)

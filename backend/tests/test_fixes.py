@@ -3,6 +3,7 @@
 空结果不缓存 / akshare 缺失降级 / 无 index 工具调用归位 / CLI 流式超时。
 """
 import pytest
+import time
 from fastapi.testclient import TestClient
 
 import app as app_module
@@ -10,9 +11,16 @@ import astock
 import chat
 import cli_runtime
 import market
+import cache_runtime
 import portfolio as pf
 
 client = TestClient(app_module.app)
+
+
+@pytest.fixture(autouse=True)
+def legacy_ledger_unit_scope(monkeypatch):
+    """旧 CRUD 用例只验证账本算法；HTTP 鉴权/隔离由专门用例覆盖。"""
+    monkeypatch.setattr(app_module, "_portfolio_user_id", lambda request: None)
 
 
 # ── VR_API_KEY 鉴权中间件 ───────────────────────────────────────────
@@ -32,6 +40,7 @@ def test_api_key_auth(monkeypatch):
 def tmp_pf(tmp_path, monkeypatch):
     monkeypatch.setattr(pf, "CACHE_DIR", str(tmp_path))
     monkeypatch.setattr(pf, "PF_FILE", str(tmp_path / "portfolio.json"))
+    pf._invalidate()  # 进程级响应缓存跨测试隔离：每个用例从空缓存开始
     monkeypatch.setattr(astock, "tencent_quote",
                         lambda codes: {c: {"name": f"股{c}", "price": 10.0, "last_close": 9.5} for c in codes})
     return tmp_path
@@ -242,6 +251,7 @@ def test_cached_skips_empty():
 def _reset_layered(key):
     market._LAYERED.pop(key, None)
     market._FAILED_STREAK.pop(key, None)
+    cache_runtime.invalidate(key)
 
 
 def test_layered_falls_back_to_last_good():
@@ -256,15 +266,16 @@ def test_layered_falls_back_to_last_good():
         raise RuntimeError("source down")
 
     first = market._layered_get(key, flaky, valid=lambda v: bool(v.get("us")))
-    assert first == {"us": {"x": 1}} and first.get("stale") is None
+    assert first["us"] == {"x": 1} and first["cache_state"] == "fresh"
     # 过期后源故障：回退 last-good，标注 stale，数据仍在
-    market._LAYERED[key]["fresh"] = (0, first)  # 强制过期
-    second = market._layered_get(key, flaky, valid=lambda v: bool(v.get("us")))
+    second = market._layered_get(key, flaky, valid=lambda v: bool(v.get("us")), ttl=0)
     assert second["us"] == {"x": 1}
-    assert second["stale"] is True and second["stale_since"]
+    assert second["cache_state"] == "refreshing"
+    time.sleep(0.03)
     # 退避窗口内不再调用 build（不打爆故障源），仍回 last-good
-    third = market._layered_get(key, flaky, valid=lambda v: bool(v.get("us")))
+    third = market._layered_get(key, flaky, valid=lambda v: bool(v.get("us")), ttl=0)
     assert third["us"] == {"x": 1} and len(calls) == 2
+    assert third["cache_state"] == "error" and third["refresh_error"] == "source down"
     # 冷启动 warm 快照：全新 key、无 last-good，直接给快照并标 stale
     warm_calls = []
 
@@ -273,8 +284,8 @@ def test_layered_falls_back_to_last_good():
         raise RuntimeError("down")
 
     _reset_layered("k_warm")
-    warmed = market._layered_get("k_warm", boom, valid=bool, warm=lambda: {"cn": {"snapshot": 1}})
-    assert warmed["cn"] == {"snapshot": 1} and warmed["stale"] is True
+    warmed = market._layered_get("k_warm", boom, valid=bool, warm=lambda: {"cn": {"snapshot": 1}}, ttl=0)
+    assert warmed["cn"] == {"snapshot": 1} and warmed["cache_state"] == "refreshing"
     _reset_layered(key)
 
 

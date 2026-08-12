@@ -16,6 +16,11 @@ import myreports as mr
 
 client = TestClient(app_module.app)
 
+
+@pytest.fixture(autouse=True)
+def legacy_ledger_unit_scope(monkeypatch):
+    monkeypatch.setattr(app_module, "_portfolio_user_id", lambda request: None)
+
 _B64 = "data:application/pdf;base64," + base64.b64encode(b"%PDF-1.4 test").decode()
 
 

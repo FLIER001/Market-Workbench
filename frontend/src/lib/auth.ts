@@ -36,7 +36,11 @@ export function clearSession() {
 
 export function authHeaders(): Record<string, string> {
   const t = loadToken();
-  return t ? { Authorization: `Bearer ${t}` } : {};
+  const access = storageGet("vr-access-key") || "";
+  return {
+    ...(t ? { Authorization: `Bearer ${t}` } : {}),
+    ...(access ? { "X-VR-Access-Key": access } : {}),
+  };
 }
 
 async function req<T>(path: string, method: "GET" | "POST" = "GET", body?: unknown): Promise<T> {
@@ -71,11 +75,11 @@ export const auth = {
       "/auth/register", "POST", { username, password },
     ),
   login: (username: string, password: string) =>
-    req<{ token: string; username: string }>("/auth/login", "POST", { username, password }),
+    req<{ token: string; username: string; user_id: number }>("/auth/login", "POST", { username, password }),
   me: () => req<AuthUser>("/auth/me"),
   logout: () => req<{ ok: boolean }>("/auth/logout", "POST"),
   getData: () => req<Record<string, unknown>>("/auth/data"),
-  setData: (key: string, value: unknown) => req<{ ok: boolean }>("/auth/data/set", "POST", { key, value }),
+  setData: (key: string, value: unknown) => req<{ ok: boolean; version: number; updated_at: number }>("/auth/data/set", "POST", { key, value }),
   mergeData: (items: Record<string, unknown>) =>
     req<Record<string, unknown>>("/auth/data/merge", "POST", { items }),
 };

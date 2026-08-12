@@ -7,10 +7,8 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Sparkline } from "@/components/ui/Sparkline";
 import { api, type MacroData, type MacroIndicator, type MacroModule, type MacroSubModule, type HistPoint } from "@/lib/api";
-import { storageGet, storageSet, storageRemove } from "@/lib/storage";
 import { cn } from "@/lib/utils";
-
-const CACHE_KEY = "vr-macro-v4";
+import { useSWR } from "@/hooks/useSWR";
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const isHist = (v: unknown): v is HistPoint[] =>
@@ -25,19 +23,6 @@ function isValidMacro(d: MacroData | null): d is MacroData {
     }
   }
   return true;
-}
-
-function loadCached(): MacroData | null {
-  try {
-    const raw = storageGet(CACHE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as MacroData;
-    if (isValidMacro(parsed)) return parsed;
-    storageRemove(CACHE_KEY);
-    return null;
-  } catch {
-    return null;
-  }
 }
 
 const fmt = (v: number | null | undefined, suffix = "") =>
@@ -83,53 +68,42 @@ function ClimateBadges({ mod }: { mod: MacroModule }) {
   );
 }
 
-// 模块得分卡（可点击展开）
-function ModuleCard({ mod, open, onToggle }: { mod: MacroModule; open: boolean; onToggle: () => void }) {
+// 紧凑模块 chip：图标 + 名称 + 分数 + 分位条，点击展开明细。
+function ModuleChip({ mod, open, onToggle }: { mod: MacroModule; open: boolean; onToggle: () => void }) {
   const t = mod.score != null ? scoreTone(mod.score) : null;
   const Icon = ICONS[mod.icon] ?? Globe;
-  const hist = isHist(mod.hist) ? mod.hist : [];
   return (
-    <GlassCard
-      className={cn("cursor-pointer p-4 transition-colors hover:border-primary/30", open && "border-primary/40")}
+    <button
+      type="button"
       onClick={onToggle}
+      className={cn(
+        "group w-full rounded-lg border border-border/40 bg-muted/10 px-3 py-2.5 text-left transition-colors",
+        "hover:border-primary/40 hover:bg-muted/20",
+        open && "border-primary/50 bg-primary/5",
+      )}
     >
-      <div className="mb-1 flex items-baseline justify-between">
-        <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-          <Icon className="h-3.5 w-3.5" /> {mod.name}
-        </p>
-        <span className="flex items-center gap-1 text-[10px] text-muted-foreground/50">
-          {mod.indicators.length} 项可用
-          <ChevronDown className={cn("h-3 w-3 transition-transform", open && "rotate-180")} />
-        </span>
+      <div className="flex items-center gap-2">
+        <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground group-hover:text-primary" />
+        <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground">{mod.name}</span>
+        <ChevronDown className={cn("h-3 w-3 shrink-0 text-muted-foreground/40 transition-transform", open && "rotate-180")} />
       </div>
-      <div className="flex items-baseline gap-2">
+      <div className="mt-1.5 flex items-baseline gap-1.5">
         {mod.score != null && t ? (
           <>
-            <span className={cn("font-mono text-2xl font-extrabold", t.text)}>{mod.score.toFixed(1)}</span>
-            <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-medium", t.bg, t.text)}>{t.label}</span>
+            <span className={cn("font-mono text-xl font-extrabold leading-none", t.text)}>{mod.score.toFixed(1)}</span>
+            <span className={cn("rounded px-1 py-px text-[9px] font-medium leading-tight", t.bg, t.text)}>{t.label}</span>
           </>
         ) : (
-          <span className="text-sm font-semibold text-muted-foreground/60">覆盖不足</span>
+          <span className="text-[11px] font-semibold text-muted-foreground/60">覆盖不足</span>
         )}
       </div>
-      {/* 分位条 */}
       {mod.score != null && t && (
-        <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted/20">
+        <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-muted/20">
           <div className={cn("h-full rounded-full transition-all", t.bar)} style={{ width: `${mod.score}%` }} />
         </div>
       )}
-      <p className="mt-1.5 text-[9px] text-muted-foreground/50">
-        覆盖 {(mod.coverage ?? 0).toFixed(0)}% · 置信度 {(mod.confidence ?? 0).toFixed(0)}%
-      </p>
       <ClimateBadges mod={mod} />
-      {hist.length > 1 && (
-        <div className="mt-2">
-          <span className="text-[9px] text-muted-foreground/45">近1年得分</span>
-          <Sparkline data={hist} height={34} className="mt-0.5" color="--primary" valueSuffix=" 分" />
-        </div>
-      )}
-      <p className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground/60">{mod.desc}</p>
-    </GlassCard>
+    </button>
   );
 }
 
@@ -270,21 +244,24 @@ function suffixFor(key: string): string | undefined {
 }
 
 export function Macro() {
-  const [data, setData] = useState<MacroData | null>(loadCached);
   const [err, setErr] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [openModule, setOpenModule] = useState<string | null>(null);
-
-  const load = () => {
-    setLoading(true);
-    setErr(false);
-    api.macro()
-      .then((d) => { setData(d); if (isValidMacro(d)) storageSet(CACHE_KEY, JSON.stringify(d)); })
-      .catch(() => setErr(true))
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => { load(); }, []);
+  const { data, loading, revalidating, revalidate } = useSWR<MacroData>(
+    "macro:v5",
+    async (fresh) => {
+      const d = await api.macro(fresh);
+      if (!isValidMacro(d)) throw new Error("宏观数据格式异常");
+      return d;
+    }, [], () => setErr(true), { persist: true },
+  );
+  const load = () => { setErr(false); void revalidate(true); };
+  useEffect(() => {
+    const tick = () => { if (!document.hidden) void revalidate(); };
+    const timer = window.setInterval(tick, 30 * 60_000);
+    const onVisible = () => { if (!document.hidden) void revalidate(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
+  }, [revalidate]);
 
   const indicators = data?.cn ?? {};
   const modules = data?.modules ?? [];
@@ -300,7 +277,7 @@ export function Macro() {
         subtitle="五类因果层 · 八模块状态 · 点击模块展开具体指标"
         actions={
           <button onClick={load} className="text-muted-foreground hover:text-primary" title="刷新">
-            <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+            <RefreshCw className={cn("h-4 w-4", (loading || revalidating) && "animate-spin")} />
           </button>
         }
       />
@@ -317,30 +294,33 @@ export function Macro() {
         </GlassCard>
       )}
 
-      {/* 五类因果层下的 8 模块状态卡；一级聚类不另造总分。 */}
-      <div className="mb-3 flex items-center gap-2">
+      {/* 五类因果层 × 八模块：五列等宽流程图，左→右即宏观传导方向；一级聚类不另造总分。 */}
+      <div className="mb-2 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
           <Gauge className="h-4 w-4" /> 宏观模块状态
         </h3>
-        <span className="text-[11px] text-muted-foreground/50">0-100 分位 · 固定权重 · 覆盖低于50%不出分</span>
+        <span className="text-[11px] text-muted-foreground/50">0-100 分位 · 点击模块展开指标</span>
         {data?.updated && <span className="ml-auto text-[11px] text-muted-foreground/50">{data.updated}</span>}
       </div>
-      <div className="mb-3 rounded-lg border border-border/40 bg-muted/10 px-3 py-2 text-[11px] text-muted-foreground/70">
-        外部约束＋政策与融资 → 国内周期 → 盈利传导 → 市场验证
-      </div>
-      <div className="mb-3 space-y-4">
-        {clusters.map((cluster) => {
+      <div className="mb-4 grid gap-2 md:grid-cols-3 lg:grid-cols-5">
+        {clusters.map((cluster, ci) => {
           const rows = cluster.modules.map((name) => modules.find((m) => m.name === name)).filter((m): m is MacroModule => Boolean(m));
           if (!rows.length) return null;
           return (
-            <section key={cluster.name}>
-              <div className="mb-2 flex items-baseline gap-2">
-                <h4 className="text-xs font-semibold text-foreground">{cluster.name}</h4>
-                <span className="text-[10px] text-muted-foreground/50">{cluster.desc}</span>
+            <section key={cluster.name} className="relative flex flex-col rounded-xl border border-border/30 bg-muted/5 p-2.5">
+              {/* 聚类标题 + 因果箭头（桌面端列间显示传导方向） */}
+              <div className="mb-2 px-0.5">
+                <h4 className="flex items-center gap-1 text-[11px] font-semibold text-foreground">
+                  {cluster.name}
+                  {ci < clusters.length - 1 && (
+                    <span className="hidden text-muted-foreground/30 lg:inline">→</span>
+                  )}
+                </h4>
+                <p className="mt-0.5 text-[9px] leading-snug text-muted-foreground/50">{cluster.desc}</p>
               </div>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              <div className="flex flex-col gap-2">
                 {rows.map((m) => (
-                  <ModuleCard key={m.name} mod={m} open={openModule === m.name}
+                  <ModuleChip key={m.name} mod={m} open={openModule === m.name}
                     onToggle={() => setOpenModule((cur) => (cur === m.name ? null : m.name))} />
                 ))}
               </div>
@@ -352,13 +332,25 @@ export function Macro() {
       {/* 展开的指标明细 */}
       {active && (
         <GlassCard className="mb-6 p-4">
-          <div className="mb-3 flex items-center gap-2">
+          <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1">
             <h3 className="text-sm font-semibold text-foreground">{active.name} · 指标明细</h3>
             <span className="text-[11px] text-muted-foreground/50">{active.desc}</span>
-            <span className="ml-auto rounded bg-muted/30 px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
-              {active.score != null ? `模块得分 ${active.score.toFixed(1)}` : "覆盖不足"}
-            </span>
+            <div className="ml-auto flex items-center gap-2">
+              <span className="text-[10px] text-muted-foreground/50">
+                覆盖 {(active.coverage ?? 0).toFixed(0)}% · 置信度 {(active.confidence ?? 0).toFixed(0)}%
+              </span>
+              <span className="rounded bg-muted/30 px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
+                {active.score != null ? `模块得分 ${active.score.toFixed(1)}` : "覆盖不足"}
+              </span>
+            </div>
           </div>
+          {/* 近12个月模块得分走势（从总览卡收进来，明细处展开） */}
+          {isHist(active.hist) && active.hist.length > 1 && (
+            <div className="mb-3">
+              <span className="text-[10px] text-muted-foreground/45">近12个月模块得分</span>
+              <Sparkline data={active.hist} height={48} className="mt-1" color="--primary" valueSuffix=" 分" showLatest />
+            </div>
+          )}
           {active.submodules && active.submodules.length > 0 ? (
             // 国内增长与景气模块：按 4 子模块分组展示
             <div className="space-y-4">
@@ -395,9 +387,9 @@ export function Macro() {
       )}
 
       {!active && modules.length > 0 && (
-        <GlassCard className="mb-6 p-4 text-center text-xs text-muted-foreground/60">
-          点击上方任意模块卡片，展开该模块的具体指标与趋势
-        </GlassCard>
+        <p className="mb-6 text-center text-[11px] text-muted-foreground/50">
+          点击上方任意模块，展开该模块的具体指标、趋势与分位贡献
+        </p>
       )}
     </div>
   );

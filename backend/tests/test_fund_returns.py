@@ -31,6 +31,7 @@ def test_recent_returns_wait_for_today_and_keep_previous_nav_day(monkeypatch):
 def test_fund_portfolio_returns_amounts(monkeypatch, tmp_path):
     monkeypatch.setattr(fpf, "CACHE_DIR", str(tmp_path))
     monkeypatch.setattr(fpf, "FPF_FILE", str(tmp_path / "fund_portfolio.json"))
+    fpf._invalidate()  # 进程级响应缓存跨测试隔离
     monkeypatch.setattr(fpf, "_estimate_is_current", lambda: True)
     fpf._save({"holdings": [
         {"code": "110022", "shares": 1000, "cost": 2.5},

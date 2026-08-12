@@ -164,7 +164,7 @@ def _source_status(key: str, stale: bool, fetched_at: float | None,
 def _series_cached(key: str, fn, ttl: float = _GOLD_SERIES_TTL) -> list[tuple[str, float]]:
     now = time.time()
     hit = market._SUB.get(key)
-    if hit and now - hit[0] < ttl:
+    if hit and not market.source_refresh_forced() and now - hit[0] < ttl:
         _source_status(key, False, hit[0], hit[1])
         return hit[1]
     try:
@@ -635,12 +635,13 @@ def _signal_label(total: float) -> str:
 # 入口
 # ---------------------------------------------------------------------------
 
-def get_gold_score() -> dict:
+def get_gold_score(force: bool = False) -> dict:
     return market._layered_get(
-        "gold_score_v3", _build,
+        "gold_score_v3", lambda: market._run_source_refresh(_build, force),
         valid=lambda v: bool(v.get("indicators")),
         warm=_load_gold_snapshot,
-        ttl=1800,
+        ttl=3600,
+        force=force,
     )
 
 

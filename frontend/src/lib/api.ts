@@ -29,7 +29,11 @@ export function saveAccessKey(key: string) {
 
 export function authHeaders(): Record<string, string> {
   const k = loadAccessKey();
-  return k ? { Authorization: `Bearer ${k}` } : {};
+  const token = localStorage.getItem("vr-auth-token") || "";
+  return {
+    ...(k ? { "X-VR-Access-Key": k } : {}),
+    ...(token ? { "X-VR-User-Token": token } : {}),
+  };
 }
 
 export interface MyReport {
@@ -190,7 +194,9 @@ export interface Industry {
 }
 export interface RadarData {
   generated_at: string | null; recent_days: number; industries: Industry[];
-  stats: { industries: number; total_sources: number; failed_sources?: number };
+  stats: { industries: number; total_sources: number; failed_sources?: number; stale_sources?: string[] };
+  cache_state?: "fresh" | "stale" | "refreshing" | "error";
+  cached_at?: string | null; refresh_error?: string | null;
 }
 export interface PublicNewsSearchResult {
   title: string; url: string; snippet: string; published: string; source: string;
@@ -213,6 +219,7 @@ export interface PortfolioData {
   totals: { market_value: number; cost: number; pnl: number; pnl_pct: number; day_pnl: number; day_pnl_pct: number };
   closed: ClosedPosition[];
   realized_pnl: number;
+  ytd_pnl?: number; ytd_pnl_pct?: number;
   updated: string; last_refresh: string | null;
 }
 // 持仓择时信号（research/A股优质个股中短期择时策略.md 规则，后端按前复权日 K 计算）
@@ -344,6 +351,8 @@ export interface SwLevel2Data {
   generated_at: string;
   stale: boolean;
   refresh_error?: string;
+  cache_state?: "fresh" | "stale" | "refreshing" | "error";
+  cached_at?: string | null;
   methodology: {
     classification: string;
     frequency: string;
@@ -378,6 +387,8 @@ export interface SectorScoresData {
   generated_at: string;
   stale: boolean;
   refresh_error?: string;
+  cache_state?: "fresh" | "stale" | "refreshing" | "error";
+  cached_at?: string | null;
   aggregate_error?: string | null;
   classification_error?: string | null;
   industries: SectorScoreRow[];
@@ -466,6 +477,8 @@ export interface PlateScoresData {
   boards: PlateScoreRow[];
   stale?: boolean;
   refresh_error?: string;
+  cache_state?: "fresh" | "stale" | "refreshing" | "error";
+  cached_at?: string | null;
   methodology: {
     framework: string;
     strength_weights: Record<string, number>;
@@ -682,6 +695,58 @@ export interface FundScreenRow {
 export interface FundScreenData {
   total_all: number; total_matched: number; rows: FundScreenRow[]; sort_by: string;
 }
+export type PFSTier = "core_buy" | "potential_buy" | "watch" | "review" | "exclude";
+export interface PFSRiskMetrics {
+  risk_return_peer?: number | null; resilience_peer?: number | null;
+  volatility?: number | null; sharpe?: number | null; max_drawdown?: number | null;
+}
+export interface PFSNavMetrics {
+  n?: number; start_date?: string; end_date?: string; ann_return?: number | null;
+  volatility?: number | null; sortino?: number | null; max_drawdown?: number | null;
+  cvar95?: number | null; recovery_days?: number | null; unrecovered?: boolean;
+  rolling_12m_positive_ratio?: number | null; rolling_24m_positive_ratio?: number | null;
+  rolling_36m_positive_ratio?: number | null;
+}
+export interface PFSScaleMetrics {
+  date?: string; net_assets?: number | null; ending_shares?: number | null;
+  net_share_flow?: number | null; net_share_flow_rate?: number | null;
+  redemption_rate?: number | null; aum_growth_1q?: number | null; quarterly_flow_score?: number | null;
+}
+export interface PFSHolderMetrics {
+  date?: string; institution_pct?: number | null; individual_pct?: number | null;
+  internal_pct?: number | null; institution_change?: number | null;
+}
+export interface PFSCandidate {
+  code: string; name: string; fund_type: string; strategy: string; data_date: string | null;
+  manager: string; manager_count: number; platform: string;
+  manager_career_days: number | null; manager_aum: number | null; manager_fund_count: number | null;
+  team_start_date: string | null; team_tenure_days: number | null;
+  purchase_status: string; redemption_status: string; fee_pct: number | null;
+  annual_fee_pct?: number | null; annual_fee_items?: Record<string, number>;
+  share_classes?: { code: string; name: string; purchase_fee_pct: number | null }[];
+  return_percentiles: Record<string, number | null>;
+  quality_score: number; potential_score: number; raw_score: number; confidence: number;
+  risk_penalty: number; final_score: number; tier: PFSTier; candidate_type: string;
+  quality_components: Record<string, number>; potential_components: Record<string, number>;
+  confidence_components: Record<string, number>;
+  risk_period: string; risk_metrics: PFSRiskMetrics; data_coverage: number;
+  nav_metrics: PFSNavMetrics; scale_metrics: PFSScaleMetrics; holder_metrics: PFSHolderMetrics;
+  gate_pass: boolean; gate_failures: string[]; review_reasons: string[]; risk_notes: string[];
+  why_good: string[]; why_potential: string[]; breaks_thesis: string[]; detail_errors: string[];
+  [period: string]: unknown;
+}
+export interface PFSData {
+  schema_version: number; generated_at: string; as_of: string; stale: boolean; refresh_error?: string;
+  universe_count: number; candidate_count: number; matched_count: number;
+  cache_state?: "fresh" | "stale" | "refreshing" | "error"; cached_at?: string | null;
+  tier_counts: Record<PFSTier, number>; rows: PFSCandidate[];
+  pit_store?: { path: string; observation_count: number; pit_usable_count: number; historical_publication_dates: string };
+  methodology: {
+    name: string; formula: string; direct_coverage_pct: number; proxy_coverage_pct: number; missing_coverage_pct: number;
+    limitations: string[]; definitions: string[];
+    sources: { label: string; scope: string; status: string }[];
+  };
+}
 export interface FundHolding {
   code: string; name: string;
   nav: number; nav_date: string | null;
@@ -709,6 +774,10 @@ export interface FundPortfolioData {
   closed: FundClosedPosition[];
   realized_pnl: number;
   updated: string; last_refresh: string | null;
+}
+export interface LegacyPortfolioStatus {
+  securities: { available: boolean; target_empty: boolean; holdings: number; closed: number };
+  fund: { available: boolean; target_empty: boolean; holdings: number; closed: number };
 }
 
 // ---- 黄金多维评分（方案 V2.1）----
@@ -741,9 +810,9 @@ export const api = {
   health: () => get<{ ok: boolean }>("/health"),
   indices: () => get<IndexQuote[]>("/indices"),
   marketOverview: () => get<MarketOverview>("/market/overview"),
-  liquidity: () => get<LiquidityData>("/market/liquidity"),
-  macro: () => get<MacroData>("/market/macro"),
-  goldScore: () => get<GoldScoreData>("/gold/score"),
+  liquidity: (refresh = false) => get<LiquidityData>(`/market/liquidity${refresh ? "?refresh=true" : ""}`),
+  macro: (refresh = false) => get<MacroData>(`/market/macro${refresh ? "?refresh=true" : ""}`),
+  goldScore: (refresh = false) => get<GoldScoreData>(`/gold/score${refresh ? "?refresh=true" : ""}`),
   emotion: () => get<ShortTermEmotion>("/market/emotion"),
   turnoverTop: () => get<TurnoverTop>("/market/turnover-top"),
   // 传 keys = 只刷新这几个市场（已开盘的）；不传 = 全量快照
@@ -751,13 +820,16 @@ export const api = {
     get<GlobalIndex[]>(`/global/indices${keys?.length ? `?keys=${encodeURIComponent(keys.join(","))}` : ""}`),
   // 全球指数当日分时（key = 后端 _INDICES 的 key，如 spx/hsi/n225）
   globalMinute: (key: string) => get<MinuteKline>(`/global/minute?key=${encodeURIComponent(key)}`),
-  globalStock: (symbol: string) => get<GlobalStock>(`/global/stock?symbol=${encodeURIComponent(symbol)}`),
+  globalStock: (symbol: string, refresh = false) => get<GlobalStock>(`/global/stock?symbol=${encodeURIComponent(symbol)}${refresh ? "&refresh=true" : ""}`),
   hkCashflow: (symbol: string) => get<HkCashflow>(`/global/hk/cashflow?symbol=${encodeURIComponent(symbol)}`),
   radar: () => get<RadarData>("/radar"),
   radarRefresh: () => request<RadarData>("/radar/refresh", "POST"),
   publicNewsSearch: (q: string, count = 5) =>
     get<PublicNewsSearchData>(`/public-news-search?q=${encodeURIComponent(q)}&count=${count}`),
-  portfolio: () => get<PortfolioData>("/portfolio"),
+  portfolio: (fresh = false) => get<PortfolioData>(`/portfolio${fresh ? "?fresh=true" : ""}`),
+  portfolioLegacyStatus: () => get<LegacyPortfolioStatus>("/portfolio/legacy-status"),
+  importLegacyPortfolio: (kind: "securities" | "fund") =>
+    request<PortfolioData | FundPortfolioData>(`/portfolio/import-legacy?kind=${kind}`, "POST"),
   addHolding: (code: string, shares: number, cost: number) => request<PortfolioData>("/portfolio/holding", "POST", { code, shares, cost }),
   removeHolding: (code: string) => request<PortfolioData>(`/portfolio/holding?code=${code}`, "DELETE"),
   refreshPortfolio: () => request<PortfolioData>("/portfolio/refresh", "POST"),
@@ -765,16 +837,16 @@ export const api = {
   closePosition: (code: string, date: string, price: number, shares: number, cost?: number) =>
     request<PortfolioData>("/portfolio/close", "POST", { code, date, price, shares, ...(cost !== undefined ? { cost } : {}) }),
   removeClosed: (index: number) => request<PortfolioData>(`/portfolio/close?index=${index}`, "DELETE"),
-  valuation: (code: string) => get<Valuation>(`/valuation?code=${code}`),
+  valuation: (code: string, refresh = false) => get<Valuation>(`/valuation?code=${code}${refresh ? "&refresh=true" : ""}`),
   minuteKline: (code: string) => get<MinuteKline>(`/kline/minute?code=${encodeURIComponent(code)}`),
-  kline: (code: string, period: KLineData["period"], count = 250) =>
-    get<KLineData>(`/kline/chart?code=${encodeURIComponent(code)}&period=${period}&count=${count}`),
-  percentile: (code: string) => get<ValPercentile>(`/valuation/percentile?code=${code}`),
-  financials: (code: string) => get<Financials>(`/financials?code=${code}`),
-  announcements: (code: string) => get<Announcement[]>(`/announcements?code=${code}`),
+  kline: (code: string, period: KLineData["period"], count = 250, refresh = false) =>
+    get<KLineData>(`/kline/chart?code=${encodeURIComponent(code)}&period=${period}&count=${count}${refresh ? "&refresh=true" : ""}`),
+  percentile: (code: string, refresh = false) => get<ValPercentile>(`/valuation/percentile?code=${code}${refresh ? "&refresh=true" : ""}`),
+  financials: (code: string, refresh = false) => get<Financials>(`/financials?code=${code}${refresh ? "&refresh=true" : ""}`),
+  announcements: (code: string, refresh = false) => get<Announcement[]>(`/announcements?code=${code}${refresh ? "&refresh=true" : ""}`),
   quote: (codes: string) => get<Record<string, Quote>>(`/quote?codes=${codes}`),
-  reports: (code: string) => get<Report[]>(`/reports?code=${code}`),
-  news: (code: string) => get<NewsItem[]>(`/news?code=${code}`),
+  reports: (code: string, refresh = false) => get<Report[]>(`/reports?code=${code}${refresh ? "&refresh=true" : ""}`),
+  news: (code: string, refresh = false) => get<NewsItem[]>(`/news?code=${code}${refresh ? "&refresh=true" : ""}`),
   margin: (code: string) => get<MarginRow[]>(`/margin?code=${code}`),
   blockTrade: (code: string) => get<BlockTradeRow[]>(`/block-trade?code=${code}`),
   holders: (code: string) => get<HolderRow[]>(`/holders?code=${code}`),
@@ -822,7 +894,8 @@ export const api = {
     if (params.limit) qs.set("limit", String(params.limit));
     return get<FundScreenData>(`/funds/screen?${qs.toString()}`);
   },
-  fundPortfolio: () => get<FundPortfolioData>("/fund-portfolio"),
+  fundPfs: (refresh = false) => get<PFSData>(`/funds/pfs?limit=100${refresh ? "&refresh=true" : ""}`),
+  fundPortfolio: (fresh = false) => get<FundPortfolioData>(`/fund-portfolio${fresh ? "?fresh=true" : ""}`),
   addFundHolding: (code: string, shares: number, cost: number) =>
     request<FundPortfolioData>("/fund-portfolio/holding", "POST", { code, shares, cost }),
   removeFundHolding: (code: string) =>

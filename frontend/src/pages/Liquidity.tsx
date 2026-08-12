@@ -4,11 +4,8 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Sparkline } from "@/components/ui/Sparkline";
 import { api, type LiquidityData, type LiquidityUsItem, type HistPoint, type IndexFlow, type CompositeIndex } from "@/lib/api";
-import { storageGet, storageSet, storageRemove } from "@/lib/storage";
 import { cn } from "@/lib/utils";
-
-const CACHE_KEY = "vr-liquidity-v4";
-const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+import { useSWR } from "@/hooks/useSWR";
 
 // ---- 缓存结构校验：localStorage 里可能是旧版格式，字段缺失会把渲染弄崩 ----
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -53,21 +50,6 @@ function isValidLiquidity(d: LiquidityData | null): d is LiquidityData {
         d.fed_odds.strikes.some((s) => !isNum(s?.strike) || !isNum(s?.prob))) return false;
   }
   return true;
-}
-
-// 读取缓存：格式不符就清掉，回退为无缓存（照常走网络加载）
-function loadCached(): LiquidityData | null {
-  try {
-    const raw = storageGet(CACHE_KEY);
-    if (!raw) return null;
-    const cached = JSON.parse(raw) as { savedAt?: number; data?: LiquidityData };
-    if (isNum(cached.savedAt) && Date.now() - cached.savedAt <= CACHE_TTL_MS &&
-        isValidLiquidity(cached.data ?? null)) return cached.data!;
-    storageRemove(CACHE_KEY);
-    return null;
-  } catch {
-    return null;
-  }
 }
 
 const fmt = (v: number | null | undefined, suffix = "") =>
@@ -241,24 +223,24 @@ function IndexCard({ idx, open, onToggle }: {
 }
 
 export function Liquidity() {
-  const [data, setData] = useState<LiquidityData | null>(loadCached);
   const [err, setErr] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [openIdx, setOpenIdx] = useState<string | null>(null);  // 展开子指标的指数，默认全部折叠
-
-  const load = () => {
-    setLoading(true);
-    setErr(false);
-    api.liquidity()
-      .then((d) => {
-        setData(d);
-        if (isValidLiquidity(d)) storageSet(CACHE_KEY, JSON.stringify({ savedAt: Date.now(), data: d }));
-      })
-      .catch(() => setErr(true))
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => { load(); }, []);
+  const { data, loading, revalidating, revalidate } = useSWR<LiquidityData>(
+    "liquidity:v5",
+    async (fresh) => {
+      const d = await api.liquidity(fresh);
+      if (!isValidLiquidity(d)) throw new Error("资金面数据格式异常");
+      return d;
+    }, [], () => setErr(true), { persist: true },
+  );
+  const load = () => { setErr(false); void revalidate(true); };
+  useEffect(() => {
+    const tick = () => { if (!document.hidden) void revalidate(); };
+    const timer = window.setInterval(tick, 5 * 60_000);
+    const onVisible = () => { if (!document.hidden) void revalidate(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
+  }, [revalidate]);
 
   const cnData = data?.cn;
   const us = data?.us;
@@ -279,7 +261,7 @@ export function Liquidity() {
         subtitle="国内资金状态 · 美国金融条件"
         actions={
           <button onClick={load} className="text-muted-foreground hover:text-primary" title="刷新">
-            <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+            <RefreshCw className={cn("h-4 w-4", (loading || revalidating) && "animate-spin")} />
           </button>
         }
       />

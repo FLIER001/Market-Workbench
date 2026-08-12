@@ -22,6 +22,7 @@ import astock
 import gstock
 import market
 import newsradar
+import cache_runtime
 
 # ——— schema 简写：让 20+ 个工具定义保持一屏可读 ———
 
@@ -358,43 +359,49 @@ def _radar(args: dict):
 
 def public_news_search(query: str, count: int = 5) -> dict:
     """Bing RSS 公开网页搜索：固定目标域名、只取摘要，不抓任意结果页正文。"""
-    import requests
-
     q = re.sub(r"\s+", " ", str(query or "")).strip()[:160]
     if not q:
         return {"query": "", "results": []}
     limit = max(1, min(int(count or 5), 8))
-    response = requests.get(
-        "https://www.bing.com/search",
-        params={"q": q, "format": "rss", "setlang": "zh-hans"},
-        headers={
-            "User-Agent": "Mozilla/5.0 (compatible; Market-Workbench/1.1; +https://github.com/FLIER001/Vibe-Research)",
-            "Accept": "application/rss+xml, application/xml, text/xml",
-        },
-        timeout=15,
+    def build():
+        import requests
+        response = requests.get(
+            "https://www.bing.com/search",
+            params={"q": q, "format": "rss", "setlang": "zh-hans"},
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; Market-Workbench/1.1; +https://github.com/FLIER001/Market-Workbench)",
+                "Accept": "application/rss+xml, application/xml, text/xml",
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+        root = ET.fromstring(response.content[:1_000_000])
+        results = []
+        for item in root.findall(".//item"):
+            title = html.unescape(re.sub(r"<[^>]+>", "", item.findtext("title") or "")).strip()
+            link = html.unescape((item.findtext("link") or "").strip())
+            parsed = urlparse(link)
+            if not title or parsed.scheme not in ("http", "https") or not parsed.netloc:
+                continue
+            snippet = html.unescape(re.sub(r"<[^>]+>", "", item.findtext("description") or ""))
+            results.append({
+                "title": title[:240], "url": link,
+                "snippet": re.sub(r"\s+", " ", snippet).strip()[:500],
+                "published": (item.findtext("pubDate") or "").strip(),
+                "source": parsed.netloc.lower().removeprefix("www."),
+            })
+            if len(results) >= limit:
+                break
+        return {"query": q, "results": results}
+
+    value = cache_runtime.get(
+        f"public_news:{q.lower()}:{limit}", build,
+        valid=lambda data: isinstance(data.get("results"), list),
+        ttl=1800, decorate=False,
     )
-    response.raise_for_status()
-    raw = response.content[:1_000_000]
-    root = ET.fromstring(raw)
-    results = []
-    for item in root.findall(".//item"):
-        title = html.unescape(re.sub(r"<[^>]+>", "", item.findtext("title") or "")).strip()
-        link = html.unescape((item.findtext("link") or "").strip())
-        parsed = urlparse(link)
-        if not title or parsed.scheme not in ("http", "https") or not parsed.netloc:
-            continue
-        snippet = html.unescape(re.sub(r"<[^>]+>", "", item.findtext("description") or ""))
-        snippet = re.sub(r"\s+", " ", snippet).strip()[:500]
-        results.append({
-            "title": title[:240],
-            "url": link,
-            "snippet": snippet,
-            "published": (item.findtext("pubDate") or "").strip(),
-            "source": parsed.netloc.lower().removeprefix("www."),
-        })
-        if len(results) >= limit:
-            break
-    return {"query": q, "results": results}
+    if "results" not in value:
+        raise RuntimeError(value.get("refresh_error") or "公开资料搜索暂不可用")
+    return value
 
 
 def _public_news_search(args: dict):

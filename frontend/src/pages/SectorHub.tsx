@@ -32,7 +32,7 @@ export function SectorHub() {
   return (
     <div>
       <PageHeader
-        title="板块"
+        title="板块研究"
         subtitle="板块评分 · 行业评分 · 板块分析"
       />
 

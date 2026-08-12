@@ -32,6 +32,7 @@ import zlib
 from datetime import datetime, timezone, timedelta
 
 import requests
+import cache_runtime
 
 BEIJING = timezone(timedelta(hours=8))
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -1301,7 +1302,7 @@ def policy_execution() -> dict | None:
 # 汇总入口：一次拉全所有扩展指标
 # ---------------------------------------------------------------------------
 
-def fetch_all() -> dict:
+def fetch_all(force: bool = False) -> dict:
     """并行拉取全部扩展指标，返回 {key: 指标卡}。单源失败不影响其他。"""
     from concurrent.futures import ThreadPoolExecutor
     specs = {
@@ -1337,9 +1338,19 @@ def fetch_all() -> dict:
         "nonbank_deposit": nonbank_deposit,
         "policy_execution": policy_execution,
     }
+    intraday = {"financial_conditions"}
+    weekly = {"special_bond_issuance"}
+
+    def fetch_one(key: str, fn):
+        ttl = 1800 if key in intraday else 24 * 3600 if key in weekly else 12 * 3600
+        return cache_runtime.get(
+            f"macro_source:{key}", fn, valid=lambda v: v is not None,
+            ttl=ttl, force=force, decorate=False,
+        )
+
     out: dict = {}
     with ThreadPoolExecutor(max_workers=5) as pool:
-        futures = {k: pool.submit(fn) for k, fn in specs.items()}
+        futures = {k: pool.submit(fetch_one, k, fn) for k, fn in specs.items()}
         for k, fut in futures.items():
             try:
                 val = fut.result()

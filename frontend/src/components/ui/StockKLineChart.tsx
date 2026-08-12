@@ -16,6 +16,7 @@ import { init, use, type ECharts, type EChartsCoreOption } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
 import { AlertCircle, ChartCandlestick, Loader2, RefreshCw } from "lucide-react";
 import { api, type KLineData, type KLineRow, type MinuteKline } from "@/lib/api";
+import { isTradingHours } from "@/hooks/useLiveQuotes";
 import { cn } from "@/lib/utils";
 import { GlassCard } from "./GlassCard";
 import { MinuteChart } from "./MinuteChart";
@@ -274,7 +275,7 @@ export function StockKLineChart({ code, name, volRatio }: { code: string; name: 
     const config = PERIODS.find((item) => item.id === nextPeriod)!;
     const cached = memoryCache.get(cacheKey);
     if (cached && !force) setData(cached);
-    api.kline(code, nextPeriod as KLineData["period"], config.count)
+    api.kline(code, nextPeriod as KLineData["period"], config.count, force)
       .then((next) => {
         if (requestId !== requestIdRef.current) return;
         memoryCache.set(cacheKey, next);
@@ -297,6 +298,22 @@ export function StockKLineChart({ code, name, volRatio }: { code: string; name: 
     }
     load(period);
     // code 切换后重新读取，period 由按钮事件更新。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [code, period]);
+
+  useEffect(() => {
+    if (period !== "minute") return;
+    const tick = () => {
+      if (!document.hidden && isTradingHours()) load("minute", true);
+    };
+    const timer = window.setInterval(tick, 30_000);
+    const onVisible = () => { if (!document.hidden) tick(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+    // `load` intentionally reads current code/period from this render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code, period]);
 

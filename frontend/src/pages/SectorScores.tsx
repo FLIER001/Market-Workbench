@@ -19,6 +19,7 @@ import {
   type SwLevel2Row,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { resolveRefreshing } from "@/hooks/useSWR";
 
 type SortKey = "score" | "valuation" | "prosperity" | "attention" | "crowding";
 const LOCAL_CACHE_KEY = "vr-sector-scores-cache-v1";
@@ -229,7 +230,8 @@ export function SectorScoresPanel() {
     setLoading(true);
     setError(null);
     try {
-      const next = await api.sectorScores(refresh);
+      const first = await api.sectorScores(refresh);
+      const next = await resolveRefreshing(first, () => api.sectorScores(false));
       setData(next);
       saveLocalCache(next);
     } catch (err) {
@@ -264,6 +266,13 @@ export function SectorScoresPanel() {
   }, [load]);
 
   useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (!document.hidden) void load(false);
+    }, 15 * 60_000);
+    return () => window.clearInterval(timer);
+  }, [load]);
+
+  useEffect(() => {
     let cancelled = false;
     const start = async () => {
       if (!level2) {
@@ -283,7 +292,8 @@ export function SectorScoresPanel() {
       }
       setLevel2Loading(true);
       try {
-        const next = await api.sectorScoresLevel2(false);
+        const first = await api.sectorScoresLevel2(false);
+        const next = await resolveRefreshing(first, () => api.sectorScoresLevel2(false));
         if (cancelled) return;
         setLevel2(next);
         setLevel2Error(null);
@@ -317,6 +327,17 @@ export function SectorScoresPanel() {
     }
     return grouped;
   }, [level2]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.hidden) return;
+      api.sectorScoresLevel2(false).then((first) => resolveRefreshing(first, () => api.sectorScoresLevel2(false))).then((next) => {
+        setLevel2(next);
+        try { localStorage.setItem(LEVEL2_CACHE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      }).catch(() => {});
+    }, 60 * 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const phases = useMemo(() => {
     const values = new Set(data?.industries.map((row) => row.phase) || []);

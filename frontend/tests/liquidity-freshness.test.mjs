@@ -7,11 +7,12 @@ const source = await readFile(
   "utf8",
 );
 
-test("liquidity cache is versioned, timestamped, and expires", () => {
-  assert.match(source, /vr-liquidity-v4/);
-  assert.match(source, /CACHE_TTL_MS/);
-  assert.match(source, /savedAt:\s*Date\.now\(\)/);
-  assert.match(source, /Date\.now\(\) - cached\.savedAt <= CACHE_TTL_MS/);
+test("liquidity uses the shared persistent stale-while-revalidate cache", () => {
+  assert.match(source, /useSWR<LiquidityData>/);
+  assert.match(source, /"liquidity:v5"/);
+  assert.match(source, /\{ persist: true \}/);
+  assert.match(source, /5 \* 60_000/);
+  assert.match(source, /loading \|\| revalidating/);
 });
 
 test("refresh failures stay visible even when cached data exists", () => {

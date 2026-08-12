@@ -13,6 +13,7 @@ import { storageGet, storageSet } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 import { cancelBackgroundTask, startBackgroundTask, updateBackgroundTask, useBackgroundTask } from "@/lib/backgroundTasks";
 import { WatchlistEventJudgement } from "@/components/intel/WatchlistEventJudgement";
+import { useSWR } from "@/hooks/useSWR";
 
 const TABS = [
   { key: "events", label: "自选事件研判", icon: TrendingUp, integrated: false, desc: "基于自选标的、关联板块与多源证据的 AI 事件研判" },
@@ -32,7 +33,6 @@ interface IntelTaskData {
 
 // 持久化 digests 到 localStorage，使切换页面再回来仍保留提炼结果。
 const DIGEST_KEY = "vr-intel-digests";
-const RADAR_KEY = "vr-intel-radar";
 const INTEL_TASK_KEY = "intel:analysis";
 const EMPTY_BULK = { running: false, done: 0, total: 0 };
 
@@ -65,40 +65,29 @@ function saveDigests(d: Record<string, Digest>) {
 }
 
 function InvestmentNewsPanel() {
-  const [data, setData] = useState<RadarData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [active, setActive] = useState("ai");
-  const [refreshing, setRefreshing] = useState(false);
+  const { data, revalidating: refreshing, revalidate } = useSWR<RadarData>(
+    "radar:v2", (fresh) => fresh ? api.radarRefresh() : api.radar(), [],
+    (e) => setErr(e instanceof ApiError ? e.message : "加载失败"), { persist: true },
+  );
   const intelTask = useBackgroundTask<IntelTaskData>(INTEL_TASK_KEY, { digests: loadDigests(), bulk: EMPTY_BULK });
   const { digests, bulk } = intelTask.data;
-
-  useEffect(() => {
-    // 优先从 localStorage 恢复缓存的 radar 数据，避免每次进页面都白屏等待
-    const cached = storageGet(RADAR_KEY);
-    if (cached) {
-      try { setData(JSON.parse(cached)); } catch { /* ignore */ }
-    }
-    api.radar().then((d) => { setData(d); storageSet(RADAR_KEY, JSON.stringify(d)); }).catch((e) => setErr(e instanceof ApiError ? e.message : "加载失败"));
-  }, []);
 
   // digests 变化时持久化
   useEffect(() => { saveDigests(digests); }, [digests]);
 
   const refresh = async () => {
-    setRefreshing(true); setErr(null);
-    try {
-      const d = await api.radarRefresh();
-      setData(d);
-      storageSet(RADAR_KEY, JSON.stringify(d));
-      // 刷新成功后自动触发一键提炼全部要点
-      if (hasLlm()) {
-        // 延迟 0ms 让 UI 先更新到非 refreshing 状态
-        setTimeout(() => genAll(d), 0);
-      }
-    }
-    catch (e) { setErr(e instanceof ApiError ? e.message : "刷新失败"); }
-    finally { setRefreshing(false); }
+    setErr(null);
+    await revalidate(true);
   };
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (!document.hidden) void revalidate();
+    }, 2 * 60 * 60_000);
+    return () => window.clearInterval(timer);
+  }, [revalidate]);
 
   const industries: Industry[] = data?.industries || [];
   const cur = industries.find((i) => i.key === active) || industries[0];
@@ -463,6 +452,8 @@ ${ctx}`;
 // 只做公开信息聚合，标的均为用户自己关注列表里的，不预置、不推荐。
 interface FeedRow { code: string; name: string; when: string; title: string; meta?: string; url?: string }
 const MAX_ROWS = 60;
+const FEED_TTL_MS = 2 * 60 * 60_000;
+const feedCacheKey = (kind: "filings" | "news", codes: string[]) => `vr-watch-feed:v2:${kind}:${codes.slice().sort().join(",")}`;
 
 function WatchlistFeed({ kind }: { kind: "filings" | "news" }) {
   const [codes, setCodes] = useState<string[]>(loadWatch);
@@ -471,8 +462,18 @@ function WatchlistFeed({ kind }: { kind: "filings" | "news" }) {
   const [err, setErr] = useState<string | null>(null);
   const [depNote, setDepNote] = useState<string | null>(null);
 
-  const load = useCallback(async (cs: string[]) => {
+  const load = useCallback(async (cs: string[], force = false) => {
     if (!cs.length) { setRows([]); return; }
+    const cacheKey = feedCacheKey(kind, cs);
+    if (!force) {
+      try {
+        const cached = JSON.parse(storageGet(cacheKey) || "null") as { savedAt: number; rows: FeedRow[] } | null;
+        if (cached?.rows?.length && Date.now() - cached.savedAt < FEED_TTL_MS) {
+          setRows(cached.rows);
+          return;
+        }
+      } catch { /* ignore invalid cache */ }
+    }
     setLoading(true); setErr(null); setDepNote(null);
     try {
       // 股名（一次批量），失败则退回显示代码
@@ -485,7 +486,7 @@ function WatchlistFeed({ kind }: { kind: "filings" | "news" }) {
       const out: FeedRow[] = [];
       if (kind === "filings") {
         const res = await Promise.all(
-          cs.map((c) => api.announcements(c).then((a) => ({ c, a })).catch(() => ({ c, a: [] as Announcement[] }))),
+          cs.map((c) => api.announcements(c, force).then((a) => ({ c, a })).catch(() => ({ c, a: [] as Announcement[] }))),
         );
         for (const { c, a } of res)
           for (const x of a)
@@ -494,7 +495,7 @@ function WatchlistFeed({ kind }: { kind: "filings" | "news" }) {
         let dep: string | null = null;
         const res = await Promise.all(
           cs.map((c) =>
-            api.news(c).then((n) => ({ c, n })).catch((e) => {
+            api.news(c, force).then((n) => ({ c, n })).catch((e) => {
               if (e instanceof ApiError && e.status === 501) dep = e.message;
               return { c, n: [] as NewsItem[] };
             }),
@@ -513,7 +514,9 @@ function WatchlistFeed({ kind }: { kind: "filings" | "news" }) {
         return Number.isNaN(t) ? 0 : t;
       };
       out.sort((p, q) => ts(q.when) - ts(p.when));
-      setRows(out.slice(0, MAX_ROWS));
+      const next = out.slice(0, MAX_ROWS);
+      setRows(next);
+      storageSet(cacheKey, JSON.stringify({ savedAt: Date.now(), rows: next }));
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "加载失败");
     } finally {
@@ -523,7 +526,17 @@ function WatchlistFeed({ kind }: { kind: "filings" | "news" }) {
 
   useEffect(() => { const cs = loadWatch(); setCodes(cs); load(cs); }, [load]);
 
-  const refresh = () => { const cs = loadWatch(); setCodes(cs); load(cs); };
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.hidden) return;
+      const cs = loadWatch();
+      setCodes(cs);
+      void load(cs, true);
+    }, FEED_TTL_MS);
+    return () => window.clearInterval(timer);
+  }, [load]);
+
+  const refresh = () => { const cs = loadWatch(); setCodes(cs); load(cs, true); };
 
   if (!codes.length) {
     return (

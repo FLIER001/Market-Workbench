@@ -85,7 +85,9 @@ def test_insufficient_data():
     assert sig["signal_label"] == "数据不足"
 
 
-def test_timing_api_empty_portfolio():
+def test_timing_api_empty_portfolio(monkeypatch):
+    monkeypatch.setattr(app_module, "_portfolio_user_id", lambda request: None)
+    monkeypatch.setattr(app_module.pf, "_load", lambda user_id=None: {"holdings": []})
     r = client.get("/api/portfolio/timing")
     assert r.status_code == 200
     assert r.json()["data"]["signals"] == {}

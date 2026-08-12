@@ -17,13 +17,12 @@ from __future__ import annotations
 import json
 import math
 import os
-import threading
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 
 import requests
 import urllib3
+import cache_runtime
 
 from sector_scores import (
     _HEADERS,
@@ -50,8 +49,7 @@ _FALLBACK_SNAPSHOT_FILE = os.path.join(
     "sw_level2_snapshots.json",
 )
 _TTL = 60 * 60
-_INTRADAY_TTL = 5 * 60
-_LOCK = threading.Lock()
+_INTRADAY_TTL = 60 * 60
 _SCHEMA_VERSION = 2
 _SNAPSHOT_SCHEMA_VERSION = 1
 _MAX_MONTHS = 60
@@ -545,22 +543,9 @@ def get_cached_level2_scores() -> dict | None:
 
 
 def get_level2_scores(force: bool = False) -> dict:
-    with _LOCK:
-        cached = _load_cache()
-        if not force and cached:
-            generated = cached.get("generated_at")
-            try:
-                generated_at = datetime.strptime(generated, "%Y-%m-%d %H:%M").replace(tzinfo=BEIJING)
-                age = time.time() - generated_at.timestamp()
-            except (TypeError, ValueError):
-                age = _TTL + 1
-            if age < _cache_ttl(cached):
-                return cached
-        try:
-            data = _build()
-            _save_cache(data)
-            return data
-        except Exception as error:
-            if cached:
-                return {**cached, "stale": True, "refresh_error": str(error)}
-            raise
+    cached = _load_cache()
+    return cache_runtime.get(
+        "sw_level2_scores:v2", _build,
+        valid=lambda value: bool(value.get("industries")),
+        ttl=_cache_ttl(cached or {}), warm=_load_cache, save=_save_cache, force=force,
+    )

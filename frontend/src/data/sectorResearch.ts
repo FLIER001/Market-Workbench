@@ -52,6 +52,9 @@ export interface SectorResearch {
   };
 }
 
+// 人工维护的事实快照；只随代码版本发布更新，不参与任何定时任务或自动 AI 改写。
+export const SECTOR_RESEARCH_VERSION = "2026-08-01.manual";
+
 const FYP_URL = "https://www.ndrc.gov.cn/fggz/fzzlgh/gjfzgh/202603/U020260317369114704096.pdf";
 const HUMANOID_ACTION_URL = "https://www.miit.gov.cn/jgsj/kjs/wjfb/art/2026/art_cd666691abf8471fb8553d463aa416e3.html";
 const HUMANOID_TRAINING_URL = "https://www.miit.gov.cn/zwgk/zcwj/wjfb/tz/art/2026/art_f291ccd3da4c47ce95741de63cc088e6.html";

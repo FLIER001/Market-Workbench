@@ -1,23 +1,24 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { AlertCircle, Loader2, Trash2, X } from "lucide-react";
+import { AlertCircle, ChevronDown, ChevronUp, ChevronsUpDown, Loader2, Trash2, X } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, ApiError, type FundPortfolioData, type FundSearchResult } from "@/lib/api";
-import { isFundRefreshHours } from "@/hooks/useLiveQuotes";
+import { fundRefreshIntervalMs } from "@/hooks/useLiveQuotes";
 import { cn } from "@/lib/utils";
 import { useSWR } from "@/hooks/useSWR";
 import { FundSearchInput } from "./FundSearchInput";
 import { FundDetail } from "./FundDetail";
 
-const REFRESH_MS = 30 * 60 * 1000;
 const pnlColor = (v: number) => (v > 0 ? "text-danger" : v < 0 ? "text-success" : "text-muted-foreground");
 const fmt = (v: number) => v.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
 const fmtPx = (v: number) => v.toLocaleString("zh-CN", { maximumFractionDigits: 4 });
 const fmtPct = (v: number | null) => v == null ? "—" : `${v > 0 ? "+" : ""}${v}%`;
+type FSortKey = "name" | "nav" | "cost" | "estimate_pct" | "today_return_amount" | "yesterday_return_amount" | "market_value" | "shares" | "pnl";
+type FSortDir = "asc" | "desc";
 
 // 基金持仓：按最新公布净值算浮动盈亏；交易时段叠加盘中估值（推算值，与净值分列）。
 export function FundPortfolioPanel({ refreshSignal }: { refreshSignal?: number }) {
-  const { data, setData, revalidate } = useSWR<FundPortfolioData>("fund:portfolio", () => api.fundPortfolio(), [], undefined, { persist: true });
+  const { data, setData, revalidate } = useSWR<FundPortfolioData>("fund:portfolio", (fresh?: boolean) => api.fundPortfolio(fresh), [], undefined, { persist: true, scope: "user" });
   const [err, setErr] = useState<string | null>(null);
   const [picked, setPicked] = useState<FundSearchResult | null>(null);
   const [shares, setShares] = useState("");
@@ -29,6 +30,8 @@ export function FundPortfolioPanel({ refreshSignal }: { refreshSignal?: number }
   const [sellDate, setSellDate] = useState("");
   const [sellNav, setSellNav] = useState("");
   const [sellShares, setSellShares] = useState("");
+  const [sortKey, setSortKey] = useState<FSortKey | null>(null);
+  const [sortDir, setSortDir] = useState<FSortDir>("desc");
 
   const todayStr = () => {
     const now = new Date();
@@ -55,6 +58,45 @@ export function FundPortfolioPanel({ refreshSignal }: { refreshSignal?: number }
   const closeSell = () => {
     setSellCode(null); setSellDate(""); setSellNav(""); setSellShares("");
   };
+
+  // 排序：名称按中文排序，数值列空值排最后
+  const sortedHoldings = useMemo(() => {
+    const rows = data?.holdings || [];
+    if (!sortKey) return rows;
+    const dir = sortDir === "asc" ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      if (sortKey === "name") return a.name.localeCompare(b.name, "zh") * dir;
+      const va = a[sortKey], vb = b[sortKey];
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      return ((va as number) - (vb as number)) * dir;
+    });
+  }, [data, sortKey, sortDir]);
+
+  const toggleSort = (key: FSortKey) => {
+    if (sortKey === key) {
+      setSortDir(sortDir === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      setSortDir(key === "name" ? "asc" : "desc");
+    }
+  };
+
+  const SortTh = ({ label, k, title }: { label: string; k: FSortKey | null; title?: string }) => (
+    <th className="whitespace-nowrap px-4 py-3 font-medium" title={title}>
+      {k ? (
+        <button onClick={() => toggleSort(k)} className="inline-flex items-center gap-1 hover:text-foreground">
+          {label}
+          {sortKey === k ? (
+            sortDir === "asc" ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />
+          ) : (
+            <ChevronsUpDown className="h-3 w-3 text-muted-foreground/40" />
+          )}
+        </button>
+      ) : label}
+    </th>
+  );
 
   // 下拉选中基金后：拉取行情填成本净值，光标跳转到份额框
   const pickFund = (f: FundSearchResult) => {
@@ -83,11 +125,21 @@ export function FundPortfolioPanel({ refreshSignal }: { refreshSignal?: number }
   }, [refreshSignal, revalidate]);
 
   useEffect(() => {
-    const tick = () => { if (!document.hidden && isFundRefreshHours()) load(); };
-    const t = setInterval(tick, REFRESH_MS);
-    const onVisible = () => { if (!document.hidden) load(); };
+    let timer: number | null = null;
+    let cancelled = false;
+    const tick = async () => {
+      const interval = fundRefreshIntervalMs();
+      if (!document.hidden && interval != null) await load(true);
+      if (!cancelled) timer = window.setTimeout(tick, interval ?? 60_000);
+    };
+    timer = window.setTimeout(tick, fundRefreshIntervalMs() ?? 60_000);
+    const onVisible = () => { if (!document.hidden && fundRefreshIntervalMs() != null) void load(true); };
     document.addEventListener("visibilitychange", onVisible);
-    return () => { clearInterval(t); document.removeEventListener("visibilitychange", onVisible); };
+    return () => {
+      cancelled = true;
+      if (timer != null) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [load]);
 
   const add = async () => {
@@ -119,6 +171,11 @@ export function FundPortfolioPanel({ refreshSignal }: { refreshSignal?: number }
   };
 
   const t = data?.totals;
+  // 累计盈亏 = 浮动盈亏 + 已实现盈亏
+  const cumulativePnl = data ? (data.totals?.pnl ?? 0) + data.realized_pnl : 0;
+  const cumulativePnlPct = data && data.totals?.cost > 0
+    ? ((data.totals.pnl + data.realized_pnl) / data.totals.cost) * 100
+    : null;
   return (
     <div className="space-y-4">
       {/* 汇总条 */}
@@ -126,7 +183,8 @@ export function FundPortfolioPanel({ refreshSignal }: { refreshSignal?: number }
         <Stat label="总市值" value={t ? fmt(t.market_value) : "—"} />
         <Stat label="浮动盈亏" value={t ? fmt(t.pnl) : "—"} cls={t ? pnlColor(t.pnl) : ""}
               sub={t ? `${t.pnl_pct > 0 ? "+" : ""}${t.pnl_pct}%` : undefined} />
-        <Stat label="实现盈亏" value={data ? fmt(data.realized_pnl) : "—"} cls={data ? pnlColor(data.realized_pnl) : ""} />
+        <Stat label="累计盈亏" value={data ? fmt(cumulativePnl) : "—"} cls={data ? pnlColor(cumulativePnl) : ""}
+              sub={cumulativePnlPct != null ? `${cumulativePnlPct > 0 ? "+" : ""}${cumulativePnlPct.toFixed(2)}%` : undefined} />
         <Stat label="今日收益" value={t?.today_pnl != null ? fmt(t.today_pnl) : "—"}
               cls={t?.today_pnl != null ? pnlColor(t.today_pnl) : ""}
               sub={t?.today_pnl_pct != null ? fmtPct(t.today_pnl_pct) : undefined} />
@@ -159,6 +217,11 @@ export function FundPortfolioPanel({ refreshSignal }: { refreshSignal?: number }
 
       {/* 持仓表 */}
       <GlassCard className="overflow-x-auto p-0">
+        {data?.updated && (
+          <div className="flex items-center justify-end px-4 pt-3">
+            <span className="text-xs text-muted-foreground/60">更新于 {data.updated}</span>
+          </div>
+        )}
         {!data ? (
           <div className="flex h-32 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
         ) : data.holdings.length === 0 ? (
@@ -169,18 +232,18 @@ export function FundPortfolioPanel({ refreshSignal }: { refreshSignal?: number }
           <table className="w-full min-w-[860px] text-sm">
             <thead>
               <tr className="border-b border-border/60 text-left text-xs text-muted-foreground">
-                <th className="px-4 py-3 font-medium">基金</th>
-                <th className="px-4 py-3 font-medium">最新净值 / 成本</th>
-                <th className="px-4 py-3 font-medium" title="官方估值已下线。指数基金按跟踪指数/场内ETF实时行情估算；主动股基按上季十大重仓推算；港股/QDII按海外指数代理（闭市显示隔夜，标「夜」）">盘中估值</th>
-                <th className="px-4 py-3 font-medium" title="仅显示北京时间当天已确认净值收益；未公布时显示空值">今日收益</th>
-                <th className="px-4 py-3 font-medium" title="上一已确认净值日收益，金额按当前份额计算">昨日收益</th>
-                <th className="px-4 py-3 font-medium">市值 / 份额</th>
-                <th className="px-4 py-3 font-medium">浮动盈亏</th>
+                <SortTh label="基金" k="name" />
+                <SortTh label="最新净值 / 成本" k="nav" />
+                <SortTh label="盘中估值" k="estimate_pct" title="官方估值已下线。指数基金按跟踪指数/场内ETF实时行情估算；主动股基按上季十大重仓推算；港股/QDII按海外指数代理（闭市显示隔夜，标「夜」）" />
+                <SortTh label="今日收益" k="today_return_amount" title="仅显示北京时间当天已确认净值收益；未公布时显示空值" />
+                <SortTh label="昨日收益" k="yesterday_return_amount" title="上一已确认净值日收益，金额按当前份额计算" />
+                <SortTh label="市值 / 份额" k="market_value" />
+                <SortTh label="浮动盈亏" k="pnl" />
                 <th className="px-4 py-3 font-medium" />
               </tr>
             </thead>
             <tbody>
-              {data.holdings.map((h) => (
+              {sortedHoldings.map((h) => (
                 <Fragment key={h.code}>
                 <tr className="border-b border-border/30 transition hover:bg-black/10">
                   <td className="px-4 py-3">

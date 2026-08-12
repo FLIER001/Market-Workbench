@@ -68,6 +68,18 @@ def init_db() -> None:
                    updated_at REAL NOT NULL,
                    PRIMARY KEY (user_id, key))"""
         )
+        columns = {row["name"] for row in c.execute("PRAGMA table_info(user_data)").fetchall()}
+        if "version" not in columns:
+            c.execute("ALTER TABLE user_data ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
+        c.execute(
+            """CREATE TABLE IF NOT EXISTS user_data_backups (
+                   user_id INTEGER NOT NULL,
+                   key TEXT NOT NULL,
+                   value TEXT NOT NULL,
+                   version INTEGER NOT NULL,
+                   backed_up_at REAL NOT NULL,
+                   PRIMARY KEY (user_id, key))"""
+        )
 
 
 def _hash_pw(password: str, salt: str) -> str:
@@ -118,12 +130,17 @@ def login(username: str, password: str) -> dict:
             "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?,?,?,?)",
             (token, row["id"], now, now + _SESSION_TTL),
         )
-    return {"token": token, "username": row["username"]}
+    return {"token": token, "username": row["username"], "user_id": row["id"]}
 
 
 def user_count() -> int:
     with _conn() as c:
         return c.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+
+
+def user_ids() -> list[int]:
+    with _conn() as c:
+        return [int(row["id"]) for row in c.execute("SELECT id FROM users ORDER BY id").fetchall()]
 
 
 def resolve_token(token: str) -> dict | None:
@@ -163,16 +180,31 @@ def get_data(user_id: int) -> dict:
     return out
 
 
-def set_data(user_id: int, key: str, value) -> None:
+def set_data(user_id: int, key: str, value) -> dict:
     if key not in ALLOWED_KEYS:
         raise ValueError(f"不允许的数据 key: {key}")
     payload = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    now = time.time()
     with _conn() as c:
+        previous = c.execute(
+            "SELECT value, version FROM user_data WHERE user_id=? AND key=?", (user_id, key)
+        ).fetchone()
+        version = int(previous["version"] or 1) + 1 if previous else 1
+        if previous:
+            c.execute(
+                """INSERT INTO user_data_backups (user_id, key, value, version, backed_up_at)
+                   VALUES (?,?,?,?,?)
+                   ON CONFLICT(user_id, key) DO UPDATE SET
+                     value=excluded.value, version=excluded.version, backed_up_at=excluded.backed_up_at""",
+                (user_id, key, previous["value"], previous["version"], now),
+            )
         c.execute(
-            """INSERT INTO user_data (user_id, key, value, updated_at) VALUES (?,?,?,?)
-               ON CONFLICT(user_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at""",
-            (user_id, key, payload, time.time()),
+            """INSERT INTO user_data (user_id, key, value, updated_at, version) VALUES (?,?,?,?,?)
+               ON CONFLICT(user_id, key) DO UPDATE SET
+                 value=excluded.value, updated_at=excluded.updated_at, version=excluded.version""",
+            (user_id, key, payload, now, version),
         )
+    return {"ok": True, "key": key, "version": version, "updated_at": now}
 
 
 def merge_data(user_id: int, items: dict) -> dict:

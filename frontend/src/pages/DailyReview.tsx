@@ -12,6 +12,7 @@ import { MinuteChart } from "@/components/ui/MinuteChart";
 import { storageGet, storageSet } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 import { startBackgroundTask, useBackgroundTask } from "@/lib/backgroundTasks";
+import { isTradingHours } from "@/hooks/useLiveQuotes";
 
 // A股红涨绿跌。全球市场（美股/港股指数）**也沿用红涨**——与整个看板及东财等中国平台一致，
 // 对中国用户最不易看错（Simon 2026-07-05 确认；非国际绿涨惯例，是有意选择，勿改）。
@@ -19,8 +20,9 @@ const pctColor = (p: number) => (p > 0 ? "text-danger" : p < 0 ? "text-success" 
 const fmt = (v: number) => v.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
 const yi = (v: number | null) => (v == null ? "—" : `${fmt(v / 1e8)} 亿`); // 元 → 亿
 const GLOBAL_IDX_CACHE_KEY = "vr-daily-global-idx-v2";
-// 全球市场轮询间隔：与后端 /global/indices 的 5 分钟共享缓存对齐（轮更快也只是拿缓存）
-const GLOBAL_IDX_REFRESH_MS = 5 * 60_000;
+const GLOBAL_IDX_REFRESH_MS = 60_000;
+const A_IDX_REFRESH_MS = 5_000;
+const MARKET_REFRESH_MS = 60_000;
 // A 股大盘指数卡 name → 腾讯完整代码（指数须带前缀，与后端 A_INDEX_CODES 对齐）
 const A_INDEX_CODES: Record<string, string> = {
   "上证指数": "sh000001", "深证成指": "sz399001", "创业板指": "sz399006",
@@ -167,6 +169,12 @@ export function DailyReview() {
     ]).finally(() => setRefreshing(false));
   };
 
+  const refreshMarket = () => {
+    api.marketOverview().then(setOverview).catch(() => {}).finally(() => setOvDone(true));
+    api.emotion().then(setEmotion).catch(() => {}).finally(() => setEmoDone(true));
+    api.turnoverTop().then(setTurnover).catch(() => {}).finally(() => setToDone(true));
+  };
+
   // 数据块占位：请求没回来 = 加载中；回来了但为空 = 数据源暂不可用（别让用户干等）
   const pending = (done: boolean) => (
     <p className="py-4 text-center text-sm text-muted-foreground/60">
@@ -180,13 +188,44 @@ export function DailyReview() {
     // 已开盘的国家指数每 5 分钟自动刷新一次（与后端共享缓存 TTL 对齐，日盘/夜盘
     // 综合涨跌幅随之更新）；闭市市场直接用本地展示缓存、不发请求。页面切到后台时
     // 暂停轮询省流量，切回前台立即补刷一次（闭市市场仍是本地合并，无请求）。
-    const tick = () => { if (!document.hidden) refreshGlobal(); };
-    const timer = setInterval(tick, GLOBAL_IDX_REFRESH_MS);
-    const onVisible = () => { if (!document.hidden) refreshGlobal(); };
+    const globalTimer = setInterval(() => { if (!document.hidden) refreshGlobal(); }, GLOBAL_IDX_REFRESH_MS);
+    const aTimer = setInterval(() => {
+      if (!document.hidden && isTradingHours()) api.indices().then(setIndices).catch(() => setIdxErr(true));
+    }, A_IDX_REFRESH_MS);
+    const marketTimer = setInterval(() => { if (!document.hidden && isTradingHours()) refreshMarket(); }, MARKET_REFRESH_MS);
+    const onVisible = () => {
+      if (document.hidden) return;
+      refreshGlobal();
+      api.indices().then(setIndices).catch(() => setIdxErr(true));
+      refreshMarket();
+    };
     document.addEventListener("visibilitychange", onVisible);
-    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
+    return () => {
+      clearInterval(globalTimer); clearInterval(aTimer); clearInterval(marketTimer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!aMinuteSel) return;
+    const tick = () => {
+      if (document.hidden || !isTradingHours()) return;
+      api.minuteKline(aMinuteSel.id).then((d) => setAMinute({ data: d, loading: false, err: null })).catch(() => {});
+    };
+    const timer = setInterval(tick, 30_000);
+    return () => clearInterval(timer);
+  }, [aMinuteSel]);
+
+  useEffect(() => {
+    if (!gMinuteSel) return;
+    const tick = () => {
+      if (document.hidden) return;
+      api.globalMinute(gMinuteSel.id).then((d) => setGMinute({ data: d, loading: false, err: null })).catch(() => {});
+    };
+    const timer = setInterval(tick, 60_000);
+    return () => clearInterval(timer);
+  }, [gMinuteSel]);
 
 
 

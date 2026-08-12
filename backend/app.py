@@ -25,6 +25,7 @@ import chat as chat_layer
 import cli_runtime
 import gstock
 import fund
+import fund_pfs
 import fund_portfolio as fpf
 import newsradar
 import portfolio as pf
@@ -38,6 +39,9 @@ import plate_scores as plate_scores_layer
 import sector_scores as sector_scores_layer
 import sw_level2_scores as sw_level2_layer
 import tools as tools_layer
+import cache_runtime
+import stock_cache
+import score_scheduler
 
 from version import read_version
 
@@ -45,8 +49,17 @@ __version__ = read_version()
 
 app = FastAPI(title="Market Workbench API", version=__version__)
 
-# 每半小时后台刷新持仓数据
-pf.start_scheduler(1800)
+# 每半小时后台刷新持仓数据（场内证券 + 场外基金；真重算收益并写缓存，
+# 用户点进持仓页 GET 直接返回刷新好的结果。窗口内判断在各自模块内）
+pf.start_scheduler(300, users.user_ids)
+fpf.start_scheduler(120, users.user_ids)
+fund_pfs.start_scheduler()
+newsradar.start_scheduler()
+score_scheduler.start(
+    lambda: sector_scores_layer.get_sector_scores(force=True),
+    lambda: sw_level2_layer.get_level2_scores(force=True),
+    lambda: plate_scores_layer.get_plate_scores(force=True),
+)
 
 # CORS：默认放开（本地自托管友好）；公网部署时用 VR_ALLOW_ORIGINS 收紧成白名单。
 #   例：VR_ALLOW_ORIGINS="https://myhost"  （逗号分隔多个）
@@ -71,12 +84,16 @@ async def _require_api_key(request: Request, call_next):
         and request.url.path.startswith("/api/")
         and request.url.path != "/api/health"
     ):
-        if request.headers.get("authorization", "") != f"Bearer {_API_KEY}":
+        bearer_ok = request.headers.get("authorization", "") == f"Bearer {_API_KEY}"
+        if request.headers.get("x-vr-access-key", "") != _API_KEY and not bearer_ok:
             return JSONResponse({"detail": "未授权：缺少或错误的 API Key（VR_API_KEY）"}, status_code=401)
     return await call_next(request)
 
 
 def _bearer_token(request: Request) -> str:
+    direct = request.headers.get("x-vr-user-token", "").strip()
+    if direct:
+        return direct
     auth = request.headers.get("authorization", "")
     return auth[7:].strip() if auth.lower().startswith("bearer ") else ""
 
@@ -87,6 +104,21 @@ def _current_user(request: Request) -> dict:
     if not user:
         raise HTTPException(401, "未登录或登录已过期")
     return user
+
+
+def _optional_user_id(request: Request) -> int | None:
+    token = request.headers.get("x-vr-user-token", "").strip()
+    if not token:
+        return None
+    user = users.resolve_token(token)
+    if not user:
+        raise HTTPException(401, "未登录或登录已过期")
+    return int(user["id"])
+
+
+def _portfolio_user_id(request: Request) -> int:
+    """Portfolio ledgers are account-owned; the legacy global file is import-only."""
+    return int(_current_user(request)["id"])
 
 _CODE_RE = r"^\d{6}$"
 
@@ -164,10 +196,10 @@ def auth_get_data(request: Request):
 def auth_set_data(req: DataSetReq, request: Request):
     user = _current_user(request)
     try:
-        users.set_data(user["id"], req.key, req.value)
+        result = users.set_data(user["id"], req.key, req.value)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return {"data": {"ok": True}}
+    return {"data": result}
 
 
 @app.post("/api/auth/data/merge")
@@ -274,16 +306,18 @@ class HoldingIn(BaseModel):
 
 
 @app.get("/api/portfolio")
-def portfolio_get():
-    """持仓 + 实时盈亏（浮动盈亏红涨绿跌）。"""
+def portfolio_get(request: Request, fresh: bool = Query(False)):
+    """持仓 + 盈亏（浮动盈亏红涨绿跌）。默认返回缓存快照秒开；fresh=true 真重算。"""
     try:
-        return {"data": pf.get_portfolio()}
+        return {"data": pf.get_portfolio(fresh=fresh, user_id=_portfolio_user_id(request))}
+    except HTTPException:
+        raise
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"持仓读取异常：{e}") from e
 
 
 @app.post("/api/portfolio/holding")
-def portfolio_add(h: HoldingIn):
+def portfolio_add(h: HoldingIn, request: Request):
     """加一笔持仓（同代码按加权平均成本合并）。存本地，不上传。"""
     code = (h.code or "").strip()
     if not code.isdigit() or len(code) != 6:
@@ -291,12 +325,12 @@ def portfolio_add(h: HoldingIn):
     if h.shares <= 0:
         raise HTTPException(400, "数量必须大于 0")
     # 成本价不限正负：融券 / 返息 / 摊薄后为负成本等情形按结果计算，用户想怎么输就怎么输。
-    return {"data": pf.add_holding(code, h.shares, h.cost)}
+    return {"data": pf.add_holding(code, h.shares, h.cost, _portfolio_user_id(request))}
 
 
 @app.delete("/api/portfolio/holding")
-def portfolio_remove(code: str = Query(...)):
-    return {"data": pf.remove_holding(code.strip())}
+def portfolio_remove(request: Request, code: str = Query(...)):
+    return {"data": pf.remove_holding(code.strip(), _portfolio_user_id(request))}
 
 
 # ---- 我的研报（用户上传自己的研报，存本地、不上传、不进开源仓库）----
@@ -345,7 +379,7 @@ class CloseIn(BaseModel):
 
 
 @app.post("/api/portfolio/close")
-def portfolio_close(c: CloseIn):
+def portfolio_close(c: CloseIn, request: Request):
     """记一笔已清仓（已实现盈亏），并从当前持仓扣减对应股数。存本地。"""
     code = (c.code or "").strip()
     if not code.isdigit() or len(code) != 6:
@@ -361,33 +395,37 @@ def portfolio_close(c: CloseIn):
     except ValueError:
         raise HTTPException(400, "清仓日期格式应为 YYYY-MM-DD") from None
     try:
-        return {"data": pf.close_position(code, date, c.price, c.shares, c.cost)}
+        return {"data": pf.close_position(code, date, c.price, c.shares, c.cost, _portfolio_user_id(request))}
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
 
 
 @app.delete("/api/portfolio/close")
-def portfolio_close_remove(index: int = Query(...)):
-    return {"data": pf.remove_closed(index)}
+def portfolio_close_remove(request: Request, index: int = Query(...)):
+    return {"data": pf.remove_closed(index, _portfolio_user_id(request))}
 
 
 @app.post("/api/portfolio/refresh")
-def portfolio_refresh():
-    """手动刷新：立即重拉行情算盈亏。"""
+def portfolio_refresh(request: Request):
+    """手动刷新：真重算持仓收益并覆盖缓存。"""
     try:
-        return {"data": pf.get_portfolio()}
+        return {"data": pf.get_portfolio(fresh=True, user_id=_portfolio_user_id(request))}
+    except HTTPException:
+        raise
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"刷新失败：{e}") from e
 
 
 @app.get("/api/portfolio/timing")
-def portfolio_timing():
+def portfolio_timing(request: Request):
     """当前持仓的加减仓信号 + 强度（按 research/A股优质个股中短期择时策略.md 规则，
     前复权日 K 计算）。规则化技术指标提示，非投资建议。"""
     try:
-        holdings = pf._load().get("holdings", [])
+        holdings = pf._load(_portfolio_user_id(request)).get("holdings", [])
         codes = [h["code"] for h in holdings]
         return {"data": {"signals": timing.get_timing_signals(codes)}}
+    except HTTPException:
+        raise
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"择时信号异常：{e}") from e
 
@@ -458,6 +496,17 @@ def funds_screen(type: str = Query(""), r4433: bool = Query(False),
         raise HTTPException(502, f"基金筛选异常：{e}") from e
 
 
+@app.get("/api/funds/pfs")
+def funds_pfs(strategy: str = Query(""), tier: str = Query(""), pool: str = Query(""),
+              keyword: str = Query(""), limit: int = Query(100, le=200),
+              refresh: bool = Query(False)):
+    """PFS V3.0 Manager-First 主动权益基金公开数据初筛。"""
+    try:
+        return {"data": fund_pfs.query_pfs(strategy, tier, pool, keyword, limit, refresh)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"PFS 构建异常：{e}") from e
+
+
 class FundHoldingIn(BaseModel):
     code: str
     shares: float
@@ -465,28 +514,30 @@ class FundHoldingIn(BaseModel):
 
 
 @app.get("/api/fund-portfolio")
-def fund_portfolio_get():
-    """基金持仓 + 最新净值/盘中估值叠加浮动盈亏。存本地，不上传。"""
+def fund_portfolio_get(request: Request, fresh: bool = Query(False)):
+    """基金持仓 + 最新净值/盘中估值叠加浮动盈亏。默认返回缓存快照秒开；fresh=true 真重算。"""
     try:
-        return {"data": fpf.get_portfolio()}
+        return {"data": fpf.get_portfolio(bypass=fresh, user_id=_portfolio_user_id(request))}
+    except HTTPException:
+        raise
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"基金持仓读取异常：{e}") from e
 
 
 @app.post("/api/fund-portfolio/holding")
-def fund_portfolio_add(h: FundHoldingIn):
+def fund_portfolio_add(h: FundHoldingIn, request: Request):
     """加一笔基金持仓（份额 + 单位成本净值）；同代码按加权平均合并。"""
     code = (h.code or "").strip()
     if not code.isdigit() or len(code) != 6:
         raise HTTPException(400, "基金代码必须是 6 位数字")
     if h.shares <= 0:
         raise HTTPException(400, "份额必须大于 0")
-    return {"data": fpf.add_holding(code, h.shares, h.cost)}
+    return {"data": fpf.add_holding(code, h.shares, h.cost, _portfolio_user_id(request))}
 
 
 @app.delete("/api/fund-portfolio/holding")
-def fund_portfolio_remove(code: str = Query(...)):
-    return {"data": fpf.remove_holding(code.strip())}
+def fund_portfolio_remove(request: Request, code: str = Query(...)):
+    return {"data": fpf.remove_holding(code.strip(), _portfolio_user_id(request))}
 
 
 class FundCloseIn(BaseModel):
@@ -498,7 +549,7 @@ class FundCloseIn(BaseModel):
 
 
 @app.post("/api/fund-portfolio/close")
-def fund_portfolio_close(c: FundCloseIn):
+def fund_portfolio_close(c: FundCloseIn, request: Request):
     """记一笔已卖出（按卖出净值算已实现盈亏），并扣减当前份额。"""
     code = (c.code or "").strip()
     if not code.isdigit() or len(code) != 6:
@@ -513,14 +564,29 @@ def fund_portfolio_close(c: FundCloseIn):
     except ValueError:
         raise HTTPException(400, "卖出日期格式应为 YYYY-MM-DD") from None
     try:
-        return {"data": fpf.close_position(code, date, c.nav, c.shares, c.cost)}
+        return {"data": fpf.close_position(code, date, c.nav, c.shares, c.cost, _portfolio_user_id(request))}
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
 
 
 @app.delete("/api/fund-portfolio/close")
-def fund_portfolio_close_remove(index: int = Query(...)):
-    return {"data": fpf.remove_closed(index)}
+def fund_portfolio_close_remove(request: Request, index: int = Query(...)):
+    return {"data": fpf.remove_closed(index, _portfolio_user_id(request))}
+
+
+@app.get("/api/portfolio/legacy-status")
+def portfolio_legacy_status(request: Request):
+    uid = int(_current_user(request)["id"])
+    return {"data": {"securities": pf.legacy_status(uid), "fund": fpf.legacy_status(uid)}}
+
+
+@app.post("/api/portfolio/import-legacy")
+def portfolio_import_legacy(request: Request, kind: str = Query(pattern="^(securities|fund)$")):
+    uid = int(_current_user(request)["id"])
+    try:
+        return {"data": pf.import_legacy(uid) if kind == "securities" else fpf.import_legacy(uid)}
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
 
 
 @app.get("/api/radar")
@@ -536,7 +602,7 @@ def radar():
 def radar_refresh():
     """强制重抓全部 RSS 源（耗时约 20-40s），更新缓存。"""
     try:
-        return {"data": newsradar.fetch_radar()}
+        return {"data": newsradar.get_radar(force=True)}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"资讯雷达刷新失败：{e}") from e
 
@@ -644,16 +710,17 @@ def market_turnover_top():
 
 
 @app.get("/api/market/liquidity")
-def market_liquidity():
+def market_liquidity(refresh: bool = False):
     """资金供给重要指标（国内：两融 / 主力净流入；国外：美债 10Y / 5Y / 3M 与 10Y-3M 利差）。缓存 5 分钟。"""
     try:
-        return {"data": market.get_liquidity()}
+        return {"data": market.get_liquidity(force=refresh)}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"资金供给指标异常：{e}") from e
 
 
-# 全球指数分时 5 分钟缓存（数据源分钟级，比页面轮询更省）
+# 全球指数分时 60 秒缓存（数据源分钟级）
 _GLOBAL_MINUTE_CACHE: dict = {}
+_A_MINUTE_CACHE: dict = {}
 
 
 @app.get("/api/global/indices")
@@ -679,7 +746,7 @@ def global_minute(key: str = Query(..., min_length=2, max_length=16)):
     if key not in astock.GLOBAL_INDEX_MINUTE_SRC:
         raise HTTPException(404, f"未覆盖的全球指数「{key}」")
     hit = _GLOBAL_MINUTE_CACHE.get(key)
-    if hit and _time.time() - hit[0] < 300:
+    if hit and _time.time() - hit[0] < 60:
         return {"data": hit[1]}
     sym, secid = astock.GLOBAL_INDEX_MINUTE_SRC[key]
     try:
@@ -718,10 +785,11 @@ def global_minute(key: str = Query(..., min_length=2, max_length=16)):
 
 
 @app.get("/api/global/stock")
-def global_stock(symbol: str = Query(..., min_length=1, max_length=16)):
+def global_stock(symbol: str = Query(..., min_length=1, max_length=16), refresh: bool = False):
     """美股 / 港股个股聚合：行情 + 关键财务指标（东财域内源）。symbol 如 AAPL / BABA / 00700。"""
     try:
-        data = gstock.us_hk_stock(symbol.strip())
+        clean = symbol.strip().upper()
+        data = _stock_cached("global_stock", clean, 15, lambda: gstock.us_hk_stock(clean), refresh)
         if not data:
             raise HTTPException(404, f"未找到美股/港股代码「{symbol}」")
         return {"data": data}
@@ -766,58 +834,48 @@ def quote(codes: str = Query(..., description="逗号分隔的 6 位代码")):
         raise HTTPException(502, f"行情源异常：{e}") from e
 
 
-_PCT_CACHE: dict = {}
+def _stock_cached(endpoint: str, code: str, ttl: int, fetch, force: bool = False, valid=None):
+    value = cache_runtime.get(
+        f"stock:{endpoint}:{code}", fetch,
+        valid=valid or (lambda value: value is not None), ttl=ttl,
+        warm=lambda: stock_cache.warm(endpoint, code),
+        save=lambda value: stock_cache.save(endpoint, code, value),
+        force=force, decorate=False,
+    )
+    if value is None or (isinstance(value, dict) and value.get("cache_state") == "error" and value.get("cached_at") is None):
+        detail = value.get("refresh_error") if isinstance(value, dict) else None
+        raise RuntimeError(detail or "数据源当前无可用结果")
+    return value
 
 
 @app.get("/api/valuation/percentile")
-def valuation_percentile(code: str = Query(...)):
+def valuation_percentile(code: str = Query(...), refresh: bool = False):
     """PE-TTM / PB 历史分位（近5年）。全站缓存 30 分钟/代码（历史序列日频、变化慢）。"""
     code = _validate(code)
-    hit = _PCT_CACHE.get(code)
-    if hit and _time.time() - hit[0] < 1800:
-        return {"data": hit[1]}
     try:
-        data = astock.valuation_percentile(code)
-        _PCT_CACHE[code] = (_time.time(), data)
-        return {"data": data}
+        return {"data": _stock_cached("valuation_percentile", code, 24 * 3600, lambda: astock.valuation_percentile(code), refresh, bool)}
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"估值分位异常：{e}") from e
 
 
-_ANN_CACHE: dict = {}
-
-
 @app.get("/api/announcements")
-def announcements(code: str = Query(...)):
+def announcements(code: str = Query(...), refresh: bool = False):
     """个股近期公告（东财，仅 requests）。缓存 15 分钟/代码。"""
     code = _validate(code)
-    hit = _ANN_CACHE.get(code)
-    if hit and _time.time() - hit[0] < 900:
-        return {"data": hit[1]}
     try:
-        data = astock.announcements(code)
-        _ANN_CACHE[code] = (_time.time(), data)
-        return {"data": data}
+        return {"data": _stock_cached("announcements", code, 900, lambda: astock.announcements(code), refresh)}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"公告源异常：{e}") from e
 
 
-_FIN_CACHE: dict = {}
-
-
 @app.get("/api/financials")
-def financials(code: str = Query(...)):
+def financials(code: str = Query(...), refresh: bool = False):
     """财务关键指标（同花顺财务摘要，最新报告期）。缓存 30 分钟/代码。"""
     code = _validate(code)
-    hit = _FIN_CACHE.get(code)
-    if hit and _time.time() - hit[0] < 1800:
-        return {"data": hit[1]}
     try:
-        data = astock.financials(code)
-        _FIN_CACHE[code] = (_time.time(), data)
-        return {"data": data}
+        return {"data": _stock_cached("financials", code, 24 * 3600, lambda: astock.financials(code), refresh, bool)}
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001
@@ -825,11 +883,11 @@ def financials(code: str = Query(...)):
 
 
 @app.get("/api/valuation")
-def valuation(code: str = Query(...)):
+def valuation(code: str = Query(...), refresh: bool = False):
     """完整估值：行情 + 一致预期 + 前向PE/PEG/消化年数。"""
     code = _validate(code)
     try:
-        return {"data": astock.full_valuation(code)}
+        return {"data": _stock_cached("valuation", code, 6 * 3600, lambda: astock.full_valuation(code), refresh, bool)}
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
     except Exception as e:  # noqa: BLE001
@@ -837,24 +895,26 @@ def valuation(code: str = Query(...)):
 
 
 @app.get("/api/reports")
-def reports(code: str = Query(...), pages: int = Query(2, ge=1, le=5)):
+def reports(code: str = Query(...), pages: int = Query(2, ge=1, le=5), refresh: bool = False):
     """个股研报列表（东财，含 PDF 链接）。仅需 requests。"""
     code = _validate(code)
     try:
-        rows = astock.eastmoney_reports(code, max_pages=pages)
-        for r in rows:
-            r["pdfUrl"] = astock.pdf_url(r.get("infoCode", "")) if r.get("infoCode") else None
-        return {"data": rows}
+        def build():
+            rows = astock.eastmoney_reports(code, max_pages=pages)
+            for row in rows:
+                row["pdfUrl"] = astock.pdf_url(row.get("infoCode", "")) if row.get("infoCode") else None
+            return rows
+        return {"data": _stock_cached(f"reports:{pages}", code, 6 * 3600, build, refresh)}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"研报源异常：{e}") from e
 
 
 @app.get("/api/news")
-def news(code: str = Query(...), limit: int = Query(20, ge=1, le=50)):
+def news(code: str = Query(...), limit: int = Query(20, ge=1, le=50), refresh: bool = False):
     """个股新闻（东财，需 akshare）。"""
     code = _validate(code)
     try:
-        return {"data": astock.stock_news(code, limit=limit)}
+        return {"data": _stock_cached(f"news:{limit}", code, 600, lambda: astock.stock_news(code, limit=limit), refresh)}
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001
@@ -862,11 +922,11 @@ def news(code: str = Query(...), limit: int = Query(20, ge=1, le=50)):
 
 
 @app.get("/api/info")
-def info(code: str = Query(...)):
+def info(code: str = Query(...), refresh: bool = False):
     """个股基本面：行业/股本/上市时间（需 akshare）。"""
     code = _validate(code)
     try:
-        return {"data": astock.individual_info(code)}
+        return {"data": _stock_cached("info", code, 24 * 3600, lambda: astock.individual_info(code), refresh)}
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001
@@ -874,11 +934,11 @@ def info(code: str = Query(...)):
 
 
 @app.get("/api/disclosure")
-def disclosure(code: str = Query(...)):
+def disclosure(code: str = Query(...), refresh: bool = False):
     """巨潮公告列表（需 akshare）。"""
     code = _validate(code)
     try:
-        return {"data": astock.disclosure(code)}
+        return {"data": _stock_cached("disclosure", code, 900, lambda: astock.disclosure(code), refresh)}
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001
@@ -902,11 +962,17 @@ def kline_chart(
     code: str = Query(...),
     period: str = Query("day", pattern="^(day|week|month)$"),
     count: int = Query(250, ge=20, le=800),
+    refresh: bool = False,
 ):
     """图表标准 OHLCV：腾讯前复权主源，mootdx 不复权备用。"""
     code = _validate(code)
     try:
-        data = astock.chart_kline(code, period=period, count=count)
+        ttl = 300 if period == "day" else 24 * 3600
+        data = _stock_cached(
+            f"kline:{period}:{count}", code, ttl,
+            lambda: astock.chart_kline(code, period=period, count=count), refresh,
+            lambda value: bool(value.get("rows")),
+        )
         if not data["rows"]:
             raise HTTPException(502, "K线数据源当前无返回")
         return {"data": data}
@@ -923,6 +989,9 @@ def kline_minute(code: str = Query(...)):
     # 指数卡传带前缀代码（sh000300），个股页传 6 位裸代码
     if not (len(code) == 8 and code[:2].isalpha() and code[2:].isdigit()):
         code = _validate(code)
+    hit = _A_MINUTE_CACHE.get(code)
+    if hit and _time.time() - hit[0] < 30:
+        return {"data": hit[1]}
     try:
         data = astock.minute_kline(code)
         if not data["points"]:
@@ -938,6 +1007,7 @@ def kline_minute(code: str = Query(...)):
         # 收盘时间标注正确（不再把 13:01 数据点误标到 11:31 槽位）。
         if not data.get("market_minutes"):
             data["market_minutes"] = [[570, 690], [780, 900]]
+        _A_MINUTE_CACHE[code] = (_time.time(), data)
         return {"data": data}
     except HTTPException:
         raise
@@ -946,11 +1016,11 @@ def kline_minute(code: str = Query(...)):
 
 
 @app.get("/api/finance")
-def finance(code: str = Query(...)):
+def finance(code: str = Query(...), refresh: bool = False):
     """季报财务快照（需 mootdx）。"""
     code = _validate(code)
     try:
-        return {"data": astock.finance(code)}
+        return {"data": _stock_cached("finance", code, 24 * 3600, lambda: astock.finance(code), refresh, bool)}
     except astock.DependencyMissing as e:
         raise HTTPException(501, str(e)) from e
     except Exception as e:  # noqa: BLE001
@@ -962,17 +1032,8 @@ def finance(code: str = Query(...)):
 # 东财有 1s 限流，这些多为日/季级静态数据，统一走 30 分钟缓存，进一步降低被封风险。
 # ---------------------------------------------------------------------------
 
-_DC_CACHE: dict = {}  # key=(endpoint, code) -> (ts, data)
-
-
 def _cached(endpoint: str, code: str, ttl: int, fetch):
-    key = (endpoint, code)
-    hit = _DC_CACHE.get(key)
-    if hit and _time.time() - hit[0] < ttl:
-        return hit[1]
-    data = fetch()
-    _DC_CACHE[key] = (_time.time(), data)
-    return data
+    return _stock_cached(endpoint, code, ttl, fetch)
 
 
 @app.get("/api/margin")
@@ -1198,18 +1259,18 @@ def deep_analysis(req: DeepAnalysisReq):
 
 
 @app.get("/api/market/macro")
-def market_macro():
+def market_macro(refresh: bool = False):
     """宏观经济指标（GDP/CPI/PPI/PMI/M2/工业增加值/进出口/贸易差额/社融）。缓存 1 小时。"""
     try:
-        return {"data": market.get_macro()}
+        return {"data": market.get_macro(force=refresh)}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"宏观经济指标异常：{e}") from e
 
 
 @app.get("/api/gold/score")
-def gold_score():
+def gold_score(refresh: bool = False):
     """黄金价格多维评分（方案 V2.1）。缓存 30 分钟，last-good 兜底。"""
     try:
-        return {"data": gold_score_layer.get_gold_score()}
+        return {"data": gold_score_layer.get_gold_score(force=refresh)}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"黄金评分异常：{e}") from e

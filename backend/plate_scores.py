@@ -18,12 +18,12 @@ from __future__ import annotations
 import json
 import math
 import os
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
 import astock
+import cache_runtime
 
 BEIJING = timezone(timedelta(hours=8))
 DATA_DIR = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
@@ -35,8 +35,7 @@ _FALLBACK_SNAPSHOT_FILE = os.path.join(os.path.dirname(__file__), ".cache", "pla
 _STOCK_FACTOR_CACHE_FILE = os.path.join(DATA_DIR, "plate_stock_factors.json")
 _BOARD_CACHE_FILE = os.path.join(DATA_DIR, "plate_board_constituents.json")
 _TTL = 60 * 60
-_INTRADAY_TTL = 5 * 60
-_LOCK = threading.Lock()
+_INTRADAY_TTL = 15 * 60
 _SCHEMA_VERSION = 2
 _KLINE_COUNT = 260  # 约 1 年日K，覆盖位置/拥挤的时间序列分位
 _KLINE_WORKERS = 8  # 腾讯K线并发上限（实测 8 并发稳定）
@@ -1117,22 +1116,9 @@ def get_cached_plate_scores() -> dict | None:
 
 
 def get_plate_scores(force: bool = False) -> dict:
-    with _LOCK:
-        cached = _load_cache()
-        if not force and cached:
-            generated = cached.get("generated_at")
-            try:
-                generated_at = datetime.strptime(generated, "%Y-%m-%d %H:%M").replace(tzinfo=BEIJING)
-                age = time.time() - generated_at.timestamp()
-            except (TypeError, ValueError):
-                age = _TTL + 1
-            if age < _cache_ttl(cached):
-                return cached
-        try:
-            data = _build()
-            _save_cache(data)
-            return data
-        except Exception as error:
-            if cached:
-                return {**cached, "stale": True, "refresh_error": str(error)}
-            raise
+    cached = _load_cache()
+    return cache_runtime.get(
+        "plate_scores:v5", _build,
+        valid=lambda value: bool(value.get("boards")),
+        ttl=_cache_ttl(cached or {}), warm=_load_cache, save=_save_cache, force=force,
+    )

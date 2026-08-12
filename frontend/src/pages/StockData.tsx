@@ -23,8 +23,21 @@ import {
   saveWatchGroups,
 } from "@/lib/watchlist";
 import { cn } from "@/lib/utils";
+import { isTradingHours } from "@/hooks/useLiveQuotes";
 
 const StockKLineChart = lazy(() => import("@/components/ui/StockKLineChart"));
+const SNAPSHOT_PREFIX = "vr-stock-page:v1:";
+
+type StockPageSnapshot = Pick<ReturnType<typeof emptySnapshot>, "val" | "reports" | "news" | "pctl" | "fin" | "anns">;
+function emptySnapshot() {
+  return { val: null as Valuation | null, reports: [] as Report[], news: [] as NewsItem[], pctl: null as ValPercentile | null, fin: null as Financials | null, anns: [] as Announcement[] };
+}
+function loadSnapshot(code: string): StockPageSnapshot | null {
+  try { return JSON.parse(localStorage.getItem(SNAPSHOT_PREFIX + code) || "null") as StockPageSnapshot | null; } catch { return null; }
+}
+function saveSnapshot(code: string, snapshot: StockPageSnapshot) {
+  try { localStorage.setItem(SNAPSHOT_PREFIX + code, JSON.stringify(snapshot)); } catch { /* ignore */ }
+}
 
 // 金额格式化（后端资金单位：元 / 万元）
 const yi = (v: number) => `${(v / 1e8).toFixed(2)} 亿`;
@@ -192,7 +205,10 @@ export function StockData() {
     if (!c) { setErr("请输入代码"); return; }
     setShowDrop(false);
     const rid = ++runIdRef.current;
-    setLoading(true); setErr(null); setDepNote(null); setVal(null); setReports([]); setNews([]); setPctl(null); setFin(null); setAnns([]);
+    const snapshot = /^\d{6}$/.test(c) ? loadSnapshot(c) : null;
+    setLoading(true); setErr(null); setDepNote(null);
+    setVal(snapshot?.val ?? null); setReports(snapshot?.reports ?? []); setNews(snapshot?.news ?? []);
+    setPctl(snapshot?.pctl ?? null); setFin(snapshot?.fin ?? null); setAnns(snapshot?.anns ?? []);
     setMargin([]); setBlockT([]); setHolders([]); setDividend([]); setFundFlow([]); setDt(null); setLockup(null); setBlocks(null); setHotCon([]); setQa([]);
     setGStock(null); setCashflow(null);
 
@@ -223,32 +239,26 @@ export function StockData() {
     api.blocks(c).then(ok(setBlocks)).catch(() => {});
     api.hotConcepts(c).then(ok(setHotCon)).catch(() => {});
     api.investorQa(c).then(ok(setQa)).catch(() => {});
+    const persist = (patch: Partial<StockPageSnapshot>) => {
+      const previous = loadSnapshot(c) || emptySnapshot();
+      saveSnapshot(c, { ...previous, ...patch });
+    };
+    api.reports(c).then(ok((rows) => { setReports(rows); persist({ reports: rows }); })).catch(() => {});
+    api.percentile(c).then(ok((value) => { setPctl(value); persist({ pctl: value }); })).catch(() => {});
+    api.financials(c).then(ok((value) => { setFin(value); persist({ fin: value }); })).catch(() => {});
+    api.announcements(c).then(ok((rows) => { setAnns(rows); persist({ anns: rows }); })).catch(() => {});
+    api.news(c).then(ok((rows) => { setNews(rows); persist({ news: rows }); })).catch((e) => {
+      if (rid === runIdRef.current && e instanceof ApiError && e.status === 501) setDepNote(e.message);
+    });
+    api.quote(c).then(ok((quotes) => {
+      const quote = Object.values(quotes)[0];
+      if (quote?.vol_ratio != null) setQuoteVolRatio(quote.vol_ratio);
+    })).catch(() => {});
     try {
-      // 行情+估值+研报+历史分位+财务+公告（新闻单独降级）
-      const [v, r, p, f, a, q] = await Promise.all([
-        api.valuation(c),
-        api.reports(c).catch(() => []),
-        api.percentile(c).catch(() => null),
-        api.financials(c).catch(() => null),
-        api.announcements(c).catch(() => []),
-        api.quote(c).catch(() => null),
-      ]);
+      const value = await api.valuation(c);
       if (rid !== runIdRef.current) return;
-      setVal(v);
-      if (q) {
-        const quote = Object.values(q)[0];
-        if (quote?.vol_ratio != null) setQuoteVolRatio(quote.vol_ratio);
-      }
-      setReports(r);
-      setPctl(p);
-      setFin(f);
-      setAnns(a);
-      try {
-        const n = await api.news(c);
-        if (rid === runIdRef.current) setNews(n);
-      } catch (e) {
-        if (rid === runIdRef.current && e instanceof ApiError && e.status === 501) setDepNote(e.message);
-      }
+      setVal(value);
+      persist({ val: value });
     } catch (e) {
       if (rid !== runIdRef.current) return;
       setErr(e instanceof ApiError ? e.message : "查询失败");
@@ -256,6 +266,34 @@ export function StockData() {
       if (rid === runIdRef.current) setLoading(false);
     }
   };
+
+  useEffect(() => {
+    const current = val?.code;
+    if (!current || !/^\d{6}$/.test(current)) return;
+    const tick = () => {
+      if (document.hidden || !isTradingHours()) return;
+      api.quote(current).then((quotes) => {
+        const quote = quotes[current];
+        if (!quote) return;
+        setQuoteVolRatio(quote.vol_ratio ?? null);
+        setVal((previous) => previous ? {
+          ...previous,
+          price: quote.price, pe_ttm: quote.pe_ttm, pb: quote.pb, mcap_yi: quote.mcap_yi,
+        } : previous);
+      }).catch(() => {});
+    };
+    const timer = window.setInterval(tick, 3000);
+    return () => window.clearInterval(timer);
+  }, [val?.code]);
+
+  useEffect(() => {
+    if (!gstock?.code) return;
+    const symbol = gstock.code;
+    const timer = window.setInterval(() => {
+      if (!document.hidden) api.globalStock(symbol).then(setGStock).catch(() => {});
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [gstock?.code]);
 
   // 顶部全局搜索或板块核心环节带代码进入时自动查询；同页更换 URL 参数也会刷新。
   useEffect(() => {

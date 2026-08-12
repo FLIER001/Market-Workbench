@@ -40,13 +40,20 @@ export function isTradingHours(): boolean {
   return (mins >= 9 * 60 + 15 && mins <= 11 * 60 + 30) || (mins >= 13 * 60 && mins <= 15 * 60);
 }
 
-/** 基金确认净值通常在晚间公布，轮询窗口需覆盖收盘后。 */
+/** 基金刷新窗口（工作日）：交易时段 9:15-11:30/13:00-15:00（盘中估值有效）+ 净值更新时段 19:00-23:00（当日确认净值公布）。与后端 _is_refresh_hours 同口径。 */
 export function isFundRefreshHours(): boolean {
+  return fundRefreshIntervalMs() != null;
+}
+
+/** 基金数据的当前刷新频率：盘中估值 2 分钟，晚间确认净值 30 分钟。 */
+export function fundRefreshIntervalMs(): number | null {
   const bj = beijingNow();
   const day = bj.getDay();
-  if (day === 0 || day === 6) return false;
+  if (day === 0 || day === 6) return null;
   const mins = bj.getHours() * 60 + bj.getMinutes();
-  return mins >= 9 * 60 && mins <= 23 * 60;
+  const trading = (mins >= 9 * 60 + 15 && mins <= 11 * 60 + 30) || (mins >= 13 * 60 && mins <= 15 * 60);
+  const navUpdate = mins >= 19 * 60 && mins <= 23 * 60 + 30;
+  return trading ? 2 * 60_000 : navUpdate ? 30 * 60_000 : null;
 }
 
 export interface LiveQuotesState {
