@@ -986,9 +986,11 @@ def kline_chart(
 @app.get("/api/kline/minute")
 def kline_minute(code: str = Query(...)):
     """分时图（当日分钟级）：腾讯 minute/query 接口；闭市无数据时回退上一交易日。"""
+    # 支持黄金期货品种：AU0/AU9999/AUTD
     code = (code or "").strip()
     # 指数卡传带前缀代码（sh000300），个股页传 6 位裸代码
-    if not (len(code) == 8 and code[:2].isalpha() and code[2:].isdigit()):
+    # 黄金期货直接跳过验证
+    if not code.startswith("AU") and not (len(code) == 8 and code[:2].isalpha() and code[2:].isdigit()):
         code = _validate(code)
     hit = _A_MINUTE_CACHE.get(code)
     if hit and _time.time() - hit[0] < 30:
@@ -1001,6 +1003,14 @@ def kline_minute(code: str = Query(...)):
             if fb:
                 fb["last_day"] = True
                 data = fb
+
+        # 黄金期货无数据或为 AU 系列：尝试新浪期货接口
+        if not data["points"] and code.startswith("AU"):
+            data = astock.futures_minute_kline(code)
+
+        if not data["points"]:
+            raise HTTPException(502, "分时数据源当前无返回")
+
         if not data["points"]:
             raise HTTPException(502, "分时数据源当前无返回")
         # A 股指数/个股分时：注入固定交易时段（北京时间 09:30-11:30 / 13:00-15:00），
@@ -1314,3 +1324,12 @@ def gold_spot():
         return {"data": gold_score_layer.gold_spot()}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"实时金价异常：{e}") from e
+
+
+@app.get("/api/gold/cn-spot")
+def gold_cn_spot():
+    """国内金价：沪金99（AU9999）与黄金延期（AUTD），CNY/克，20 秒缓存。"""
+    try:
+        return {"data": gold_score_layer.cn_gold_spot()}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"国内金价异常：{e}") from e

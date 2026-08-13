@@ -73,28 +73,55 @@ function Metric({ k, v, sub }: { k: string; v: string; sub?: string }) {
 }
 
 // 估值历史分位带（理杏仁式）：绿=低估区 / 灰=合理区 / 红=高估区；只给位置，不划买卖。
+// 当前值无效（current<=0，如亏损期 PE、增速转负的 PEG）时不归入任何区域、画在带外并中性提示，
+// 避免把"指标失效"误显示成"低估区"绿灯。
 function ValBand({ label, m }: { label: string; m: ValMetric }) {
   const span = Math.max(m.max - m.min, 1e-6);
   const pos = (v: number) => Math.min(100, Math.max(0, ((v - m.min) / span) * 100));
-  const p20 = pos(m.p20), p80 = pos(m.p80), cur = pos(m.current);
-  const zoneColor = m.percentile < 20 ? "text-success" : m.percentile > 80 ? "text-danger" : "text-muted-foreground";
-  const zoneLabel = m.percentile < 20 ? "低估区" : m.percentile > 80 ? "高估区" : "合理区";
+  const p20 = pos(m.p20), p80 = pos(m.p80);
+  const curValid = m.current > 0;
+  const cur = pos(m.current);
+  const zoneColor = !curValid ? "text-muted-foreground" : m.percentile < 20 ? "text-success" : m.percentile > 80 ? "text-danger" : "text-muted-foreground";
+  const zoneLabel = !curValid ? "指标失效" : m.percentile < 20 ? "低估区" : m.percentile > 80 ? "高估区" : "合理区";
   return (
     <div>
       <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-1 text-sm">
-        <span className="font-medium">{label} <span className="text-xs text-muted-foreground/60">{m.n} 点</span></span>
-        <span className="text-muted-foreground">当前 <b className="font-mono text-foreground">{m.current}</b> · 近5年 <b className={cn("font-mono", zoneColor)}>{m.percentile}%</b> 分位（<span className={zoneColor}>{zoneLabel}</span>）</span>
+        <span className="font-medium">{label}{m.dropped ? <span className="text-xs text-muted-foreground/60"> {Math.round((m.n / (m.n + m.dropped)) * 100)}% 有效</span> : null}</span>
+        <span className="text-muted-foreground">当前 <b className="font-mono text-foreground">{m.current}</b> · {curValid ? <>近5年 <b className={cn("font-mono", zoneColor)}>{m.percentile}%</b> 分位（<span className={zoneColor}>{zoneLabel}</span>）</> : <span className="text-muted-foreground/70">增速≤0/亏损期，分位不适用</span>}</span>
       </div>
-      <div className="relative h-2.5 w-full overflow-hidden rounded-full">
-        <div className="absolute inset-0 flex">
+      <div className="relative h-2.5 w-full overflow-visible rounded-full">
+        <div className="absolute inset-0 flex overflow-hidden rounded-full">
           <div className="bg-success/35" style={{ width: `${p20}%` }} />
           <div className="bg-muted" style={{ width: `${p80 - p20}%` }} />
           <div className="flex-1 bg-danger/35" />
         </div>
-        <div className="absolute top-1/2 h-4 w-[3px] -translate-x-1/2 -translate-y-1/2 rounded bg-foreground shadow" style={{ left: `${cur}%` }} />
+        {curValid ? (
+          <div className="absolute top-1/2 h-4 w-[3px] -translate-x-1/2 -translate-y-1/2 rounded bg-foreground shadow" style={{ left: `${cur}%` }} />
+        ) : (
+          <div className="absolute top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-sm border border-dashed border-muted-foreground/70 bg-background/60" style={{ left: "2px" }} title="当前值无效，落在有效带外" />
+        )}
       </div>
-      <div className="mt-1 flex justify-between font-mono text-[10px] text-muted-foreground/60">
-        <span>低 {m.min}</span><span>20% {m.p20}</span><span>中 {m.p50}</span><span>80% {m.p80}</span><span>高 {m.max}</span>
+      {/* 上行=具体刻度值，按真实几何位置定位；下行=分位标签(20/50/80%)均匀排。右偏分布下刻度值会挤但只是短数字，
+          分位标签独立一行不与刻度值重叠。三色带与当前值marker按几何位置，与刻度值严格对齐。 */}
+      <div className="relative mt-1 h-3.5 font-mono text-[9px] text-muted-foreground/60">
+        {([
+          { at: 0, txt: m.min.toFixed(1), tx: "0%" },
+          { at: p20, txt: m.p20.toFixed(1), tx: "-50%" },
+          { at: pos(m.p50), txt: m.p50.toFixed(1), tx: "-50%" },
+          { at: p80, txt: m.p80.toFixed(1), tx: "-50%" },
+          { at: 100, txt: m.max.toFixed(1), tx: "-100%" },
+        ]).map((t, i) => (
+          <span key={i} className="absolute whitespace-nowrap" style={{ left: `${t.at}%`, transform: `translateX(${t.tx})` }}>{t.txt}</span>
+        ))}
+      </div>
+      <div className="relative h-3 font-mono text-[9px] text-muted-foreground/45">
+        {([
+          { at: p20, txt: "20%" },
+          { at: pos(m.p50), txt: "50%" },
+          { at: p80, txt: "80%" },
+        ]).map((t, i) => (
+          <span key={i} className="absolute -translate-x-1/2 whitespace-nowrap" style={{ left: `${t.at}%` }}>{t.txt}</span>
+        ))}
       </div>
     </div>
   );
@@ -539,6 +566,9 @@ export function StockData() {
             <div className="mb-4 flex items-baseline gap-2">
               <h2 className="text-xl font-bold">{val.name}</h2>
               <span className="font-mono text-sm text-muted-foreground">{val.code}</span>
+              {val.exchange && (
+                <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary">{val.exchange}</span>
+              )}
               {val.analyst_count > 0 && (
                 <span className="ml-auto text-xs text-muted-foreground">机构覆盖 {val.analyst_count} 家</span>
               )}
@@ -569,13 +599,14 @@ export function StockData() {
           {/* 财报速览（结论先行摘要，借鉴 equity-research 的结构纪律，剔除评级/目标价） */}
           <EarningsSnapshot val={val} fin={fin} pctl={pctl} />
 
-          {pctl && (pctl.metrics.pe_ttm || pctl.metrics.pb) && (
+          {pctl && (pctl.metrics.pe_ttm || pctl.metrics.pb || pctl.metrics.peg) && (
             <GlassCard glow className="mb-4">
               <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold"><LineChart className="h-4 w-4 text-primary" /> 估值历史分位 · {pctl.period}</h3>
-              <p className="mb-4 text-[11px] text-muted-foreground/60">绿=低估区 / 灰=合理区 / 红=高估区 · 显示当前处于历史什么位置</p>
+              <p className="mb-4 text-[11px] text-muted-foreground/60">绿=低估区 / 灰=合理区 / 红=高估区 · 显示当前处于历史什么位置 · 已剔除无效读数（亏损/资不抵债/增速≤0），当前值失效时不归区</p>
               <div className="space-y-4">
                 {pctl.metrics.pe_ttm && <ValBand label="PE-TTM" m={pctl.metrics.pe_ttm} />}
-                {pctl.metrics.pb && <ValBand label="市净率 PB" m={pctl.metrics.pb} />}
+                {pctl.metrics.pb && <ValBand label="PB" m={pctl.metrics.pb} />}
+                {pctl.metrics.peg && <ValBand label="PEG" m={pctl.metrics.peg} />}
               </div>
             </GlassCard>
           )}

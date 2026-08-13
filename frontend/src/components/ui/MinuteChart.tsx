@@ -18,11 +18,14 @@ const compactVolume = (value: number) => {
 
 // "0930" → 当日第 N 分钟（自午夜）
 const minuteOfDay = (time: string) =>
-  Number.parseInt(time.slice(0, 2), 10) * 60 + Number.parseInt(time.slice(2), 10);
+  {
+    const [h, m] = time.split(":");
+    return Number.parseInt(h, 10) * 60 + Number.parseInt(m, 10);
+  };
 
-// 当日第 N 分钟 → "09:30"
+// 当日第 N 分钟 → "09:30"；跨午夜槽位（如 26:30）显示为正常时钟（02:30）
 const clockLabel = (mod: number) =>
-  `${String(Math.floor(mod / 60)).padStart(2, "0")}:${String(mod % 60).padStart(2, "0")}`;
+  `${String(Math.floor((mod % (24 * 60)) / 60)).padStart(2, "0")}:${String(mod % 60).padStart(2, "0")}`;
 
 // 均匀抽 5 个 x 轴刻度（按分钟槽下标）
 function buildTimeTicks(total: number): { index: number; label: string; anchor: "start" | "middle" | "end" }[] {
@@ -89,8 +92,15 @@ export function MinuteChart({
         if (close <= open) close += 24 * 60;
         ranges.push({ start: open, end: close });
       }
-      // 合并重叠/连续区间，计算总跨度
-      ranges.sort((a, b) => a.start - b.start);
+      // 合并重叠/连续区间，计算总跨度。
+      // 排序：跨午夜的时段（如 21:00–次日02:30）应排最前，让夜盘成为坐标原点。
+      ranges.sort((a, b) => {
+        const aOvernight = a.end > 24 * 60;
+        const bOvernight = b.end > 24 * 60;
+        if (aOvernight && !bOvernight) return -1;
+        if (!aOvernight && bOvernight) return 1;
+        return a.start - b.start;
+      });
       const merged: { start: number; end: number }[] = [];
       for (const r of ranges) {
         const last = merged[merged.length - 1];
@@ -100,7 +110,7 @@ export function MinuteChart({
           merged.push({ ...r });
         }
       }
-      const totalSpan = merged.reduce((sum, r) => sum + (r.end - r.start), 0);
+      const totalSpan = merged.reduce((sum, r) => sum + (r.end - r.start) + 1, 0);
       const offset = merged[0].start;
       const slotR = merged.map(r => ({ start: r.start - offset, end: r.end - offset }));
       return { totalMinutes: Math.max(totalSpan, A_SHARE_MINUTES), slotOffset: offset, slotRanges: slotR };
@@ -162,7 +172,18 @@ export function MinuteChart({
       volumes[index] = Math.max(point.volume - previousCumulative, 0);
       previousCumulative = Math.max(point.volume, previousCumulative);
       firstIdx = Math.min(firstIdx, index);
-      lastIdx = Math.max(lastIdx, index);
+      if (index > lastIdx) lastIdx = index;
+    }
+
+    // 期货跨午夜：时间戳 00:00–02:30 会被 slot 映射到 24h+ 的连续槽位，
+    // 但数据点排序后它们排在最后，导致 lastIdx 被错压到 00:00 附近。
+    // 修正为最后一个真正有数据的槽位。
+    if (slotRanges) {
+      let maxDataIdx = -1;
+      for (let i = 0; i < totalMinutes; i++) {
+        if (prices[i] != null) maxDataIdx = i;
+      }
+      if (maxDataIdx >= 0) lastIdx = maxDataIdx;
     }
 
     // 只填补已发生交易时段内的缺口，不把盘中最新价错误延伸至收盘。
@@ -335,6 +356,9 @@ export function MinuteChart({
         }
         acc += r.end - r.start;
       }
+      // 超出所有交易时段（保底放大的空槽）：钳制到最后一个交易时段的收盘时刻
+      const lastR = slotRanges[slotRanges.length - 1];
+      return clockLabel((slotOffset + lastR.end) % (24 * 60));
     }
     return clockLabel((firstMod + index) % (24 * 60));
   };
@@ -360,13 +384,28 @@ export function MinuteChart({
     setHoverIdx(Math.max(firstIdx, Math.min(lastIdx, index)));
   };
 
-  // A 股保留精确午休刻度；海外市场按覆盖分钟均匀抽刻度
+  // 按交易时段边界标注刻度（每个时段的开/收盘），比均匀抽样更直观
   const timeTicks = useMemo(() => {
-    const ticks = buildTimeTicks(totalMinutes);
-    for (const t of ticks) t.label = clockAt(t.index);
+    if (!slotRanges) {
+      const ticks = buildTimeTicks(totalMinutes);
+      for (const t of ticks) t.label = clockAt(t.index);
+      return ticks;
+    }
+    // 只标注关键节点：夜盘开始、休市、日盘收盘
+    const ticks: { index: number; label: string; anchor: "start" | "middle" | "end" }[] = [];
+    let acc = 0;
+    let dayStartIdx = 0;
+    for (let i = 0; i < slotRanges.length; i++) {
+      if (i === 1) dayStartIdx = acc; // 第二段（日盘）开始前
+      acc += slotRanges[i].end - slotRanges[i].start;
+    }
+    const totalEnd = acc;
+    ticks.push({ index: 0, label: clockAt(0), anchor: "start" });
+    ticks.push({ index: dayStartIdx, label: "休市", anchor: "middle" });
+    ticks.push({ index: totalEnd, label: clockAt(totalEnd), anchor: "end" });
     return ticks;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [totalMinutes, firstMod, rawMod]);
+  }, [totalMinutes, firstMod, rawMod, slotRanges]);
   const latestAverage = averages[lastIdx];
   const totalVolume = points[points.length - 1]?.volume ?? 0;
   const hasVolume = totalVolume > 0;

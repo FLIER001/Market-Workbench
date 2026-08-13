@@ -22,6 +22,7 @@ import math
 import os
 import re
 import subprocess
+import threading
 import time
 from bisect import bisect_right
 from datetime import date, datetime, timedelta, timezone
@@ -119,6 +120,238 @@ def _curl(url: str, timeout: int = 20, accept: str = "") -> bytes:
         return r.stdout if r.returncode == 0 else b""
     except Exception:
         return b""
+
+
+# ---------------------------------------------------------------------------
+# 实时金价（腾讯财经 hf_ 前缀迷你行情，仅标准库、不封 IP）
+# ---------------------------------------------------------------------------
+
+_GOLD_SPOT_URL = "https://qt.gtimg.cn/q=hf_XAU,hf_GC"
+_GOLD_SPOT_TTL = 20  # 秒；伦敦金近全天交易，20 秒档足够接近实时
+_GOLD_SPOT_CACHE: dict[str, tuple[float, dict]] = {}
+_GOLD_SPOT_LOCK = threading.Lock()
+
+_CN_GOLD_URL = "https://hq.sinajs.cn/list=gds_AU9999,gds_AUTD,nf_AU0"
+_AU0_DAILY_URL = (
+    "https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var%20t=/"
+    "InnerFuturesNewService.getDailyKLine?symbol=AU0"
+)
+_CN_GOLD_TTL = 20  # 秒
+_CN_GOLD_CACHE: dict[str, tuple[float, dict]] = {}
+_CN_GOLD_LOCK = threading.Lock()
+
+
+def _parse_hf_quotes(raw: str) -> dict[str, dict]:
+    """解析腾讯 hf_ 前缀行情（逗号分隔，非 A 股 `~` 分隔）。
+
+    字段：0=现价 1=涨跌幅% 2=现价/昨收 3=今开 4=最高 5=最低 6=行情时间(北京时间)
+          7=昨收 8=昨结算 … 12=日期 13=名称。只取语义明确且经实测的字段。
+    """
+    out: dict[str, dict] = {}
+    for line in raw.strip().split(";"):
+        if not line.strip() or "=" not in line or '"' not in line:
+            continue
+        key = line.split("=")[0].split("_")[-1]
+        f = line.split('"')[1].split(",")
+        if len(f) < 14:
+            continue
+
+        def num(i: int) -> float | None:
+            try:
+                v = float(f[i])
+                return v if math.isfinite(v) else None
+            except (ValueError, IndexError):
+                return None
+
+        price = num(0)
+        if price is None or price <= 0:
+            continue
+        out[key] = {
+            "name": f[13].strip(),
+            "price": price,
+            "change_pct": num(1),
+            "prev_close": num(7),
+            "high": num(4),
+            "low": num(5),
+            "time": f[6].strip(),
+            "date": f[12].strip(),
+        }
+    return out
+
+
+def gold_spot() -> dict:
+    """伦敦金 / 纽约金实时行情快照；失败回退最近一次成功结果（stale 标记）。"""
+    now = time.time()
+    with _GOLD_SPOT_LOCK:
+        hit = _GOLD_SPOT_CACHE.get("spot")
+        if hit and now - hit[0] < _GOLD_SPOT_TTL:
+            return hit[1]
+        try:
+            import astock
+            quotes = _parse_hf_quotes(astock._fetch_gtimg(["hf_XAU", "hf_GC"]))
+            if quotes:
+                payload = {
+                    "xau": quotes.get("XAU"),
+                    "gc": quotes.get("GC"),
+                    "fetched_at": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M"),
+                }
+                _GOLD_SPOT_CACHE["spot"] = (now, payload)
+                return payload
+        except Exception:  # noqa: BLE001 — 网络/解析异常统一回退
+            pass
+        if hit:
+            payload = dict(hit[1])
+            payload["stale"] = True
+            return payload
+        return {"xau": None, "gc": None, "fetched_at": None, "stale": True}
+
+
+def _fetch_sina_cn(raw: str) -> str:
+    """新浪国内期货/现货行情：需带 Referer，返回 GBK 文本。"""
+    import subprocess as _sp
+    cmd = ["curl", "-L", "-s", "--max-time", "10",
+           "-H", "Referer: https://finance.sina.com.cn", _CN_GOLD_URL]
+    r = _sp.run(cmd, capture_output=True, timeout=15)
+    if r.returncode != 0:
+        return ""
+    return r.stdout.decode("gbk", "ignore")
+
+
+def _au0_prev_settlement() -> float | None:
+    """沪金主力前一交易日结算价（新浪期货日 K，s 字段）。失败返回 None。"""
+    import subprocess as _sp
+    cmd = ["curl", "-L", "-s", "--max-time", "10",
+           "-H", "Referer: https://finance.sina.com.cn/futures/", _AU0_DAILY_URL]
+    try:
+        r = _sp.run(cmd, capture_output=True, timeout=15)
+        if r.returncode != 0:
+            return None
+        raw = r.stdout.decode("gbk", "ignore")
+        start, end = raw.find("["), raw.rfind("]")
+        if start < 0 or end <= start:
+            return None
+        rows = json.loads(raw[start:end + 1])
+        if not rows:
+            return None
+        v = float(rows[-1].get("s"))
+        return v if math.isfinite(v) and v > 0 else None
+    except Exception:  # noqa: BLE001 — 昨结缺失时仅影响涨跌幅
+        return None
+
+
+def _parse_cn_gold(raw: str) -> dict[str, dict]:
+    """解析新浪 gds_ 行情（沪金99 / 黄金延期，CNY/克）。
+
+    字段：0=现价 1=涨跌额 2=昨结 3=今开 4=最高 5=最低 6=时间 7=昨收
+          8=买价 9=卖价 10=买量 11=卖量 12=日期 13=名称
+    """
+    out: dict[str, dict] = {}
+    for line in raw.strip().split("\n"):
+        if "=" not in line or '"' not in line:
+            continue
+        key = line.split("=")[0].split("_")[-1]
+        f = line.split('"')[1].split(",")
+        if len(f) < 14:
+            continue
+
+        def num(i: int) -> float | None:
+            try:
+                v = float(f[i])
+                return v if math.isfinite(v) else None
+            except (ValueError, IndexError):
+                return None
+
+        price = num(0)
+        if price is None or price <= 0:
+            continue
+        prev_close = num(7) or num(2)
+        change = None
+        if prev_close:
+            change = price - prev_close
+        out[key] = {
+            "name": f[13].strip(),
+            "price": price,
+            "prev_close": prev_close,
+            "change": round(change, 2) if change is not None else None,
+            "change_pct": round(change / prev_close * 100, 2) if change is not None and prev_close else None,
+            "open": num(3),
+            "high": num(4),
+            "low": num(5),
+            "time": f[6].strip(),
+            "date": f[12].strip(),
+        }
+    return out
+
+
+def _parse_nf_au0(raw: str, prev_settle: float | None) -> dict | None:
+    """解析新浪 nf_AU0 期货行情（黄金连续，CNY/克）。
+
+    字段：0=名称 2=现价 5=买价 6=卖价 7=结算价 10=最高 11=最低
+          17=日期 27=持仓量 28=昨结算价
+    """
+    for line in raw.strip().split("\n"):
+        if "nf_AU0" not in line or '"' not in line:
+            continue
+        f = line.split('"')[1].split(",")
+        if len(f) < 28:
+            return None
+
+        def num(i: int) -> float | None:
+            try:
+                v = float(f[i])
+                return v if math.isfinite(v) else None
+            except (ValueError, IndexError):
+                return None
+
+        price = num(2)
+        if price is None or price <= 0:
+            return None
+        prev_close = num(28) or prev_settle
+        change = None
+        if prev_close:
+            change = price - prev_close
+        return {
+            "name": f[0].strip(),
+            "price": price,
+            "prev_close": prev_close,
+            "change": round(change, 2) if change is not None else None,
+            "change_pct": round(change / prev_close * 100, 2) if change is not None and prev_close else None,
+            "open": None,
+            "high": num(10),
+            "low": num(11),
+            "time": None,
+            "date": f[17].strip(),
+        }
+    return None
+
+
+def cn_gold_spot() -> dict:
+    """国内金价：沪金主力（AU0）、沪金99（AU9999）与黄金延期（AUTD），CNY/克。失败回退最近一次成功。"""
+    now = time.time()
+    with _CN_GOLD_LOCK:
+        hit = _CN_GOLD_CACHE.get("cn")
+        if hit and now - hit[0] < _CN_GOLD_TTL:
+            return hit[1]
+        try:
+            raw = _fetch_sina_cn("")
+            quotes = _parse_cn_gold(raw)
+            quotes["AU0"] = _parse_nf_au0(raw, _au0_prev_settlement())
+            if quotes:
+                payload = {
+                    "au0": quotes.get("AU0"),
+                    "au9999": quotes.get("AU9999"),
+                    "autd": quotes.get("AUTD"),
+                    "fetched_at": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M"),
+                }
+                _CN_GOLD_CACHE["cn"] = (now, payload)
+                return payload
+        except Exception:  # noqa: BLE001 — 网络/解析异常统一回退
+            pass
+        if hit:
+            payload = dict(hit[1])
+            payload["stale"] = True
+            return payload
+        return {"au0": None, "au9999": None, "autd": None, "fetched_at": None, "stale": True}
 
 
 # ---------------------------------------------------------------------------

@@ -344,10 +344,10 @@ export function Macro() {
               </span>
             </div>
           </div>
-          {/* 近12个月模块得分走势（从总览卡收进来，明细处展开） */}
+          {/* 近3年模块得分走势（从总览卡收进来，明细处展开） */}
           {isHist(active.hist) && active.hist.length > 1 && (
             <div className="mb-3">
-              <span className="text-[10px] text-muted-foreground/45">近12个月模块得分</span>
+              <span className="text-[10px] text-muted-foreground/45">近3年模块得分</span>
               <Sparkline data={active.hist} height={48} className="mt-1" color="--primary" valueSuffix=" 分" showLatest />
             </div>
           )}

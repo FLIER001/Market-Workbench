@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
+import { Link } from "react-router-dom";
 import { RefreshCw, Loader2, Trash2, AlertCircle, X, ChevronsUpDown, ChevronUp, ChevronDown, LineChart } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -597,7 +598,13 @@ function SignalRows({ h, sig, open, onToggle, onRemove, onClose }: {
     <>
       <tr className="border-b border-border/30">
         <td className="px-2 py-2.5">
-          <span className="font-medium">{h.name}</span>
+          <Link
+            to={`/stock-data?code=${h.code}`}
+            className="font-medium underline-offset-4 transition-colors hover:text-primary hover:underline"
+            title={`打开 ${h.name || h.code} 的个股数据`}
+          >
+            {h.name}
+          </Link>
           <span className="ml-1.5 font-mono text-xs text-muted-foreground/60">{h.code}</span>
         </td>
         <td className={cn("px-2 py-2.5 font-mono", pnlColor(h.day_pnl))}>

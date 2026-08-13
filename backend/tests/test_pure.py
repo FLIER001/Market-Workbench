@@ -57,8 +57,8 @@ def test_caixin_pmi_prefers_continuous_ratingdog_series(monkeypatch):
     assert "S&P Global" in card["source"]
 
 
-def test_macro_module_history_replays_last_12_months_without_future_data():
-    """模块卡返回近12个月历史分；当前分可因披露滞后而向中性衰减。"""
+def test_macro_module_history_replays_last_36_months_without_future_data():
+    """模块卡返回近3年历史分（不足3年时返回全部）；当前分可因披露滞后而向中性衰减。"""
     import market
 
     hist = [{"date": f"2025-{m:02d}", "v": float(m)} for m in range(1, 13)]
@@ -73,8 +73,8 @@ def test_macro_module_history_replays_last_12_months_without_future_data():
     })
     price = next(m for m in modules if m["name"] == "价格与工业利润")
 
-    assert len(price["hist"]) == 12
-    assert price["hist"][0]["date"] == "2025-08"
+    assert len(price["hist"]) == 19
+    assert price["hist"][0]["date"] == "2025-01"
     assert price["hist"][-1]["date"] == "2026-07"
     assert price["hist"][-1]["v"] >= price["score"]
 
@@ -429,6 +429,27 @@ def test_daily_gold_momentum_includes_latest_price():
 
     assert rows[-1][0] == hist[-1][0]
     assert math.isfinite(rows[-1][1])
+
+
+def test_parse_hf_gold_quotes():
+    import gold_score
+    raw = (
+        'v_hf_XAU="4412.60,1.02,4412.60,4412.95,4441.07,4362.46,02:43:00,4368.00,'
+        '4371.82,0,0,0,2026-08-13,伦敦金（现货黄金）";\n'
+        'v_hf_GC="4475.70,0.78,4472.40,4472.70,4502.70,4421.40,02:44:06,4441.10,'
+        '4430.00,0,2,1,2026-08-13,纽约黄金";\n'
+    )
+
+    rows = gold_score._parse_hf_quotes(raw)
+
+    xau = rows["XAU"]
+    assert xau["name"] == "伦敦金（现货黄金）"
+    assert math.isclose(xau["price"], 4412.60)
+    assert math.isclose(xau["change_pct"], 1.02)
+    assert math.isclose(xau["prev_close"], 4368.00)
+    assert xau["date"] == "2026-08-13" and xau["time"] == "02:43:00"
+    gc = rows["GC"]
+    assert math.isclose(gc["price"], 4475.70)
 
 
 def test_gold_source_period_age_handles_daily_and_monthly_periods():

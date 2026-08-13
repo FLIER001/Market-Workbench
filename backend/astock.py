@@ -22,6 +22,9 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+BEIJING = ZoneInfo("Asia/Shanghai")
 
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 _QUOTE_CACHE: dict[tuple[str, ...], tuple[float, dict[str, dict]]] = {}
@@ -739,8 +742,53 @@ def financials(code: str) -> dict:
     }
 
 
+def _forward_peg(code: str) -> float | None:
+    """前向 PEG（一致预期口径）：前向PE ÷ 26→27E EPS 增速。
+
+    与 full_valuation 的 peg 同源同口径，供历史分位带用它定位"当前所处分位"——
+    历史带本身是后视（东财逐日），但当前值用前向才对应"当下增长预期贵不贵"。
+    取不到一致预期 / 增速≤0 时返回 None（指标失效，不强行定位）。
+    """
+    try:
+        quotes = tencent_quote([code])
+        q = quotes.get(code)
+        if not q:
+            return None
+        price = q["price"]
+        eps_26 = eps_27 = None
+        for row in profit_forecast(code):
+            y = str(row.get("年度", ""))
+            try:
+                mean = float(str(row.get("均值", "")).replace(",", ""))
+            except ValueError:
+                mean = None
+            if "2026" in y:
+                eps_26 = mean
+            elif "2027" in y:
+                eps_27 = mean
+        if not (eps_26 and eps_26 > 0 and eps_27):
+            return None
+        pe_fwd = price / eps_26
+        cagr = eps_27 / eps_26 - 1
+        if cagr <= 0:
+            return None
+        peg = calc_peg(pe_fwd, cagr)
+        return round(peg, 2) if peg != float("inf") else None
+    except Exception:
+        return None
+
+
 def valuation_percentile(code: str, period: str = "近五年") -> dict:
-    """历史估值分位（百度股市通）：PE-TTM / PB 的当前值 + 历史 20/50/80 分位带 + 所处分位。
+    """历史估值分位（东财估值分析）：PE-TTM / PB / PEG 的当前值 + 历史 20/50/80 分位带 + 所处分位。
+
+    口径（三指标统一，与理杏仁/Wind 对 PEG 的通行做法一致）：
+    - 只保留"有效读数"：PE-TTM > 0（剔除亏损期负值）、PB > 0（剔除资不抵债）、
+      PEG > 0（剔除增速≤0 或亏损期的算术残渣——负 PEG 不是"便宜"，是指标失效）。
+    - 有效读数里的真实高估值（如 PE 200+）照常保留，不额外截尾，保持中立呈现。
+    - 当前值若落入无效区（如 PEG≤0），仍如实返回 current 与分位，由前端按 neutral 呈现、
+      不强行归入"低估区"（避免把"增速转负"误显示成"低估"绿灯）。
+    - 每个指标附带 dropped 计数（被剔除的无效读数条数），供前端透明标注。
+    - 窗口按交易日：取最近约 5*244 个交易日（≈近5年），与 period 文案对应。
 
     只表达"处于历史什么位置"，不划买卖线（理杏仁式中立呈现）。
     """
@@ -756,22 +804,42 @@ def valuation_percentile(code: str, period: str = "近五年") -> dict:
         frac = idx - lo
         return vals[lo] * (1 - frac) + vals[lo + 1] * frac
 
+    # 东财一次返回 PE(TTM)/PB/PEG 三列逐日序列，同源对齐；近5年≈5*244 个交易日。
+    trading_days = {"近一年": 244, "近三年": 732, "近五年": 1220, "近十年": 2440, "全部": 10 ** 9}
+    ndays = trading_days.get(period, 1220)
+
+    df = ak.stock_value_em(symbol=code)
+    if df is None or df.empty:
+        return {"period": "近5年", "metrics": {}}
+    df = df.sort_values("数据日期").tail(ndays)
+
+    columns = (("pe_ttm", "PE(TTM)"), ("pb", "市净率"), ("peg", "PEG值"))
+    # PEG 特殊：历史带用后视逐日序列（东财），但"当前值"用前向口径（一致预期），
+    # 因为当下"增长贵不贵"要看未来预期，而非后视镜。前向取不到时 PEG 不定位（失效）。
+    fwd_peg = _forward_peg(code)
     metrics = {}
-    for key, ind in (("pe_ttm", "市盈率(TTM)"), ("pb", "市净率")):
+    for key, col in columns:
         try:
-            df = ak.stock_zh_valuation_baidu(symbol=code, indicator=ind, period=period)
-            raw = df.iloc[:, 1].dropna().astype(float).tolist()
+            raw = [float(x) for x in df[col].tolist() if x is not None and str(x) not in ("", "nan", "None")]
             if not raw:
                 continue
-            cur = float(raw[-1])
-            s = sorted(raw)
+            cur = raw[-1]
+            valid = [x for x in raw if x > 0]  # 剔除无效读数（亏损/资不抵债/增速≤0）
+            dropped = len(raw) - len(valid)
+            if not valid:
+                continue
+            s = sorted(valid)
+            if key == "peg":
+                if fwd_peg is None:
+                    continue  # 前向失效：不画 PEG 带（当前无法定位，历史带单独看意义弱）
+                cur = fwd_peg
             below = sum(1 for x in s if x < cur)
             metrics[key] = {
                 "current": round(cur, 2),
                 "percentile": round(below / max(len(s) - 1, 1) * 100, 1),
                 "min": round(s[0], 2), "max": round(s[-1], 2),
                 "p20": round(_q(s, 0.2), 2), "p50": round(_q(s, 0.5), 2), "p80": round(_q(s, 0.8), 2),
-                "n": len(s),
+                "n": len(s), "dropped": dropped,
             }
         except Exception:
             continue
@@ -786,8 +854,26 @@ def full_valuation(code: str) -> dict:
         raise ValueError(f"未取到 {code} 的行情")
 
     price = q["price"]
+
+    # A 股板块分类（按代码前缀）：
+    # - 科创板：68xxxx
+    # - 沪市主板：60xxxx, 61xxxx, 63xxxx, 65xxxx, 66xxxx, 67xxxx, 69xxxx, 9xxxxx
+    # - 创业板：30xxxx, 32xxxx, 33xxxx
+    # - 北交所：8xxxxx, 43xxxx, 87xxxx
+    # - 深市主板：00xxxx, 001xxx, 002xxx 及其余
+    if code.startswith("68"):
+        exchange = "科创板"
+    elif code.startswith(("60", "61", "63", "65", "66", "67", "69", "9")):
+        exchange = "沪市主板"
+    elif code.startswith(("30", "32", "33")):
+        exchange = "创业板"
+    elif code.startswith(("8", "4")):
+        exchange = "北交所"
+    else:
+        exchange = "深市主板"
+
     out = {
-        "name": q["name"], "code": code, "price": price,
+        "name": q["name"], "code": code, "price": price, "exchange": exchange,
         "mcap_yi": q["mcap_yi"], "pe_ttm": q["pe_ttm"], "pb": q["pb"],
         "eps_26e": None, "eps_27e": None, "pe_26e": None,
         "cagr_pct": None, "peg": None, "digest_years": None, "analyst_count": 0,
@@ -1457,3 +1543,180 @@ def profit_forecast_revision_em(code: str) -> dict:
         "eps_last_month": previous,
         "revision_pct": round(max(-100.0, min(100.0, revision)), 2) if revision is not None else None,
     }
+
+
+# ==================== 黄金期货分钟线支持 ====================
+def futures_minute_kline(code: str) -> dict:
+    """获取黄金期货当日分钟线（新浪 InnerFuturesNewService.getFewMinLine）。"""
+    symbol_map = {
+        "AU0": "AU0",       # 沪金主力合约
+        "AU9999": "AU9999", # 沪金 99
+        "AUTD": "AUTD",     # 黄金延期
+    }
+    symbol = symbol_map.get(code, code)
+
+    url = f"https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var%20t=/InnerFuturesNewService.getFewMinLine?symbol={symbol}&type=1"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Referer": "https://finance.sina.com.cn/futures/"
+    }
+
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            raw = resp.read().decode("gbk")
+
+        import re
+        start_idx_data = raw.find("[")
+        end_idx_data = raw.rfind("]")
+        if start_idx_data < 0 or end_idx_data <= start_idx_data:
+            return {"date": get_today_cn(), "prev_close": 0.0, "points": []}
+
+        json_str = raw[start_idx_data:end_idx_data+1]
+        data = json.loads(json_str)
+
+        if not data:
+            return {"date": get_today_cn(), "prev_close": 0.0, "points": []}
+
+        # 从最后一行获取日期 - 这是今天的最新数据
+        last_row = data[-1] if data else None
+        date_str = last_row.get("d", "") if last_row else ""
+        chart_date = date_str[:10] if date_str else get_today_cn()
+
+        all_points = []
+
+        minute_rows = data[1:] if len(data) > 1 else []
+        for row in minute_rows:
+            if not isinstance(row, dict):
+                continue
+
+            d = row.get("d", "")
+            c = row.get("c", "")
+            v = row.get("v", 0)
+
+            if not d or not c:
+                continue
+
+            try:
+                price = float(c)
+                volume = int(float(v)) if v else 0
+                time_part = d.split(" ")[1][:5] if " " in d else ""
+                all_points.append({
+                    "datetime": d,
+                    "time": time_part,
+                    "price": price,
+                    "volume": volume,
+                })
+            except (ValueError, TypeError):
+                continue
+
+        # getFewMinLine 返回多日碎片，按归属交易日切片：
+        # 夜盘 21:00 起属于下一自然日；凌晨 00:00–02:30 属于前一晚开启的交易日。
+        # 始终返回当前交易日的全部时段（夜盘 + 日盘），休市间隙由前端压缩。
+        trading_day = _futures_trading_day()
+        now = datetime.now(BEIJING)
+        points = []
+        for p in all_points:
+            try:
+                dt = datetime.strptime(p["datetime"], "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                continue
+            if _futures_trading_day(dt) != trading_day:
+                continue
+            mod = dt.hour * 60 + dt.minute
+            if mod <= _CN_FUTURES_NIGHT_CLOSE:
+                mod += 24 * 60
+            points.append({
+                "time": f"{mod // 60:02d}:{mod % 60:02d}",
+                "price": p["price"],
+                "volume": p["volume"],
+            })
+
+        if not points:
+            return {"date": chart_date, "prev_close": 0.0, "points": []}
+
+        chart_date = trading_day
+        # 全天：夜盘 21:00–02:30（连续槽）+ 日盘三段
+        market_minutes = [
+            [_CN_FUTURES_NIGHT_OPEN, 24 * 60 + _CN_FUTURES_NIGHT_CLOSE],
+            [9 * 60, 10 * 60 + 15],
+            [10 * 60 + 30, 11 * 60 + 30],
+            [13 * 60 + 30, 15 * 60],
+        ]
+        prev_close = _futures_prev_settlement(symbol) or 0.0
+
+        return {
+            "date": chart_date,
+            "prev_close": prev_close,
+            "points": points,
+            "market_minutes": market_minutes,
+        }
+
+    except Exception as e:
+        return {"date": get_today_cn(), "prev_close": 0.0, "points": [], "error": str(e)}
+
+
+def _futures_prev_settlement(symbol: str) -> float | None:
+    """国内期货前一交易日结算价（新浪期货日 K，s 字段）。失败返回 None。"""
+    url = (
+        "https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var%20t=/"
+        f"InnerFuturesNewService.getDailyKLine?symbol={symbol}"
+    )
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Referer": "https://finance.sina.com.cn/futures/",
+    }
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            raw = resp.read().decode("gbk")
+        start_idx = raw.find("[")
+        end_idx = raw.rfind("]")
+        if start_idx < 0 or end_idx <= start_idx:
+            return None
+        rows = json.loads(raw[start_idx:end_idx + 1])
+        if not rows:
+            return None
+        value = float(rows[-1].get("s"))
+        return value if math.isfinite(value) and value > 0 else None
+    except Exception:  # noqa: BLE001 — 昨结缺失仅影响涨跌幅基准
+        return None
+
+
+_CN_FUTURES_NIGHT_OPEN = 21 * 60          # 21:00
+_CN_FUTURES_NIGHT_CLOSE = 2 * 60 + 30     # 次日 02:30
+
+
+def _futures_trading_day(now: datetime | None = None) -> str:
+    """国内期货当前交易日的归属日（日盘日期）。
+
+    夜盘 21:00 起属于下一自然日的交易日；02:30–09:00 休市期间
+    归属刚结束的夜盘对应的交易日。
+    """
+    now = now or datetime.now(BEIJING)
+    minutes = now.hour * 60 + now.minute
+    if minutes >= _CN_FUTURES_NIGHT_OPEN:
+        return (now + timedelta(days=1)).strftime("%Y-%m-%d")
+    return now.strftime("%Y-%m-%d")
+
+
+def _futures_market_minutes(now: datetime | None = None) -> list[list[int]]:
+    """当前时段的期货分时坐标：夜盘（含凌晨延续）或日盘。
+
+    夜盘 21:00–次日 09:00 前（含凌晨 02:30 收盘后的休市）以 21:00 为起点
+    连续表示（0–720 分钟槽），日盘使用常规三段。
+    """
+    now = now or datetime.now(BEIJING)
+    minutes = now.hour * 60 + now.minute
+    if minutes >= _CN_FUTURES_NIGHT_OPEN or minutes < 9 * 60:
+        return [[_CN_FUTURES_NIGHT_OPEN, 24 * 60 + _CN_FUTURES_NIGHT_CLOSE]]
+    return [
+        [9 * 60, 10 * 60 + 15],        # 早盘 09:00~10:15
+        [10 * 60 + 30, 11 * 60 + 30],  # 上午 10:30~11:30
+        [13 * 60 + 30, 15 * 60],       # 午盘 13:30~15:00
+    ]
+
+
+def calculate_futures_market_minutes(code: str) -> list[tuple[int, int]]:
+    """计算国内期货市场交易时段（北京时间分钟数）。"""
+    return [tuple(r) for r in _futures_market_minutes()]

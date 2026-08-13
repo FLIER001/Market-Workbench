@@ -2442,7 +2442,7 @@ def _indicators_as_of(ind: dict, as_of: str) -> dict:
     return out
 
 
-def _module_score_history(ind: dict, months: int = 12) -> dict[str, list[dict]]:
+def _module_score_history(ind: dict, months: int = 36) -> dict[str, list[dict]]:
     """按月回放各模块得分，返回最近 ``months`` 个月。"""
     dates = sorted({str(p.get("date", ""))[:7]
                     for card in ind.values() if isinstance(card, dict)

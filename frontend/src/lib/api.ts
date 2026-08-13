@@ -109,9 +109,11 @@ export interface Report {
 export interface ValMetric {
   current: number; percentile: number; min: number; max: number;
   p20: number; p50: number; p80: number; n: number;
+  /** 被剔除的无效读数条数（PE<0 亏损 / PB<=0 资不抵债 / PEG<=0 增速≤0）。 */
+  dropped?: number;
 }
 export interface ValPercentile {
-  period: string; metrics: { pe_ttm?: ValMetric; pb?: ValMetric };
+  period: string; metrics: { pe_ttm?: ValMetric; pb?: ValMetric; peg?: ValMetric };
 }
 
 export interface Announcement {
@@ -646,7 +648,7 @@ export interface MacroModule {
   score: number | null;
   coverage: number;
   confidence: number;
-  hist?: HistPoint[];      // 最近12个月模块得分
+  hist?: HistPoint[];      // 最近3年模块得分（按月回放）
   indicators: string[];
   used: MacroModuleUsed[];
   // 景气模块 V1.0 扩展字段
@@ -825,6 +827,27 @@ export interface GoldSpotData {
   stale?: boolean;
 }
 
+// 国内金价（沪金99 AU9999 / 黄金延期 AUTD，CNY/克）
+export interface CnGoldQuote {
+  name: string;
+  price: number;
+  prev_close: number | null;
+  change: number | null;
+  change_pct: number | null;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  time: string;
+  date: string;
+}
+export interface CnGoldSpotData {
+  au0: CnGoldQuote | null;
+  au9999: CnGoldQuote | null;
+  autd: CnGoldQuote | null;
+  fetched_at: string | null;
+  stale?: boolean;
+}
+
 // ---- 全球预期概率（Polymarket + Kalshi 双源，globalpercent 移植） ----
 export interface PulseMarket {
   question: string | null;
@@ -877,6 +900,7 @@ export const api = {
   macro: (refresh = false) => get<MacroData>(`/market/macro${refresh ? "?refresh=true" : ""}`),
   goldScore: (refresh = false) => get<GoldScoreData>(`/gold/score${refresh ? "?refresh=true" : ""}`),
   goldSpot: () => get<GoldSpotData>("/gold/spot"),
+  cnGoldSpot: () => get<CnGoldSpotData>("/gold/cn-spot"),
   pulseOverview: (refresh = false) => get<PulseOverview>(`/pulse/overview${refresh ? "?refresh=true" : ""}`),
   pulseHistory: (tokenId: string, interval = "1w") =>
     get<{ history: PulseHistoryPoint[] }>(`/pulse/history?token_id=${encodeURIComponent(tokenId)}&interval=${interval}`)
