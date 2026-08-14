@@ -3,6 +3,10 @@
 本项目的版本号唯一来源是 `frontend/package.json`；后端 HTTP API、`/api/health`、
 前端界面与 MCP `serverInfo` 全部从它读取（见 `backend/version.py`）。
 
+## v1.3.1 — 2026-08-14
+
+- 重组中英文 README 的功能表，按实际独立入口逐项说明，避免合并无关模块。
+
 ## v1.3.0 — 2026-08-14
 
 - 新增“全球预期”页面：整合 Polymarket 与 Kalshi 的公开概率数据，保留来源、刷新时间和历史走势。

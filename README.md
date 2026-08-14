@@ -2,7 +2,7 @@
 
 # Market Workbench
 
-[![Version](https://img.shields.io/badge/version-1.3.0-1f6feb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.3.1-1f6feb)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)](https://react.dev/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
@@ -27,13 +27,20 @@
 
 | 模块 | 内容 |
 |---|---|
-| 市场全景 | A 股指数、全球市场、市场情绪、成交额、板块资金、全球预期与每日复盘 |
-| 宏观与资金面 | 宏观指标、流动性信号、数据来源、更新时间与可用状态 |
-| 个股与自选 | A 股、港股、美股行情；K 线、估值、财务、公告、研报、资金面和自选分组 |
-| 板块与黄金 | 产业链研究、申万行业与主题板块观察、黄金多维指标 |
-| 持仓与筛选 | 股票及基金持仓、已清仓记录、基金搜索、净值、观察列表；Manager-First 基金筛选与预留的个股筛选入口 |
-| 资讯与研究 | 公开资讯聚合、个人研报归档、研究笔记、反思审计 |
-| AI 与 MCP | OpenAI 兼容 API、本机 CLI 与 MCP 数据工具；模型和密钥由用户自行提供 |
+| 市场全景 | A 股指数、全球市场、市场情绪、成交额、板块资金与每日复盘 |
+| 全球预期 | Polymarket 与 Kalshi 的公开概率数据、来源、刷新时间与历史走势 |
+| 宏观面 | 宏观指标、数据来源、更新时间与可用状态 |
+| 资金面 | 流动性信号与市场资金指标 |
+| 个股数据 | A 股、港股、美股行情；K 线、估值、财务、公告、研报与资金面 |
+| 自选 | 股票与 ETF 分组、实时行情与研究入口 |
+| 板块 | 产业链研究、申万行业与主题板块观察 |
+| 黄金 | 黄金多维指标、现货行情、历史序列与数据状态 |
+| 持仓 | 股票及基金持仓、已清仓记录与收益跟踪 |
+| 标的筛选 | Manager-First 基金筛选；个股筛选入口预留 |
+| 资讯 | 公开资讯聚合与公告跟踪 |
+| 研究 | 个人研报归档、研究笔记与反思审计 |
+| AI 接入 | OpenAI 兼容 API 与本机 CLI；模型和密钥由用户自行提供 |
+| MCP | 供本地 Agent 调用的数据工具 |
 
 ## 快速开始
 

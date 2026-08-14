@@ -2,7 +2,7 @@
 
 # Market Workbench
 
-[![Version](https://img.shields.io/badge/version-1.3.0-1f6feb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.3.1-1f6feb)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)](https://react.dev/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
@@ -27,13 +27,20 @@ A locally hosted research workspace for China A-shares, with Hong Kong and US ma
 
 | Area | What it covers |
 |---|---|
-| Market overview | A-share indices, global markets, market breadth, turnover, sector flows, global expectations and daily review |
-| Macro and liquidity | Macro indicators, liquidity signals, source metadata and freshness state |
-| Securities and watchlists | A-share, HK and US quotes; charts, valuation, financials, filings, reports, fund flows and grouped watchlists |
-| Sectors and gold | Industry-chain research, Shenwan industry and thematic-board views, multi-factor gold indicators |
-| Portfolio and screening | Equity and fund holdings, closed positions, fund search, NAV and watchlists; Manager-First fund screening and a reserved stock-screening entry |
-| News and research | Public-news aggregation, personal report archive, research notes and reflection review |
-| AI and MCP | OpenAI-compatible APIs, local CLIs and MCP data tools; models and keys remain yours |
+| Market overview | A-share indices, global markets, market breadth, turnover, sector flows and daily review |
+| Global expectations | Public probability data from Polymarket and Kalshi, with source, refresh time and historical trend |
+| Macro | Macro indicators, source metadata, refresh time and freshness state |
+| Liquidity | Liquidity signals and market-flow indicators |
+| Securities | A-share, HK and US quotes; charts, valuation, financials, filings, reports and fund flows |
+| Watchlists | Grouped stock and ETF watchlists, live quotes and research entry points |
+| Sectors | Industry-chain research, Shenwan industry and thematic-board views |
+| Gold | Multi-factor indicators, spot prices, history and data state |
+| Portfolio | Equity and fund holdings, closed positions and return tracking |
+| Screening | Manager-First fund screening; stock-screening entry reserved |
+| News | Public-news aggregation and announcement tracking |
+| Research | Personal report archive, research notes and reflection review |
+| AI connection | OpenAI-compatible APIs and local CLIs; models and keys remain yours |
+| MCP | Data tools for local agents |
 
 ## Quick start
 
