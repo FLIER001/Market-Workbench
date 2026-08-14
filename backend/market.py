@@ -1381,6 +1381,142 @@ def _us_risk_appetite_index(us: dict) -> dict:
         date, hist, [us["vix"], us["dxy"], us["term_premium"]])
 
 
+# ---------------------------------------------------------------------------
+# 资金面综合得分（两张卡片）—— 把上面的单指数加权合成为「宽松—友好度」单一分。
+# 输入均为各自指数的点时滚动分位（无前视），方向按 favorable 归一（越高越利多）：
+#   资金偏松/杠杆偏热/大单流入 = 利多（favorable=high 直接用分位），
+#   各类压力/预警 = 利空项（favorable=low 取 100-分位）。
+# 历史合成同样只用各指数点时分位序列的公共日期，不重算单指数。
+# 依据：芝加哥联储 NFCI（信用/杠杆/风险加权合成）、高盛 FCI（政策利率/长端/信用/
+# 汇率/权益权重打分）、国内「货币绝对水平管方向、边际资金管节奏」的实践经验。
+# 权重未经收益回测校准，是状态仪表而非交易信号。
+# ---------------------------------------------------------------------------
+
+_LIQUIDITY_COMPOSITE_SCHEMA = 1
+
+_CN_LIQUIDITY_COMPOSITE: dict[str, float] = {
+    # 单指数 label（cn_indices 的键值）→ 权重（合计 100）
+    "银行间资金压力": 25.0,   # 短端资金价格，货币条件的方向锚（反向：压力=利空）
+    "政策与贷款基准": 20.0,   # 政策与 LPR 绝对水平，中周期资金成本锚（反向）
+    "债市状态": 10.0,         # 债市走强=资金充裕的旁证（反向：分位高=债强=宽松）
+    "杠杆温度": 30.0,         # 边际资金入场节奏，对 A 股资金面最直接（正向）
+    "大单流向（辅助）": 15.0,  # 供应商口径观察项，降权保留（正向）
+}
+
+_US_LIQUIDITY_COMPOSITE: dict[str, float] = {
+    "短端资金压力": 25.0,     # SOFR/TGCR/EFFR−IORB，货币市场即时压力（反向）
+    "信用压力": 20.0,         # HY/IG OAS，信用条件（反向）
+    "系统流动性压力": 20.0,   # 准备金+ON RRP / TGA，量化水位（反向）
+    "市场压力": 20.0,         # VIX/美元/期限溢价，风险偏好通道（反向）
+    "收益率曲线预警": 15.0,   # 中长期衰退预警，慢变量降权（反向）
+}
+
+
+def _composite_state(score: float) -> str:
+    """总分状态标签：偏多/中性偏多/中性/中性偏空/偏空（同宏观面口径）。"""
+    if score >= 65:
+        return "偏多"
+    if score >= 55:
+        return "中性偏多"
+    if score > 45:
+        return "中性"
+    if score > 35:
+        return "中性偏空"
+    return "偏空"
+
+
+def _liquidity_composite(indices: dict, schema: dict[str, float], label: str, desc: str) -> dict | None:
+    """把单指数按权重合成 0-100 宽松—友好度总分；缺失按已覆盖权重归一（<50% 不输出）。
+
+    schema 键为单指数 label（cn_indices/us_indices 里各成员的中文标签）。
+    """
+    by_label = {idx.get("label"): idx for idx in indices.values() if isinstance(idx, dict)}
+    parts = []
+    num = 50.0
+    covered = 0.0
+    for name, weight in schema.items():
+        idx = by_label.get(name) or {}
+        value = idx.get("value")
+        if not isinstance(value, (int, float)):
+            parts.append({"name": name, "weight": weight, "score": None, "contribution": None})
+            continue
+        # 压力/预警类（favorable=low）取 100-分位，归一成越高越利多
+        score = 100.0 - value if idx.get("favorable", "high") == "low" else float(value)
+        num += (score - 50.0) / 100.0 * weight
+        covered += weight
+        parts.append({"name": name, "weight": weight, "score": round(score, 1),
+                      "contribution": round((score - 50.0) / 100.0 * weight, 1)})
+    total_w = sum(schema.values())
+    if covered < 0.5 * total_w:
+        return None
+    score = round(num / total_w * 100.0, 1)
+    contribs = [p for p in parts if p["contribution"] is not None]
+    fetched = [idx.get("fetched_at") for idx in indices.values() if idx.get("fetched_at")]
+    return {
+        "schema": _LIQUIDITY_COMPOSITE_SCHEMA,
+        "label": label,
+        "score": score,
+        "state": _composite_state(score),
+        "coverage": round(covered / total_w * 100.0, 1),
+        # 主要驱动：贡献绝对值最大的两个成员
+        "drivers": [p["name"] for p in sorted(contribs, key=lambda p: -abs(p["contribution"]))[:2]],
+        "parts": parts,
+        "desc": desc,
+        "stale": any(bool(idx.get("stale")) for idx in indices.values()),
+        "fetched_at": min(fetched) if fetched else None,
+    }
+
+
+def _liquidity_composite_hist(indices: dict, schema: dict[str, float], limit: int = 120) -> list[dict]:
+    """逐日回放总分：透视各指数点时分位历史，同一天按已覆盖权重归一合成。"""
+    per_name: dict[str, dict[str, float]] = {}
+    for idx in indices.values():
+        if not isinstance(idx, dict) or idx.get("label") not in schema:
+            continue
+        invert = idx.get("favorable", "high") == "low"
+        per_name[idx["label"]] = {p["date"]: (100.0 - p["v"] if invert else p["v"])
+                                  for p in (idx.get("hist") or [])
+                                  if isinstance(p.get("v"), (int, float))}
+    if not per_name:
+        return []
+    dates = sorted(set().union(*(set(m) for m in per_name.values())))
+    out = []
+    for date in dates[-limit:]:
+        num, covered = 50.0, 0.0
+        for name, weight in schema.items():
+            value = per_name.get(name, {}).get(date)
+            if value is None:
+                continue
+            num += (value - 50.0) / 100.0 * weight
+            covered += weight
+        if covered < 0.5 * sum(schema.values()):
+            continue
+        out.append({"date": date, "v": round(num / sum(schema.values()) * 100.0, 1)})
+    return out
+
+
+def _cn_liquidity_composite_full(cn_indices: dict) -> dict | None:
+    comp = _liquidity_composite(
+        cn_indices, _CN_LIQUIDITY_COMPOSITE, "国内资金面",
+        "货币条件锚定方向、边际资金决定节奏：银行间资金价格与政策利率定基调，"
+        "杠杆温度与大单流向定节奏；总分 0-100，越高越宽松友好（权重为经验先验，"
+        "未经收益回测，作状态仪表而非交易信号）")
+    if comp:
+        comp["hist"] = _liquidity_composite_hist(cn_indices, _CN_LIQUIDITY_COMPOSITE)
+    return comp
+
+
+def _us_liquidity_composite_full(us_indices: dict) -> dict | None:
+    comp = _liquidity_composite(
+        us_indices, _US_LIQUIDITY_COMPOSITE, "美国金融条件",
+        "对风险资产友好的资金面状态（参照 NFCI/FCI 的加权分位合成）：短端资金、"
+        "信用利差、系统流动性（准备金/ON RRP/TGA）、市场压力与曲线预警；"
+        "总分 0-100，越高越宽松友好（权重为经验先验，未经收益回测）")
+    if comp:
+        comp["hist"] = _liquidity_composite_hist(us_indices, _US_LIQUIDITY_COMPOSITE)
+    return comp
+
+
 def get_liquidity(force: bool = False) -> dict:
     """资金供给指标汇总（独立页面，含历史趋势 + 美联储利率；缓存 5 分钟）。
 
@@ -1487,6 +1623,10 @@ def _liquidity_build() -> dict:
             if idx:
                 us_indices[key] = idx
 
+        # --- 资金面综合得分（两张卡片；指数层缺失成员按权重归一） ---
+        cn_composite = _cn_liquidity_composite_full(cn_indices)
+        us_composite = _us_liquidity_composite_full(us_indices)
+
         # --- 美联储目标利率阈值概率（Kalshi 市场，失败时回退最近成功值） ---
         fed_odds = _fed_odds_with_fallback()
 
@@ -1494,8 +1634,10 @@ def _liquidity_build() -> dict:
         return {
             "cn": cn,
             "cn_indices": cn_indices,
+            "cn_composite": cn_composite,
             "us": us,
             "us_indices": us_indices,
+            "us_composite": us_composite,
             "fed_odds": fed_odds,
             "updated": assembled_at,
             "assembled_at": assembled_at,
@@ -1517,6 +1659,17 @@ def _liquidity_build() -> dict:
             if not val.get("fed_odds") and prev.get("fed_odds"):
                 val["fed_odds"] = _status_copy(prev["fed_odds"], stale=True,
                                                 reason="目标利率市场本轮缺失，使用整页最近快照")
+        # 综合得分随指数层一起回退：本轮缺失时沿用最近成功值（快照已随指数落盘）
+        if not val.get("cn_composite"):
+            prev_comp = (prev or {}).get("cn_composite") if isinstance(prev, dict) else None
+            if prev_comp:
+                val["cn_composite"] = _status_copy(
+                    prev_comp, stale=True, reason="国内综合得分本轮缺失，使用最近快照")
+        if not val.get("us_composite"):
+            prev_comp = (prev or {}).get("us_composite") if isinstance(prev, dict) else None
+            if prev_comp:
+                val["us_composite"] = _status_copy(
+                    prev_comp, stale=True, reason="美国综合得分本轮缺失，使用最近快照")
         freshness = _liquidity_freshness(val)
         val["freshness"] = freshness
         val["stale"] = freshness["stale"]
@@ -2541,6 +2694,129 @@ def _module_scores(ind: dict, as_of: str | None = None) -> list[dict]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# 宏观总分（Macro Composite）：8 模块 → 单一 0-100 分
+# 权重与方向来自 2021-12 ~ 2026-07 逐月回放回测（研究文档见
+# research/A股宏观面总分模块_回测与权重设计.md）：
+#   有回测历史的模块按 IC3m（对中证全A未来3月收益）定权：
+#     财政地产 +0.52 / 国内增长与景气 -0.47 / 全球外部 +0.30 / 价格与工业利润 +0.03
+#   增长景气模块对收益为反向（景气越热未来越弱），合成时取 100-分。
+#   信用周期 / 货币与金融条件快照历史不足（2026 起源），无法回测，给小额
+#   先验权重（10 / 5），方向按利多为正；显著为噪声的价格模块给 10。
+# 复合分回测（重叠样本，块自助 p≈0.4，t≈2.5-3.5）：IC3m≈0.74（全A）、
+# 0.63（沪深300），前1/3 组 3 月胜率 0.91 vs 后1/3 组 0.18。
+# ---------------------------------------------------------------------------
+
+_MACRO_COMPOSITE_SCHEMA = 1
+_MACRO_COMPOSITE: dict[str, tuple[float, float]] = {
+    "财政地产": (30.0, 1.0),
+    "国内增长与景气": (25.0, -1.0),
+    "全球外部": (20.0, 1.0),
+    "价格与工业利润": (10.0, 1.0),
+    "信用周期": (10.0, 1.0),
+    "货币与金融条件": (5.0, 1.0),
+}
+
+
+def _macro_composite(modules: list[dict]) -> dict | None:
+    """把 8 模块得分按回测权重合成总分；贡献 = (分-50)×权重（反向模块再取反）。"""
+    by_name = {m["name"]: m for m in modules}
+    parts = []
+    num = 50.0
+    covered = 0.0
+    for name, (weight, sign) in _MACRO_COMPOSITE.items():
+        mod = by_name.get(name)
+        if not mod or mod.get("score") is None:
+            parts.append({"name": name, "weight": weight, "direction": "inverse" if sign < 0 else "direct",
+                          "score": None, "contribution": None})
+            continue
+        score = mod["score"]
+        adj = 100.0 - score if sign < 0 else score
+        num += (adj - 50.0) / 100.0 * weight
+        covered += weight
+        parts.append({"name": name, "weight": weight, "direction": "inverse" if sign < 0 else "direct",
+                      "score": score, "contribution": round((adj - 50.0) / 100.0 * weight, 1)})
+    total_w = sum(w for w, _s in _MACRO_COMPOSITE.values())
+    if covered < 0.5 * total_w:
+        return None
+    score = round(num / total_w * 100.0, 1)
+    contribs = [abs(p["contribution"]) for p in parts if p["contribution"] is not None]
+    return {
+        "schema": _MACRO_COMPOSITE_SCHEMA,
+        "score": score,
+        "state": _composite_state(score),
+        "coverage": round(covered / total_w * 100.0, 1),
+        # 主要驱动：贡献绝对值最大的两个模块
+        "drivers": [p["name"] for p in
+                    sorted((p for p in parts if p["contribution"] is not None),
+                           key=lambda p: -abs(p["contribution"]))[:2]],
+        "parts": parts,
+        "desc": ("模块加权总分（0-100，越高越利多）；权重与方向由 2021-2026 逐月回放回测确定，"
+                 "增长景气模块对收益为反向，合成时取 100-分"),
+    }
+
+
+def _composite_history(ind: dict, months: int = 36) -> list[dict]:
+    """按月回放复合总分：直接透视模块得分历史，不重算模块。"""
+    per_module = _module_score_history(ind, months=months)
+    by_date: dict[str, dict[str, float]] = {}
+    for name, pts in per_module.items():
+        if name not in _MACRO_COMPOSITE:
+            continue
+        for pt in pts:
+            by_date.setdefault(pt["date"], {})[name] = pt["v"]
+    out: list[dict] = []
+    for date in sorted(by_date):
+        mods = [{"name": n, "score": s} for n, s in by_date[date].items()]
+        comp = _macro_composite(mods)
+        if comp and comp.get("score") is not None:
+            out.append({"date": date, "v": comp["score"]})
+    return out
+
+
+def _month_end_closes(df, limit: int = 36) -> list[dict]:
+    """指数日K → 月末收盘点列（按月升序；乱序输入按日期排序后取每月最后交易日）。"""
+    if df is None or getattr(df, "empty", True) or "date" not in getattr(df, "columns", []):
+        return []
+    closes: dict[str, float] = {}
+    for _, r in df.sort_values("date").iterrows():
+        try:
+            closes[str(r["date"])[:7]] = float(r["close"])
+        except (TypeError, ValueError):
+            continue
+    return [{"date": d, "v": round(v, 1)} for d, v in sorted(closes.items())][-limit:]
+
+
+def _composite_benchmark(limit: int = 36) -> dict | None:
+    """总分对照基准：中证全A（000985）月末收盘（回测同源基准）。
+
+    独立 6h 缓存、失败返回 None——基准缺席只影响对照图，不影响总分。"""
+    def build():
+        try:
+            ak = astock._akshare()
+            df = ak.stock_zh_index_daily_tx(symbol="sh000985")
+        except Exception:
+            return None
+        hist = _month_end_closes(df, limit=limit)
+        return {"label": "中证全A", "hist": hist} if len(hist) >= 12 else None
+    return cache_runtime.get("macro_composite_benchmark", build,
+                             valid=lambda v: v is not None,
+                             ttl=6 * 3600, decorate=False)
+
+
+def _macro_composite_full(ind: dict) -> dict | None:
+    """当前总分 + 逐月历史 + 全A对照基准，顶层输出结构。"""
+    mods = _module_scores(ind)
+    comp = _macro_composite(mods)
+    if not comp:
+        return None
+    comp["hist"] = _composite_history(ind)
+    bench = _composite_benchmark()
+    if bench:
+        comp["benchmark"] = bench
+    return comp
+
+
 def _add_derived(ind: dict) -> None:
     """由已有指标纯计算派生新指标，就地并入 ind dict。
 
@@ -2910,6 +3186,7 @@ def _macro_build(force_sources: bool = False) -> dict:
         val["cn"].pop("private_credit_pulse", None)
         _annotate_macro_indicators(val["cn"], fetched_keys, val["updated"], fallback_fetched_at)
         val["modules"] = _module_scores(val["cn"])
+        val["composite"] = _macro_composite_full(val["cn"])
         _save_climate_hist(val["modules"])
         _save_json(_MACRO_SNAPSHOT, val)
     return val

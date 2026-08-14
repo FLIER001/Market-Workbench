@@ -2,7 +2,7 @@
 
 # Market Workbench
 
-[![Version](https://img.shields.io/badge/version-1.3.1-1f6feb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.4.0-1f6feb)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)](https://react.dev/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
@@ -28,13 +28,14 @@
 | 模块 | 内容 |
 |---|---|
 | 市场全景 | A 股指数、全球市场、市场情绪、成交额、板块资金与每日复盘 |
-| 全球预期 | Polymarket 与 Kalshi 的公开概率数据、来源、刷新时间与历史走势 |
-| 宏观面 | 宏观指标、数据来源、更新时间与可用状态 |
-| 资金面 | 流动性信号与市场资金指标 |
+| 全球预期 | Polymarket 与 Kalshi 的公开概率数据、来源、刷新时间、历史走势与 AI 研判卡 |
+| 宏观面 | 宏观指标、模块评分与总分卡（回测权重）、数据来源与更新时间 |
+| 资金面 | 中美流动性综合得分、流动性信号与市场资金指标 |
 | 个股数据 | A 股、港股、美股行情；K 线、估值、财务、公告、研报与资金面 |
 | 自选 | 股票与 ETF 分组、实时行情与研究入口 |
 | 板块 | 产业链研究、申万行业与主题板块观察 |
-| 黄金 | 黄金多维指标、现货行情、历史序列与数据状态 |
+| 黄金 | 黄金多维评分、现货行情、PAXG 国内金价折算与历史走势 |
+| 债市 | 建设中 |
 | 持仓 | 股票及基金持仓、已清仓记录与收益跟踪 |
 | 标的筛选 | Manager-First 基金筛选；个股筛选入口预留 |
 | 资讯 | 公开资讯聚合与公告跟踪 |

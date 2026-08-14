@@ -557,8 +557,86 @@ def test_paxg_reuses_minute_chart_within_one_minute(monkeypatch):
 
     monkeypatch.setattr(gold_score, "_binance_get", fetch)
     monkeypatch.setattr(gold_score, "_parse_binance_klines", parse)
+    monkeypatch.setattr(gold_score, "usdcny_rate", lambda: 7.0)
 
     assert gold_score.paxg_usd_spot()["price"] == 4405.8
     assert gold_score.paxg_usd_spot()["price"] == 4405.8
     assert sum("klines" in path for path in calls) == 2
     assert sum("ticker/24hr" in path for path in calls) == 2
+
+
+def test_paxg_cny_conversion(monkeypatch):
+    """PAXG → 国内金价：元/克 = USD/盎司 × USDCNY ÷ 31.1034768；缺汇率时 cny=None。"""
+    import gold_score
+
+    monkeypatch.setattr(gold_score, "_PAXG_CACHE", {})
+    monkeypatch.setattr(gold_score, "_PAXG_CHART_CACHE", {})
+    monkeypatch.setattr(gold_score, "_USDCNY_CACHE", {})
+    monkeypatch.setattr(gold_score.time, "time", lambda: 100.0)
+    monkeypatch.setattr(gold_score, "_binance_get", lambda path, timeout=12: b"{}")
+    monkeypatch.setattr(gold_score, "_parse_binance_klines", lambda raw: [])
+
+    def stub_usdcny() -> float:
+        return 7.2
+
+    monkeypatch.setattr(gold_score, "usdcny_rate", stub_usdcny)
+    # 4405.8 × 7.2 ÷ 31.1034768 = 1019.88 元/克
+    assert math.isclose(gold_score._paxg_to_cny_gram(4405.8, 7.2), 1019.88, abs_tol=0.01)
+    assert gold_score._paxg_to_cny_gram(4405.8, None) is None
+    assert gold_score._paxg_to_cny_gram(None, 7.2) is None
+    assert gold_score._paxg_to_cny_gram(-1.0, 7.2) is None
+
+
+def test_usdcny_rate_parses_sina_fx(monkeypatch):
+    """新浪 fx_susdcny：第 9 列（下标 8）为最新价；异常值抛错回退缓存。"""
+    import gold_score
+
+    class FakeResult:
+        def __init__(self, out: bytes):
+            self.stdout = out
+            self.returncode = 0
+
+    monkeypatch.setattr(gold_score, "_USDCNY_CACHE", {})
+    monkeypatch.setattr(gold_score.time, "time", lambda: 100.0)
+    raw = 'var hq_str_fx_susdcny="23:28:58,6.7304,6.7587,6.7501,144,6.7423,6.7445,6.7301,6.7426,在岸人民币,-0.083,-0.0056,0.0144,行情,0,0,,2026-08-14";'.encode("gbk")
+    monkeypatch.setattr(gold_score.subprocess, "run", lambda cmd, capture_output, timeout: FakeResult(raw))
+    assert math.isclose(gold_score.usdcny_rate(), 6.7426)
+
+    # 异常汇率（超出 5–9 合理区间）→ 回退上一次成功缓存
+    bad = 'var hq_str_fx_susdcny="23:28:58,0,0,0,0,0,0,0,0.5,在岸人民币,0,0,0,行情,0,0,,2026-08-14";'.encode("gbk")
+    monkeypatch.setattr(gold_score.subprocess, "run", lambda cmd, capture_output, timeout: FakeResult(bad))
+    monkeypatch.setattr(gold_score.time, "time", lambda: 9999.0)  # 越过 TTL
+    assert math.isclose(gold_score.usdcny_rate(), 6.7426)
+
+
+def test_macro_composite_weights_direction_and_coverage():
+    """宏观总分：反向模块取 100-分合成；缺分模块按权重归一；覆盖不足一半不输出。"""
+    import market
+
+    mods = [
+        {"name": "财政地产", "score": 70.0},          # 贡献 (70-50)*0.30 = +6
+        {"name": "国内增长与景气", "score": 70.0},     # 反向：(100-70-50)*0.25 = -5
+        {"name": "全球外部", "score": 60.0},           # +2
+        {"name": "价格与工业利润", "score": 50.0},     # 0
+        {"name": "信用周期", "score": 50.0},           # 0
+        {"name": "货币与金融条件", "score": 50.0},     # 0
+    ]
+    comp = market._macro_composite(mods)
+    assert comp is not None
+    assert math.isclose(comp["score"], 53.0)
+    assert comp["coverage"] == 100.0
+    assert set(comp["drivers"]) == {"财政地产", "国内增长与景气"}
+    inv = next(p for p in comp["parts"] if p["name"] == "国内增长与景气")
+    assert inv["direction"] == "inverse" and inv["contribution"] == -5.0
+    assert market._composite_state(53.0) == "中性"
+    assert market._composite_state(56.0) == "中性偏多"
+    assert market._composite_state(70.0) == "偏多"
+    assert market._composite_state(40.0) == "中性偏空"
+
+    # 缺一个模块：剩余 95 权重（100-5 货币金融条件）归一
+    comp2 = market._macro_composite(mods[:5])
+    assert comp2 is not None
+    assert math.isclose(comp2["coverage"], 95.0)
+
+    # 覆盖不足一半（只有 10+5 权重的模块有分）→ 不输出
+    assert market._macro_composite(mods[4:]) is None

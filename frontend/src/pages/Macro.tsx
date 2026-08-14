@@ -6,7 +6,7 @@ import {
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Sparkline } from "@/components/ui/Sparkline";
-import { api, type MacroData, type MacroIndicator, type MacroModule, type MacroSubModule, type HistPoint } from "@/lib/api";
+import { api, type MacroData, type MacroIndicator, type MacroModule, type MacroSubModule, type MacroComposite, type MacroCompositePart, type HistPoint } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useSWR } from "@/hooks/useSWR";
 
@@ -65,6 +65,174 @@ function ClimateBadges({ mod }: { mod: MacroModule }) {
         </span>
       )}
     </div>
+  );
+}
+
+// 总分卡：复合分 + 状态 + 各模块贡献条 + 近3年走势
+// ---- 总分卡 ----
+
+// 半圆仪表盘：0-100，5 段状态色带 + 指针（A股红涨绿跌：高分=红）
+const GAUGE_SEGMENTS: Array<{ from: number; to: number; color: string }> = [
+  { from: 0, to: 35, color: "hsl(var(--success) / 0.55)" },
+  { from: 35, to: 45, color: "hsl(var(--success) / 0.28)" },
+  { from: 45, to: 55, color: "hsl(var(--muted-foreground) / 0.25)" },
+  { from: 55, to: 65, color: "hsl(var(--danger) / 0.28)" },
+  { from: 65, to: 100, color: "hsl(var(--danger) / 0.55)" },
+];
+
+function polar(cx: number, cy: number, r: number, deg: number) {
+  const rad = (deg * Math.PI) / 180;
+  return { x: cx + r * Math.cos(rad), y: cy - r * Math.sin(rad) };
+}
+// score 0→180°、100→0°（上半圆从左到右）
+const scoreAngle = (score: number) => 180 - (Math.min(100, Math.max(0, score)) / 100) * 180;
+
+function CompositeGauge({ score }: { score: number }) {
+  const cx = 100, cy = 100, r = 80;
+  const angle = scoreAngle(score);
+  const tip = polar(cx, cy, r - 16, angle);
+  return (
+    <svg viewBox="0 0 200 108" className="w-40 shrink-0">
+      {GAUGE_SEGMENTS.map((seg) => {
+        const p1 = polar(cx, cy, r, scoreAngle(seg.from));
+        const p2 = polar(cx, cy, r, scoreAngle(seg.to));
+        return (
+          <path key={seg.from} d={`M ${p1.x} ${p1.y} A ${r} ${r} 0 0 1 ${p2.x} ${p2.y}`}
+            fill="none" stroke={seg.color} strokeWidth={11} strokeLinecap="butt" />
+        );
+      })}
+      {/* 指针 */}
+      <line x1={cx} y1={cy} x2={tip.x} y2={tip.y}
+        style={{ stroke: "hsl(var(--foreground) / 0.85)" }} strokeWidth={2} strokeLinecap="round" />
+      <circle cx={cx} cy={cy} r={4} style={{ fill: "hsl(var(--foreground))" }} />
+      {/* 刻度 */}
+      <text x={cx - r} y={cy + 14} textAnchor="middle" className="fill-muted-foreground/50" fontSize={8}>0</text>
+      <text x={cx + r} y={cy + 14} textAnchor="middle" className="fill-muted-foreground/50" fontSize={8}>100</text>
+    </svg>
+  );
+}
+
+// 贡献行：名称/方向 · 模块分 · 双向贡献条（正=利多红，负=利空绿）
+function CompositePartRow({ part, maxAbs, onOpen }: {
+  part: MacroCompositePart; maxAbs: number; onOpen: (name: string) => void;
+}) {
+  const pos = (part.contribution ?? 0) >= 0;
+  const width = part.contribution != null ? (Math.abs(part.contribution) / maxAbs) * 50 : 0;
+  return (
+    <button type="button" onClick={() => onOpen(part.name)}
+      title={`${part.name} 模块分 ${part.score != null ? part.score.toFixed(1) : "—"}${part.direction === "inverse" ? "（反向：合成取 100−分）" : ""} · 贡献 ${part.contribution != null ? (part.contribution > 0 ? "+" : "") + part.contribution.toFixed(1) : "—"} · 点击展开该模块指标`}
+      className="grid w-full grid-cols-[minmax(0,9rem)_1fr_2.8rem] items-center gap-2 rounded px-1 py-1 text-left transition-colors hover:bg-muted/20">
+      <span className="flex min-w-0 items-center gap-1 truncate text-[11px] text-foreground/80">
+        <span className="truncate">{part.name}</span>
+        {part.direction === "inverse" && (
+          <span className="shrink-0 rounded bg-primary/10 px-1 text-[9px] leading-tight text-primary">反向</span>
+        )}
+      </span>
+      <span className="relative flex h-2 items-center">
+        <span className="absolute left-1/2 h-3 w-px bg-border/60" />
+        {part.contribution != null && (
+          <span className={cn("absolute h-2 rounded-full", pos ? "bg-danger/60" : "bg-success/60")}
+            style={pos ? { left: "50%", width: `${width}%` } : { right: "50%", width: `${width}%` }} />
+        )}
+      </span>
+      <span className={cn("text-right font-mono text-[10px]",
+        part.contribution == null ? "text-muted-foreground/40" : pos ? "text-danger" : "text-success")}>
+        {part.contribution != null ? `${part.contribution > 0 ? "+" : ""}${part.contribution.toFixed(1)}` : "—"}
+      </span>
+    </button>
+  );
+}
+
+function CompositeCard({ comp, onOpenModule }: {
+  comp: MacroComposite; onOpenModule: (name: string) => void;
+}) {
+  const t = scoreTone(comp.score);
+  const hist = isHist(comp.hist) ? comp.hist : [];
+  const covered = comp.parts.filter((p) => p.score != null);
+  // 近3月变化（月度回放序列，不足3点退化为环比）
+  const chg3m = hist.length >= 4
+    ? hist[hist.length - 1].v - hist[hist.length - 4].v
+    : hist.length >= 2 ? hist[hist.length - 1].v - hist[hist.length - 2].v : null;
+  // 全A基准近3月涨跌（%）
+  const bench = comp.benchmark && isHist(comp.benchmark.hist) ? comp.benchmark : null;
+  const bh = bench?.hist ?? [];
+  const benchChg3m = bh.length >= 4
+    ? (bh[bh.length - 1].v / bh[bh.length - 4].v - 1) * 100
+    : null;
+  const maxAbs = Math.max(...covered.map((p) => Math.abs(p.contribution as number)), 1);
+  return (
+    <GlassCard className="mb-4 p-4">
+      <div className="grid gap-4 lg:grid-cols-2">
+        {/* 左上 1/4：仪表 + 分数（居中）+ 驱动 */}
+        <div className="flex flex-col items-center justify-center border-b border-border/40 pb-4 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-4">
+          <CompositeGauge score={comp.score} />
+          <div className="mt-1 flex items-baseline gap-2">
+            <span className={cn("font-mono text-4xl font-extrabold leading-none", t.text)}>
+              {comp.score.toFixed(1)}
+            </span>
+            <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-semibold", t.bg, t.text)}>{comp.state}</span>
+          </div>
+          {comp.drivers.length > 0 && (
+            <p className="mt-1.5 text-[10px] text-muted-foreground/60">
+              主驱动 <span className="font-medium text-foreground/70">{comp.drivers.join(" · ")}</span>
+            </p>
+          )}
+          {covered.length < comp.parts.length && (
+            <p className="mt-0.5 text-[10px] text-warning">覆盖 {comp.coverage.toFixed(0)}%（缺失模块按权重归一）</p>
+          )}
+        </div>
+        {/* 右上 1/4：近3年总分走势 + 口径 */}
+        <div className="flex min-w-0 flex-col justify-center lg:pl-1">
+          <div className="flex items-baseline gap-2">
+            <span className="text-[10px] text-muted-foreground/45">近3年总分（逐月回放）</span>
+            {chg3m != null && (
+              <span className={cn("rounded bg-muted/30 px-1.5 py-px font-mono text-[10px]",
+                chg3m > 0.3 ? "text-danger" : chg3m < -0.3 ? "text-success" : "text-muted-foreground")}>
+                3月{chg3m > 0 ? "+" : ""}{chg3m.toFixed(1)}
+              </span>
+            )}
+          </div>
+          {hist.length > 1 ? (
+            <Sparkline data={hist} height={64} className="mt-1" color="--primary" valueSuffix=" 分" showLatest />
+          ) : (
+            <p className="mt-2 text-[10px] text-muted-foreground/40">历史回放积累中</p>
+          )}
+          <p className="mt-1.5 text-[10px] leading-snug text-muted-foreground/40">
+            权重经 2021-2026 逐月回放回测（对全A未来3月收益 IC≈0.74）；景气模块对收益为反向，按 100−分计入
+          </p>
+        </div>
+      </div>
+      {/* 下半：左下 1/4 模块贡献 · 右下 1/4 全A走势对照 */}
+      <div className="mt-3 grid gap-4 border-t border-border/40 pt-3 lg:grid-cols-2">
+        <div className="min-w-0 overflow-hidden border-b border-border/40 pb-4 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-4">
+          <p className="mb-1 truncate text-[10px] text-muted-foreground/50">
+            模块贡献（点击展开指标；条形左绿=利空 / 右红=利多）
+          </p>
+          <div className="grid gap-x-6 xl:grid-cols-2">
+            {comp.parts.map((p) => (
+              <CompositePartRow key={p.name} part={p} maxAbs={maxAbs} onOpen={onOpenModule} />
+            ))}
+          </div>
+        </div>
+        <div className="min-w-0 lg:pl-1">
+          <div className="mb-1 flex items-baseline gap-2">
+            <span className="text-[10px] text-muted-foreground/50">
+              {bench ? `${bench.label} 月末收盘（回测基准）` : "全A走势"}
+            </span>
+            {benchChg3m != null && (
+              <span className={cn("rounded bg-muted/30 px-1.5 py-px font-mono text-[10px]", tone(benchChg3m))}>
+                3月{benchChg3m > 0 ? "+" : ""}{benchChg3m.toFixed(1)}%
+              </span>
+            )}
+          </div>
+          {bench && bench.hist.length > 1 ? (
+            <Sparkline data={bench.hist} height={96} color="--danger" valueSuffix="" showLatest />
+          ) : (
+            <p className="text-[10px] text-muted-foreground/40">基准数据暂不可用</p>
+          )}
+        </div>
+      </div>
+    </GlassCard>
   );
 }
 
@@ -265,6 +433,7 @@ export function Macro() {
 
   const indicators = data?.cn ?? {};
   const modules = data?.modules ?? [];
+  const composite = data?.composite ?? null;
   const clusters = data?.clusters?.length ? data.clusters : [
     { name: "宏观模块", desc: "", modules: modules.map((m) => m.name) },
   ];
@@ -294,6 +463,19 @@ export function Macro() {
         </GlassCard>
       )}
 
+      {/* 宏观总分：模块之上的单一合成分（权重来自 2021-2026 回测） */}
+      {composite && (
+        <CompositeCard comp={composite}
+          onOpenModule={(name) => {
+            setOpenModule(name);
+            // 等模块 chip 渲染后滚动到位并同步展开
+            requestAnimationFrame(() => {
+              document.getElementById(`mod-${name}`)
+                ?.scrollIntoView({ behavior: "smooth", block: "center" });
+            });
+          }} />
+      )}
+
       {/* 五类因果层 × 八模块：五列等宽流程图，左→右即宏观传导方向；一级聚类不另造总分。 */}
       <div className="mb-2 flex items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
@@ -320,8 +502,10 @@ export function Macro() {
               </div>
               <div className="flex flex-col gap-2">
                 {rows.map((m) => (
-                  <ModuleChip key={m.name} mod={m} open={openModule === m.name}
-                    onToggle={() => setOpenModule((cur) => (cur === m.name ? null : m.name))} />
+                  <div key={m.name} id={`mod-${m.name}`}>
+                    <ModuleChip mod={m} open={openModule === m.name}
+                      onToggle={() => setOpenModule((cur) => (cur === m.name ? null : m.name))} />
+                  </div>
                 ))}
               </div>
             </section>

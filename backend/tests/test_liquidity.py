@@ -103,3 +103,73 @@ def test_macro_score_does_not_treat_margin_or_vendor_flow_as_monotonic_bullish()
 
     assert market_inputs == {"market_breadth", "new_high_breadth"}
     assert not hasattr(market, "_total_flow_hist")
+
+
+# ---- 资金面综合得分（两张卡片）----
+
+def _idx(label, value, favorable, hist=None):
+    return {"label": label, "value": value, "favorable": favorable,
+            "hist": hist or [], "stale": False}
+
+
+def test_composite_weights_sum_and_directions():
+    assert sum(market._CN_LIQUIDITY_COMPOSITE.values()) == 100.0
+    assert sum(market._US_LIQUIDITY_COMPOSITE.values()) == 100.0
+    # 国内：杠杆/大单为正向，货币条件类为反向（合成时取 100-分位）
+    cn = market._CN_LIQUIDITY_COMPOSITE
+    assert cn["杠杆温度"] > cn["银行间资金压力"]  # 边际资金节奏权重大于单一价格项
+    # 美国：五类压力全部为反向项
+    us_labels = {"短端资金压力", "信用压力", "系统流动性压力", "市场压力", "收益率曲线预警"}
+    assert set(market._US_LIQUIDITY_COMPOSITE) == us_labels
+
+
+def test_composite_inverts_stress_and_keeps_favorable_direction():
+    indices = {
+        "short_liquidity": _idx("银行间资金压力", 80.0, "low"),   # 压力高位 → 归一 20
+        "policy_rate": _idx("政策与贷款基准", 20.0, "low"),       # 利率低位 → 归一 80
+        "leverage": _idx("杠杆温度", 70.0, "high"),               # 直接用 70
+    }
+    comp = market._liquidity_composite(indices, market._CN_LIQUIDITY_COMPOSITE, "国内资金面", "d")
+
+    by_name = {p["name"]: p for p in comp["parts"]}
+    assert by_name["银行间资金压力"]["score"] == 20.0
+    assert by_name["政策与贷款基准"]["score"] == 80.0
+    assert by_name["杠杆温度"]["score"] == 70.0
+    # 全宽松（压力类原始 20 → 归一 80；正向类原始 80）→ 总分恰为 80
+    all_easy = {key: _idx(idx["label"], 20.0 if idx["favorable"] == "low" else 80.0, idx["favorable"])
+                for key, idx in {
+                    "short_liquidity": {"label": "银行间资金压力", "favorable": "low"},
+                    "policy_rate": {"label": "政策与贷款基准", "favorable": "low"},
+                    "bond": {"label": "债市状态", "favorable": "low"},
+                    "leverage": {"label": "杠杆温度", "favorable": "high"},
+                    "momentum": {"label": "大单流向（辅助）", "favorable": "high"},
+                }.items()}
+    assert market._liquidity_composite(
+        all_easy, market._CN_LIQUIDITY_COMPOSITE, "x", "d")["score"] == 80.0
+
+
+def test_composite_missing_members_counted_as_neutral_and_gate_at_half():
+    one = {"leverage": _idx("杠杆温度", 80.0, "high")}
+    two = {**one, "short_liquidity": _idx("银行间资金压力", 80.0, "low")}  # 覆盖 30+25=55
+
+    # 覆盖 30/100 < 50% → 不输出
+    assert market._liquidity_composite(one, market._CN_LIQUIDITY_COMPOSITE, "x", "d") is None
+    comp = market._liquidity_composite(two, market._CN_LIQUIDITY_COMPOSITE, "x", "d")
+    assert comp["coverage"] == 55.0
+    # 缺失成员按中性 50 计入：50 + 0.3×30（杠杆80） − 0.25×30（压力80→归一20，权重25）
+    assert comp["score"] == 50.0 + 0.3 * 30 - 0.25 * 30
+
+
+def test_composite_history_uses_inverted_point_in_time_percentiles():
+    hist = [{"date": "2026-08-13", "v": 70.0}, {"date": "2026-08-14", "v": 30.0}]
+    indices = {
+        "leverage": _idx("杠杆温度", 30.0, "high", hist),
+        "short_liquidity": _idx("银行间资金压力", 30.0, "low",
+                                [{"date": d["date"], "v": 50.0} for d in hist]),
+    }
+    out = market._liquidity_composite_hist(indices, market._CN_LIQUIDITY_COMPOSITE)
+
+    # 两天覆盖均 55%（≥50% 门槛）→ 都有输出；缺失成员同样按中性 50 计入
+    assert [p["date"] for p in out] == ["2026-08-13", "2026-08-14"]
+    assert out[0]["v"] == 56.0  # 50 + (70-50)×0.30 + (50-50)×0.25
+    assert out[1]["v"] == 44.0  # 50 + (30-50)×0.30

@@ -151,6 +151,13 @@ _PAXG_CHART_TTL = 60  # 分钟线没有必要跟随 20 秒 ticker 重拉全天�
 _PAXG_CHART_CACHE: dict[str, tuple[float, dict]] = {}
 _PAXG_LOCK = threading.Lock()
 
+# PAXG → 国内金价近似折算：1 枚 PAXG = 1 金衡盎司 = 31.1034768 克，USDCNY 取新浪在岸
+_TROY_OZ_GRAMS = 31.1034768
+_USDCNY_URL = "https://hq.sinajs.cn/list=fx_susdcny"
+_USDCNY_TTL = 600  # 秒；汇率日内波动远小于金价，10 分钟足够
+_USDCNY_CACHE: dict[str, tuple[float, float]] = {}
+_USDCNY_LOCK = threading.Lock()
+
 
 def _parse_hf_quotes(raw: str) -> dict[str, dict]:
     """解析腾讯 hf_ 前缀行情（逗号分隔，非 A 股 `~` 分隔）。
@@ -364,6 +371,59 @@ def cn_gold_spot() -> dict:
             return payload
         return {"au0": None, "au9999": None, "autd": None, "fetched_at": None, "stale": True}
 
+_AU0_HIST_TTL = 3600  # 秒；日K盘中仅收盘价变动，1 小时足够
+_AU0_HIST_CACHE: dict[str, tuple[float, dict]] = {}
+_AU0_HIST_LOCK = threading.Lock()
+
+
+def au0_daily_history(days: int = 400) -> dict:
+    """沪金主力（AU0）日K收盘序列，供评分卡旁的国内金价近1年走势。
+
+    近一年走势与前端对齐用收盘价（c 字段），区别于涨跌幅基准的结算价（s）。
+    """
+    now = time.time()
+    with _AU0_HIST_LOCK:
+        hit = _AU0_HIST_CACHE.get("hist")
+        if hit and now - hit[0] < _AU0_HIST_TTL:
+            points = hit[1]["points"][-days:]
+            return {**hit[1], "points": points}
+        try:
+            import subprocess as _sp
+            cmd = ["curl", "-L", "-s", "--max-time", "10",
+                   "-H", "Referer: https://finance.sina.com.cn/futures/", _AU0_DAILY_URL]
+            r = _sp.run(cmd, capture_output=True, timeout=15)
+            raw = r.stdout.decode("gbk", "ignore")
+            start, end = raw.find("["), raw.rfind("]")
+            if start < 0 or end <= start:
+                raise ValueError("AU0 日K无返回")
+            rows = json.loads(raw[start:end + 1])
+            points = []
+            for row in rows:
+                d, c = str(row.get("d", ""))[:10], row.get("c")
+                try:
+                    close = float(c)
+                except (TypeError, ValueError):
+                    continue
+                if d and math.isfinite(close) and close > 0:
+                    points.append({"date": d, "v": round(close, 2)})
+            if not points:
+                raise ValueError("AU0 日K为空")
+            payload = {
+                "symbol": "AU0",
+                "points": points,
+                "fetched_at": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M"),
+            }
+            _AU0_HIST_CACHE["hist"] = (now, payload)
+            return {**payload, "points": points[-days:]}
+        except Exception:  # noqa: BLE001 — 失败回退最近一次成功
+            if hit:
+                payload = dict(hit[1])
+                payload["points"] = payload["points"][-days:]
+                payload["stale"] = True
+                return payload
+            return {"symbol": "AU0", "points": [], "fetched_at": None, "stale": True}
+
+
 def _binance_get(path: str, timeout: int = 12) -> bytes:
     """Binance 公共行情镜像（data-api.binance.vision）GET。仅标准库。"""
     cmd = ["curl", "-L", "-s", "--max-time", str(timeout),
@@ -407,6 +467,38 @@ def _parse_binance_klines(raw: bytes) -> list[dict]:
             "ot": ot,
         })
     return points
+
+
+def usdcny_rate() -> float | None:
+    """在岸 USDCNY 汇率（新浪 fx_s，日更新鲜、无鉴权）。失败回退最近一次成功缓存。
+
+    字段：1=买价 2=卖价 3=昨收 5=开盘 6=最高 7=最低 8=最新/收盘。
+    """
+    now = time.time()
+    with _USDCNY_LOCK:
+        hit = _USDCNY_CACHE.get("usdcny")
+        if hit and now - hit[0] < _USDCNY_TTL:
+            return hit[1]
+        try:
+            cmd = ["curl", "-L", "-s", "--max-time", "8",
+                   "-H", "Referer: https://finance.sina.com.cn", _USDCNY_URL]
+            r = subprocess.run(cmd, capture_output=True, timeout=12)
+            f = r.stdout.decode("gbk", "ignore").split('"')[1].split(",")
+            rate = float(f[8])
+            if not math.isfinite(rate) or not 5 <= rate <= 9:
+                raise ValueError(f"USDCNY 异常：{rate}")
+            _USDCNY_CACHE["usdcny"] = (now, rate)
+            return rate
+        except Exception:  # noqa: BLE001 — 汇率缺失只降级折算字段，不影响 USD 行情
+            return hit[1] if hit else None
+
+
+def _paxg_to_cny_gram(usd_per_oz: float | None, fx: float | None) -> float | None:
+    """USD/盎司 → CNY/克。缺汇率或价格异常时返回 None。"""
+    if usd_per_oz is None or fx is None or not usd_per_oz > 0 or not fx > 0:
+        return None
+    v = usd_per_oz / _TROY_OZ_GRAMS * fx
+    return round(v, 2) if math.isfinite(v) else None
 
 
 def paxg_usd_spot() -> dict:
@@ -467,6 +559,14 @@ def paxg_usd_spot() -> dict:
             # 用 ticker 最新价覆盖分时末点，保证图尾与卡片一致
             if last and points:
                 points[-1] = {**last, "price": last_price}
+            # 国内金价近似折算（CNY/克）：PAXG 锚定 1 金衡盎司，× USDCNY ÷ 盎司克重。
+            # 分时保持 USD 原值 + 附 usdcny，由前端折算；汇率缺失时 USD 图不受影响。
+            fx = usdcny_rate()
+            open_usd = float(tk["openPrice"]) if tk.get("openPrice") else None
+            high_usd = float(tk["highPrice"]) if tk.get("highPrice") else None
+            low_usd = float(tk["lowPrice"]) if tk.get("lowPrice") else None
+            cny_price = _paxg_to_cny_gram(last_price, fx)
+            cny_prev = _paxg_to_cny_gram(prev_close, fx)
             chart_points = [{"time": p["time"], "price": p["price"], "volume": p["volume"]}
                            for p in points]
             payload = {
@@ -475,13 +575,23 @@ def paxg_usd_spot() -> dict:
                 "prev_close": prev_close,
                 "change": change,
                 "change_pct": change_pct,
-                "open": float(tk["openPrice"]) if tk.get("openPrice") else None,
-                "high": float(tk["highPrice"]) if tk.get("highPrice") else None,
-                "low": float(tk["lowPrice"]) if tk.get("lowPrice") else None,
+                "open": open_usd,
+                "high": high_usd,
+                "low": low_usd,
                 "volume": float(tk["volume"]) if tk.get("volume") else None,
                 "time": last["time"] if last else datetime.now(BEIJING).strftime("%H:%M"),
                 "date": today,
                 "fetched_at": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M"),
+                "usdcny": fx,
+                "cny": {
+                    "price": cny_price,
+                    "prev_close": cny_prev,
+                    "change": round(cny_price - cny_prev, 2)
+                        if cny_price is not None and cny_prev is not None else None,
+                    "open": _paxg_to_cny_gram(open_usd, fx),
+                    "high": _paxg_to_cny_gram(high_usd, fx),
+                    "low": _paxg_to_cny_gram(low_usd, fx),
+                } if fx else None,
                "minute": {
                    "date": today,
                    "prev_close": prev_close or 0.0,

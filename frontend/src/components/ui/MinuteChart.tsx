@@ -282,6 +282,7 @@ export function MinuteChart({
       };
     });
 
+    // 0% 涨跌幅始终对齐昨收基准线；其余 4 档按量程均分（25%/50%/75%/100%）
     const ticks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => {
       const price = high - ratio * (high - low);
       return {
@@ -394,6 +395,12 @@ export function MinuteChart({
   // 按交易时段边界标注刻度（每个时段的开/收盘），比均匀抽样更直观
   const timeTicks = useMemo(() => {
     if (!slotRanges) {
+      const ticks = buildTimeTicks(totalMinutes);
+      for (const t of ticks) t.label = clockAt(t.index);
+      return ticks;
+    }
+    // 单一连续时段（如 PAXG 7×24 的 00:00–24:00）：无休市概念，均匀抽 5 个时钟刻度
+    if (slotRanges.length === 1) {
       const ticks = buildTimeTicks(totalMinutes);
       for (const t of ticks) t.label = clockAt(t.index);
       return ticks;

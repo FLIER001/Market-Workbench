@@ -25,6 +25,7 @@ from typing import Any
 from . import kalshi_signals
 from . import market_taxonomy
 from . import polymarket_signals
+from .pulse_insight import module_insight, status_insight
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +149,39 @@ def _with_cache_state(snapshot: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def _attach_insights(modules: list[dict[str, Any]]) -> None:
+    """LLM summary + investment-impact call for each core module's top-probability
+    event. Best-effort per module — one failure never blocks the others."""
+    for module in modules:
+        if module.get("core"):
+            module["insight"] = await module_insight(module["key"], module["markets"])
+
+
+async def refresh_insight(module_key: str) -> dict[str, Any] | None:
+    """Regenerate one module's insight card from the pinned snapshot's current
+    markets (no source re-pull) and persist it. Returns the new insight or
+    None when the module is missing/has no markets."""
+    snap = _load_snapshot()
+    if not snap:
+        return None
+    for module in snap.get("modules", []):
+        if module.get("key") == module_key:
+            module["insight"] = await module_insight(module_key, module.get("markets", []))
+            _save_snapshot(snap)
+            return module["insight"]
+    return None
+
+
+async def refresh_status() -> str:
+    """Regenerate the 现状 long-strip card and persist it into the snapshot."""
+    snap = _load_snapshot()
+    if not snap:
+        return ""
+    snap["status"] = await status_insight()
+    _save_snapshot(snap)
+    return snap["status"]
+
+
 async def _build() -> dict[str, Any]:
     """Pull both sources, classify, translate, group, and pin. The slow path
     (Kalshi's full event book can take 1-8 min when the API is loaded)."""
@@ -162,6 +196,9 @@ async def _build() -> dict[str, Any]:
         raise ValueError(f"empty source response: {missing}")
     merged = pm + ks
     await _translate(merged)
+    modules = _group_by_module(merged)
+    await _attach_insights(modules)
+    status = await status_insight()
     now = datetime.now().astimezone().isoformat(timespec="seconds")
     overview = {
         "as_of": now,
@@ -169,7 +206,8 @@ async def _build() -> dict[str, Any]:
         "sources": ["polymarket", "kalshi"],
         "module_order": market_taxonomy.MODULES,
         "core_modules": market_taxonomy.CORE_MODULES,
-        "modules": _group_by_module(merged),
+        "status": status,
+        "modules": modules,
     }
     _save_snapshot(overview)
     return overview

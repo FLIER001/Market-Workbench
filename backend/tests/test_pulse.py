@@ -19,7 +19,8 @@ def test_pulse_overview_route_registered():
 
 
 def test_taxonomy_core_order():
-    assert market_taxonomy.CORE_MODULES == ["货币政策", "宏观经济", "地缘政治", "政治选举", "股指大宗", "AI科技"]
+    assert market_taxonomy.CORE_MODULES == ["货币政策", "宏观经济", "地缘政治", "股指大宗"]
+    assert market_taxonomy.REFERENCE_MODULES[:2] == ["政治选举", "AI科技"]
     assert market_taxonomy.CORE_SET == frozenset(market_taxonomy.CORE_MODULES)
 
 

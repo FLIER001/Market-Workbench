@@ -3,7 +3,7 @@ import { RefreshCw, Droplets, Landmark, TrendingUp, TrendingDown, Activity, Gaug
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Sparkline } from "@/components/ui/Sparkline";
-import { api, type LiquidityData, type LiquidityUsItem, type HistPoint, type IndexFlow, type CompositeIndex } from "@/lib/api";
+import { api, type LiquidityData, type LiquidityUsItem, type HistPoint, type IndexFlow, type CompositeIndex, type LiquidityComposite } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useSWR } from "@/hooks/useSWR";
 
@@ -11,6 +11,19 @@ import { useSWR } from "@/hooks/useSWR";
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const isHist = (v: unknown): v is HistPoint[] =>
   Array.isArray(v) && v.every((p) => p != null && isNum((p as HistPoint).v) && typeof (p as HistPoint).date === "string");
+
+function isValidLiquidityComposite(c: unknown): boolean {
+  if (!c || typeof c !== "object") return false;
+  const comp = c as Record<string, unknown>;
+  if (!isNum(comp.score)) return false;
+  if (comp.hist !== undefined && !isHist(comp.hist)) return false;
+  if (comp.parts !== undefined) {
+    if (!Array.isArray(comp.parts) ||
+        comp.parts.some((p) => !p || typeof (p as { name?: unknown }).name !== "string" ||
+          (p as { score?: unknown }).score !== null && !isNum((p as { score?: unknown }).score))) return false;
+  }
+  return true;
+}
 
 function isValidLiquidity(d: LiquidityData | null): d is LiquidityData {
   if (!d || typeof d !== "object") return false;
@@ -49,6 +62,9 @@ function isValidLiquidity(d: LiquidityData | null): d is LiquidityData {
     if (!Array.isArray(d.fed_odds.strikes) ||
         d.fed_odds.strikes.some((s) => !isNum(s?.strike) || !isNum(s?.prob))) return false;
   }
+  // 综合得分卡：score 必须是数字，非法时丢弃该卡片而不是整页报错
+  if (d.cn_composite != null && !isValidLiquidityComposite(d.cn_composite)) d.cn_composite = null;
+  if (d.us_composite != null && !isValidLiquidityComposite(d.us_composite)) d.us_composite = null;
   return true;
 }
 
@@ -222,6 +238,82 @@ function IndexCard({ idx, open, onToggle }: {
   );
 }
 
+// 综合得分卡：0-100 宽松—友好度（越高越利多）；贡献条正=红（利多）、负=绿（利空）
+function CompositeScoreCard({ comp, onOpenPart }: {
+  comp: LiquidityComposite; onOpenPart: (label: string) => void;
+}) {
+  const tone = comp.score >= 65 ? "text-danger" : comp.score >= 55 ? "text-danger/80"
+    : comp.score > 45 ? "text-muted-foreground" : comp.score > 35 ? "text-success/80" : "text-success";
+  const zoneBg = comp.score > 55 ? "bg-danger/10" : comp.score > 45 ? "bg-muted/20" : "bg-success/10";
+  const hist = isHist(comp.hist) ? comp.hist : [];
+  const covered = comp.parts.filter((p) => p.score != null);
+  const maxAbs = Math.max(...covered.map((p) => Math.abs(p.contribution as number)), 1);
+  return (
+    <GlassCard className="p-4">
+      <div className="flex items-baseline justify-between">
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+          <Gauge className="h-4 w-4 text-primary" /> {comp.label} · 综合得分
+        </h3>
+        {comp.stale && (
+          <span className="rounded bg-warning/15 px-1.5 py-0.5 text-[10px] text-warning">
+            缓存{comp.fetched_at ? ` ${comp.fetched_at}` : ""}
+          </span>
+        )}
+      </div>
+      <div className="mt-1 flex items-baseline gap-2">
+        <span className={cn("font-mono text-4xl font-extrabold leading-none", tone)}>{comp.score.toFixed(1)}</span>
+        <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-semibold", zoneBg, tone)}>{comp.state}</span>
+        {comp.coverage < 100 && (
+          <span className="text-[10px] text-warning">覆盖 {comp.coverage.toFixed(0)}%</span>
+        )}
+      </div>
+      {/* 0-100 分位条：右侧=宽松友好 */}
+      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted/20">
+        <div className="h-full rounded-full bg-primary/60 transition-all" style={{ width: `${comp.score}%` }} />
+      </div>
+      {comp.drivers.length > 0 && (
+        <p className="mt-1.5 truncate text-[10px] text-muted-foreground/60">
+          主驱动 <span className="font-medium text-foreground/70">{comp.drivers.join(" · ")}</span>
+        </p>
+      )}
+      {hist.length > 1 && <Sparkline data={hist} height={44} className="mt-2" color="--primary" valueSuffix=" 分" />}
+      {/* 成员贡献明细：点击联动展开下方单指数 */}
+      <div className="mt-2 space-y-1 border-t border-border/40 pt-2">
+        {comp.parts.map((p) => {
+          const pos = (p.contribution ?? 0) >= 0;
+          const width = p.contribution != null ? (Math.abs(p.contribution) / maxAbs) * 50 : 0;
+          return (
+            <button type="button" key={p.name} onClick={() => onOpenPart(p.name)}
+              title={`${p.name} ×${p.weight.toFixed(0)} · 归一分 ${p.score != null ? p.score.toFixed(0) : "—"} · 贡献 ${p.contribution != null ? (p.contribution > 0 ? "+" : "") + p.contribution.toFixed(1) : "—"} · 点击展开该指数`}
+              className="grid w-full grid-cols-[9.5rem_2.2rem_2.2rem_1fr_2.6rem] items-center gap-1.5 rounded px-1 py-0.5 text-left transition-colors hover:bg-muted/20">
+              <span className="truncate text-[10px] text-foreground/80">{p.name}</span>
+              <span className="text-right font-mono text-[9px] text-muted-foreground/50">×{p.weight.toFixed(0)}</span>
+              <span className={cn("text-right font-mono text-[10px] font-bold",
+                p.score == null ? "text-muted-foreground/40" : p.score >= 55 ? "text-danger" : p.score > 45 ? "text-muted-foreground" : "text-success")}>
+                {p.score != null ? p.score.toFixed(0) : "—"}
+              </span>
+              <span className="relative flex h-1.5 items-center">
+                <span className="absolute left-1/2 h-2 w-px bg-border/60" />
+                {p.contribution != null && (
+                  <span className={cn("absolute h-1.5 rounded-full", pos ? "bg-danger/60" : "bg-success/60")}
+                    style={pos ? { left: "50%", width: `${width}%` } : { right: "50%", width: `${width}%` }} />
+                )}
+              </span>
+              <span className={cn("text-right font-mono text-[9px]",
+                p.contribution == null ? "text-muted-foreground/40" : pos ? "text-danger" : "text-success")}>
+                {p.contribution != null ? `${p.contribution > 0 ? "+" : ""}${p.contribution.toFixed(1)}` : "—"}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-1.5 text-[9px] leading-snug text-muted-foreground/40">
+        {comp.desc}（条形左绿=利空 / 右红=利多）
+      </p>
+    </GlassCard>
+  );
+}
+
 export function Liquidity() {
   const [err, setErr] = useState(false);
   const [openIdx, setOpenIdx] = useState<string | null>(null);  // 展开子指标的指数，默认全部折叠
@@ -246,6 +338,14 @@ export function Liquidity() {
   const us = data?.us;
   const fedOdds = data?.fed_odds;
   const usIndices = data?.us_indices ? Object.values(data.us_indices) : [];
+  const cnComposite = data?.cn_composite ?? null;
+  const usComposite = data?.us_composite ?? null;
+  // 综合得分成员 → 单指数卡联动展开（国内/美国前缀避免同名冲突）
+  const openPart = (label: string) => {
+    const cnHit = cnIndices.some((idx) => idx.label === label);
+    const key = cnHit ? label : `us-${label}`;
+    setOpenIdx((cur) => (cur === key ? null : key));
+  };
 
   const rateCards = us ? (["effr", "sofr", "tgcr", "iorb", "fed_target_u", "fed_target_l", "dgs3m", "dgs2", "dgs10", "dgs30"]
     .filter((k) => us[k]).map((k) => us[k])) : [];
@@ -281,6 +381,14 @@ export function Liquidity() {
             {(data.freshness?.stale_sources ?? []).slice(0, 4).map((x) => x.label).join("、") || "详见指标卡"}。
           </span>
         </GlassCard>
+      )}
+
+      {/* 两张综合得分卡片：国内 / 美国各一张（0-100 宽松—友好度，越高越利多） */}
+      {(cnComposite || usComposite) && (
+        <div className="mb-6 grid gap-3 lg:grid-cols-2">
+          {cnComposite && <CompositeScoreCard comp={cnComposite} onOpenPart={openPart} />}
+          {usComposite && <CompositeScoreCard comp={usComposite} onOpenPart={openPart} />}
+        </div>
       )}
 
       {/* 国内 · 综合指数 */}

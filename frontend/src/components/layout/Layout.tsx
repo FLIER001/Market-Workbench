@@ -3,7 +3,7 @@ import { Link, Outlet, useLocation } from "react-router-dom";
 import {
   Activity, Radar, LayoutGrid, Wallet, Settings, Search,
   Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github, Globe,
-  Star, FileText, Droplets, Loader2, PieChart, Coins, Gauge,
+  Star, FileText, Droplets, Loader2, PieChart, Coins, Gauge, Landmark,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
@@ -21,8 +21,8 @@ const REPO_URL = "https://github.com/FLIER001/Vibe-Research";
 
 const NAV = [
   { to: "/daily-review", icon: Activity, label: "市场全景" },
-  { to: "/macro", icon: Globe, label: "宏观面" },
   { to: "/pulse", icon: Gauge, label: "全球预期" },
+  { to: "/macro", icon: Globe, label: "宏观面" },
   { to: "/liquidity", icon: Droplets, label: "资金面" },
   { to: "/intel", icon: Radar, label: "资讯" },
   { to: "/watchlist", icon: Star, label: "自选" },
@@ -30,6 +30,7 @@ const NAV = [
   { to: "/sectors", icon: LayoutGrid, label: "板块研究", match: "/sectors" },
   { to: "/screening", icon: PieChart, label: "标的筛选", match: "/screening" },
   { to: "/gold", icon: Coins, label: "黄金" },
+  { to: "/bonds", icon: Landmark, label: "债市" },
   { to: "/research", icon: FileText, label: "研究", match: "/research" },
 ];
 

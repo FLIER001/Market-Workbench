@@ -14,8 +14,8 @@ Ported from https://github.com/simonlin1212/globalpercent (Apache-2.0).
 from __future__ import annotations
 
 # Ordered. Core first (expanded in the UI), reference last (collapsed).
-CORE_MODULES: list[str] = ["货币政策", "宏观经济", "地缘政治", "政治选举", "股指大宗", "AI科技"]
-REFERENCE_MODULES: list[str] = ["加密", "体育", "娱乐", "其他"]
+CORE_MODULES: list[str] = ["货币政策", "宏观经济", "地缘政治", "股指大宗"]
+REFERENCE_MODULES: list[str] = ["政治选举", "AI科技", "加密", "体育", "娱乐", "其他"]
 MODULES: list[str] = CORE_MODULES + REFERENCE_MODULES
 CORE_SET: frozenset[str] = frozenset(CORE_MODULES)
 

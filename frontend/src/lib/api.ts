@@ -569,11 +569,33 @@ export interface CompositeIndex {
   stale?: boolean; fallback_reason?: string;
 }
 export interface LiquidityStaleSource { label: string; date?: string; fetched_at?: string; reason: string }
+// 资金面综合得分：单指数按权重合成的单一 0-100 分（越高越宽松友好）
+export interface LiquidityCompositePart {
+  name: string;
+  weight: number;
+  score: number | null;        // 已按方向归一（压力类取 100-分位）
+  contribution: number | null; // (分-50)×权重，正=利多
+}
+export interface LiquidityComposite {
+  schema: number;
+  label: string;
+  score: number;
+  state: string; // 偏多/中性偏多/中性/中性偏空/偏空
+  coverage: number;
+  drivers: string[];
+  parts: LiquidityCompositePart[];
+  hist?: HistPoint[];
+  desc: string;
+  stale?: boolean;
+  fetched_at?: string;
+}
 export interface LiquidityData {
   cn: LiquidityCn;
   cn_indices?: Record<string, CompositeIndex>;
+  cn_composite?: LiquidityComposite | null;
   us: Record<string, LiquidityUsItem>;
   us_indices?: Record<string, CompositeIndex>;
+  us_composite?: LiquidityComposite | null;
   fed_odds?: FedOdds;
   updated: string;
   assembled_at?: string;
@@ -616,10 +638,31 @@ export interface MacroData {
   cn: Record<string, MacroIndicator>;
   groups: Record<string, string[]>;
   modules?: MacroModule[];
+  composite?: MacroComposite | null;
   clusters?: MacroCluster[];
   updated: string;
   stale?: boolean;
   stale_since?: string;
+}
+
+// 宏观总分：8 模块按回测权重合成的单一 0-100 分（越高越利多）
+export interface MacroCompositePart {
+  name: string;
+  weight: number;
+  direction: "direct" | "inverse"; // inverse=该模块对收益为反向，合成取 100-分
+  score: number | null;
+  contribution: number | null; // (调整分-50)×权重，正=利多
+}
+export interface MacroComposite {
+  schema: number;
+  score: number;
+  state: string; // 偏多/中性偏多/中性/中性偏空/偏空
+  coverage: number;
+  drivers: string[];
+  parts: MacroCompositePart[];
+  hist?: HistPoint[];
+  benchmark?: { label: string; hist: HistPoint[] }; // 回测同源基准（中证全A月末收盘）
+  desc: string;
 }
 
 // 8 模块得分（方向调整后分位加权 0-100）
@@ -809,6 +852,13 @@ export interface GoldScoreData {
   }>;
 }
 
+// 沪金主力（AU0）日K收盘序列：评分卡旁国内金价近1年走势
+export interface Au0HistData {
+  symbol: string;
+  points: HistPoint[];
+  fetched_at: string | null;
+  stale?: boolean;
+}
 // 实时金价（伦敦金 XAU / 纽约金 GC，腾讯 hf_ 行情）
 export interface GoldSpotQuote {
   name: string;
@@ -863,10 +913,20 @@ export interface PaxgSpotData {
   date: string | null;
   fetched_at: string | null;
   stale?: boolean;
+  usdcny?: number | null;
+  // 国内金价近似折算（PAXG USD/盎司 × USDCNY ÷ 31.1035 克）；汇率缺失时为 null
+  cny?: {
+    price: number | null;
+    prev_close: number | null;
+    change: number | null;
+    open: number | null;
+    high: number | null;
+    low: number | null;
+  } | null;
   minute: {
     date: string;
     prev_close: number;
-    points: MinutePoint[];
+    points: (MinutePoint & { price: number | null })[];
   } | null;
 }
 
@@ -891,6 +951,12 @@ export interface PulseMarket {
   kalshi_category?: string | null;
 }
 
+export interface PulseInsight {
+  module: string;
+  events: string[];
+  impact: string;
+}
+
 export interface PulseModule {
   key: string;
   core: boolean;
@@ -898,6 +964,7 @@ export interface PulseModule {
   volume_24h: number;
   source_counts: Partial<Record<"polymarket" | "kalshi", number>>;
   markets: PulseMarket[];
+  insight?: PulseInsight | null;
 }
 
 export interface PulseOverview {
@@ -905,6 +972,7 @@ export interface PulseOverview {
   sources: string[];
   module_order: string[];
   core_modules: string[];
+  status?: string | null;
   modules: PulseModule[];
   updating?: boolean;
   cache_state?: "fresh" | "stale" | "refreshing" | "error";
@@ -926,10 +994,14 @@ export const api = {
   liquidity: (refresh = false) => get<LiquidityData>(`/market/liquidity${refresh ? "?refresh=true" : ""}`),
   macro: (refresh = false) => get<MacroData>(`/market/macro${refresh ? "?refresh=true" : ""}`),
   goldScore: (refresh = false) => get<GoldScoreData>(`/gold/score${refresh ? "?refresh=true" : ""}`),
+  au0Hist: (days = 400) => get<Au0HistData>(`/gold/au0-hist?days=${days}`),
   goldSpot: () => get<GoldSpotData>("/gold/spot"),
   cnGoldSpot: () => get<CnGoldSpotData>("/gold/cn-spot"),
   paxgSpot: () => get<PaxgSpotData>("/gold/paxg"),
   pulseOverview: (refresh = false) => get<PulseOverview>(`/pulse/overview${refresh ? "?refresh=true" : ""}`),
+  pulseInsight: (module: string) =>
+    get<PulseInsight | null>(`/pulse/insight?module=${encodeURIComponent(module)}`),
+  pulseStatus: () => get<string | null>("/pulse/insight?module=" + encodeURIComponent("现状")),
   pulseHistory: (tokenId: string, interval = "1w") =>
     get<{ history: PulseHistoryPoint[] }>(`/pulse/history?token_id=${encodeURIComponent(tokenId)}&interval=${interval}`)
       .then((d) => d.history),

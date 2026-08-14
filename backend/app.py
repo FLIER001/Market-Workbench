@@ -1284,6 +1284,17 @@ async def pulse_overview(refresh: bool = Query(False)):
         raise HTTPException(502, f"全球预期概率总览异常：{e}") from e
 
 
+@app.get("/api/pulse/insight")
+async def pulse_insight(module: str = Query("", max_length=32)):
+    """重生成单张 AI 研判卡片。module 传「现状」刷新顶部现状长条，其余为模块名。"""
+    try:
+        if not module or module == "现状":
+            return {"data": await pulse_market_pulse.refresh_status() or None}
+        return {"data": await pulse_market_pulse.refresh_insight(module)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"AI 研判重生成异常：{e}") from e
+
+
 @app.get("/api/pulse/history")
 async def pulse_history(
     token_id: str = Query(..., min_length=1, max_length=128),
@@ -1333,6 +1344,15 @@ def gold_cn_spot():
         return {"data": gold_score_layer.cn_gold_spot()}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"国内金价异常：{e}") from e
+
+
+@app.get("/api/gold/au0-hist")
+def gold_au0_hist(days: int = Query(400, ge=60, le=1000)):
+    """沪金主力（AU0）日K收盘序列：评分卡旁国内金价近1年走势，1 小时缓存。"""
+    try:
+        return {"data": gold_score_layer.au0_daily_history(days)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"沪金日K异常：{e}") from e
 
 
 @app.get("/api/gold/paxg")

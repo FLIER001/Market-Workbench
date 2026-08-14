@@ -1,12 +1,12 @@
 import { useMemo, useState } from "react";
 import {
   TrendingUp, TrendingDown, ExternalLink, RefreshCw,
-  ChevronDown, ChevronRight,
+  ChevronDown, ChevronRight, Globe,
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { ProbabilityTrend, type TrendPoint } from "@/components/pulse/ProbabilityTrend";
-import { api, type PulseOverview, type PulseModule, type PulseMarket } from "@/lib/api";
+import { api, type PulseOverview, type PulseModule, type PulseMarket, type PulseInsight } from "@/lib/api";
 import { useSWR } from "@/hooks/useSWR";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +22,7 @@ export function Pulse() {
   const [selected, setSelected] = useState<PulseMarket | null>(null);
   const [history, setHistory] = useState<TrendPoint[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [insightRefreshing, setInsightRefreshing] = useState<string | null>(null);
   const { data, loading, revalidating, revalidate } = useSWR<PulseOverview>(
     "pulse:v1",
     async (fresh) => {
@@ -74,15 +75,43 @@ export function Pulse() {
       .finally(() => setHistoryLoading(false));
   };
 
+  // 单卡重生成：只重调该模块的 LLM 研判，局部替换，不动双源数据
+  const [localInsights, setLocalInsights] = useState<Record<string, PulseInsight>>({});
+  const [localStatus, setLocalStatus] = useState<string | null>(null);
+  const refreshInsight = (module: string) => {
+    setInsightRefreshing(module);
+    api.pulseInsight(module)
+      .then((ins) => {
+        if (ins && Array.isArray(ins.events) && ins.events.length > 0) {
+          setLocalInsights((prev) => ({ ...prev, [module]: ins }));
+        }
+      })
+      .catch(() => { /* 失败保留原卡片 */ })
+      .finally(() => setInsightRefreshing(null));
+  };
+  const refreshStatus = () => {
+    setInsightRefreshing("现状");
+    api.pulseStatus()
+      .then((s) => { if (s) setLocalStatus(s); })
+      .catch(() => { /* 失败保留原卡片 */ })
+      .finally(() => setInsightRefreshing(null));
+  };
+
   const coreModules = useMemo(() => (data?.modules ?? []).filter((m) => m.core), [data]);
   const refModules = useMemo(() => (data?.modules ?? []).filter((m) => !m.core), [data]);
   const refCount = refModules.reduce((n, m) => n + m.market_count, 0);
+  const insights = useMemo(
+    () => coreModules
+      .map((m) => localInsights[m.key] ?? m.insight)
+      .filter((i): i is PulseInsight => !!i && Array.isArray(i.events) && i.events.length > 0),
+    [coreModules, localInsights],
+  );
 
   return (
     <div>
       <PageHeader
         title="全球预期概率"
-        subtitle="Polymarket + Kalshi 双源 · 全市场宏观情绪温度计（货币政策 / 宏观 / 地缘 / 政治 / 大宗 / AI）"
+        subtitle="Polymarket + Kalshi 双源"
         actions={
           <div className="flex flex-col items-end gap-1">
             <button
@@ -105,6 +134,32 @@ export function Pulse() {
 
       {err && (
         <div className="mb-4 rounded border border-danger/30 bg-danger/5 p-3 text-sm text-danger">{err}</div>
+      )}
+
+      {(localStatus ?? data?.status) ? (
+        <div className="mb-3 rounded-lg border bg-card/60 p-3.5">
+          <div className="mb-1 flex items-center gap-1.5">
+            <Globe className="h-3.5 w-3.5 text-primary" />
+            <span className="text-xs font-semibold">国内国际现状</span>
+            <button
+              onClick={refreshStatus}
+              disabled={insightRefreshing === "现状"}
+              className="ml-auto rounded p-1 text-muted-foreground transition-colors hover:text-primary disabled:opacity-60"
+              title="重生成现状简评"
+            >
+              <RefreshCw className={cn("h-3 w-3", insightRefreshing === "现状" && "animate-spin")} />
+            </button>
+          </div>
+          <p className="text-[12.5px] leading-relaxed">{localStatus ?? data?.status}</p>
+        </div>
+      ) : null}
+
+      {insights.length > 0 && (
+        <div className="mb-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          {insights.map((ins) => (
+            <InsightCard key={ins.module} insight={ins} onRefresh={refreshInsight} refreshing={insightRefreshing === ins.module} />
+          ))}
+        </div>
       )}
 
       {data?.cache_state === "error" && !err && (
@@ -130,7 +185,7 @@ export function Pulse() {
                     className="flex items-center gap-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
                   >
                     {showReference ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                    其他 · 参考（加密 / 体育 / 娱乐）· {refCount} 个
+                    其他 · 参考（政治选举 / AI科技 / 加密 / 体育 / 娱乐）· {refCount} 个
                     <span className="text-[11px] text-muted-foreground/60">非投资锚，仅参考</span>
                   </button>
                   {showReference && (
@@ -160,7 +215,7 @@ export function Pulse() {
       </div>
 
       <p className="mt-6 border-t pt-3 text-xs text-muted-foreground/70">
-        数据来自 Polymarket + Kalshi 公开 API（免登录只读）。已剔除体育/世界杯/加密刷屏（折叠到参考组），
+        数据来自 Polymarket + Kalshi 公开 API（免登录只读）。体育/加密等刷屏已折叠到参考组，
         各模块按 24h 成交取热门。仅作全球宏观情绪参考，<b>非投资建议</b>。涨跌按 A 股习惯红涨绿跌。
         <span className="ml-2 text-muted-foreground/50">移植自 globalpercent（Apache-2.0）</span>
       </p>
@@ -175,31 +230,74 @@ interface ModuleSectionProps {
 }
 
 function ModuleSection({ group, selected, onSelect }: ModuleSectionProps) {
+  const [open, setOpen] = useState(false);
   const pm = group.source_counts.polymarket ?? 0;
   const ks = group.source_counts.kalshi ?? 0;
   return (
     <section className="flex flex-col gap-2">
-      <div className="flex items-center gap-2.5">
-        <span className={cn("h-2.5 w-2.5 rounded-full", moduleAccent(group.key))} />
-        <h2 className="text-base font-semibold">{group.key}</h2>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2.5 text-left"
+        title={open ? "折叠" : "展开"}
+      >
+        {open
+          ? <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+          : <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />}
+        <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", moduleAccent(group.key))} />
+        <span className="text-base font-semibold">{group.key}</span>
         <span className="text-[11px] text-muted-foreground">{group.market_count} 个</span>
-        <span className="text-[11px] text-muted-foreground/70">成交 {fmtVol(group.volume_24h)}</span>
+        {!open && <span className="text-[11px] text-muted-foreground/70">成交 {fmtVol(group.volume_24h)}</span>}
         <span className="ml-auto flex items-center gap-1.5 text-[10px]">
           {pm > 0 && <span className="rounded bg-pm/15 px-1.5 py-0.5 text-pm">PM {pm}</span>}
           {ks > 0 && <span className="rounded bg-kalshi/15 px-1.5 py-0.5 text-kalshi">Kalshi {ks}</span>}
         </span>
-      </div>
-      <div className="grid gap-2 sm:grid-cols-2">
-        {group.markets.map((m) => (
-          <MarketRow
-            key={`${m.source}-${m.slug ?? m.question}`}
-            market={m}
-            active={selected?.slug === m.slug && selected?.source === m.source}
-            onClick={() => onSelect(m)}
-          />
-        ))}
-      </div>
+      </button>
+      {open && (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {group.markets.map((m) => (
+            <MarketRow
+              key={`${m.source}-${m.slug ?? m.question}`}
+              market={m}
+              active={selected?.slug === m.slug && selected?.source === m.source}
+              onClick={() => onSelect(m)}
+            />
+          ))}
+        </div>
+      )}
     </section>
+  );
+}
+
+function InsightCard({ insight, onRefresh, refreshing }: {
+  insight: PulseInsight;
+  onRefresh: (module: string) => void;
+  refreshing: boolean;
+}) {
+  return (
+    <div className="flex flex-col rounded-lg border border-primary/25 bg-primary/5 p-3">
+      <div className="mb-1.5 flex items-center gap-1.5">
+        <span className={cn("h-2 w-2 shrink-0 rounded-full", moduleAccent(insight.module))} />
+        <span className="text-xs font-semibold">{insight.module}</span>
+        <button
+          onClick={() => onRefresh(insight.module)}
+          disabled={refreshing}
+          className="ml-auto rounded p-1 text-muted-foreground transition-colors hover:text-primary disabled:opacity-60"
+          title="重生成该模块研判"
+        >
+          <RefreshCw className={cn("h-3 w-3", refreshing && "animate-spin")} />
+        </button>
+      </div>
+      {insight.impact && (
+        <p className="text-[12px] font-medium leading-relaxed">{insight.impact}</p>
+      )}
+      {insight.events.length > 0 && (
+        <ul className="mt-auto space-y-0.5 border-t border-border/50 pt-1.5">
+          {insight.events.map((e, i) => (
+            <li key={i} className="line-clamp-1 text-[11px] leading-snug text-muted-foreground">{e}</li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
