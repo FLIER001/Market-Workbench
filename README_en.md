@@ -2,7 +2,7 @@
 
 # Market Workbench
 
-[![Version](https://img.shields.io/badge/version-1.4.0-1f6feb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.4.1-1f6feb)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)](https://react.dev/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
@@ -37,7 +37,7 @@ A locally hosted research workspace for China A-shares, with Hong Kong and US ma
 | Gold | Multi-factor scoring, spot prices, PAXG-to-CNY conversion and price history |
 | Bonds | Under construction |
 | Portfolio | Equity and fund holdings, closed positions and return tracking |
-| Screening | Manager-First fund screening; stock-screening entry reserved |
+| Screening | Manager-First fund screening; natural-language stock screening (AI verifies conditions tool-by-tool, no built-in candidate pool) |
 | News | Public-news aggregation and announcement tracking |
 | Research | Personal report archive, research notes and reflection review |
 | AI connection | OpenAI-compatible APIs and local CLIs; models and keys remain yours |

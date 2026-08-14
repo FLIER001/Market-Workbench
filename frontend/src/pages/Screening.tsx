@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FundScreenPanel } from "@/components/funds/FundScreenPanel";
+import { StockScreenPanel } from "@/components/screening/StockScreenPanel";
 import { cn } from "@/lib/utils";
 
 type ScreenTab = "funds" | "stocks";
@@ -54,15 +55,7 @@ export function Screening() {
         ))}
       </div>
 
-      {tab === "funds" ? <FundScreenPanel /> : <EmptyStocks />}
-    </div>
-  );
-}
-
-function EmptyStocks() {
-  return (
-    <div className="flex min-h-48 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border/60 text-sm text-muted-foreground">
-      <p>个股筛选 · 待建设</p>
+      {tab === "funds" ? <FundScreenPanel /> : <StockScreenPanel />}
     </div>
   );
 }

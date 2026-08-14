@@ -29,7 +29,10 @@ import cache_runtime
 _CODE = {"code": {"type": "string", "description": "6 位 A 股代码，如 600519"}}
 
 
-def _t(name: str, desc: str, props: dict | None = None, required: list[str] | None = None) -> dict:
+def _t(name: str, desc: str, props: dict | None = None, required: list[str] | None = None,
+       example: str = "") -> dict:
+    if example:
+        desc = f"{desc}\n\n示例：{example}"
     return {
         "type": "function",
         "function": {
@@ -52,75 +55,100 @@ TOOLS: list[dict] = [
     # —— 行情与估值 ——
     _t("query_quote", "查 A 股实时行情：现价/涨跌/PE/PB/市值/换手/涨跌停。可批量。",
        {"codes": {"type": "array", "items": {"type": "string"}, "description": "6 位代码列表，如 ['600519','000858']"}},
-       ["codes"]),
+       ["codes"],
+       "查贵州茅台和五粮液现在多少钱 → query_quote(codes=['600519','000858'])"),
     _t("query_valuation", "查单只个股的完整估值：行情 + 机构一致预期 EPS + 前向 PE / PEG / PE 消化年数。",
-       _CODE, ["code"]),
+       _CODE, ["code"],
+       "宁德时代按明年盈利算贵不贵 → query_valuation(code='300750')"),
     _t("query_valuation_percentile",
        "查个股 PE-TTM / PB 的历史估值分位：当前值 + 近五年 20/50/80 分位带 + 当前所处百分位。判断估值贵贱先用这个。",
-       _CODE, ["code"]),
+       _CODE, ["code"],
+       "长江电力现在的估值在历史上算什么水平 → query_valuation_percentile(code='600900')"),
     _t("query_kline",
        "查个股 K 线并附区间统计（起止价、区间涨跌幅、最高/最低、振幅）。判断价格位置与趋势用。",
        {**_CODE,
         "period": {"type": "string", "enum": ["day", "week", "month"], "description": "周期，默认 day"},
         "count": {"type": "integer", "description": "取最近多少根，默认 60，最大 250"}},
-       ["code"]),
+       ["code"],
+       "看中远海控最近半年周线走势 → query_kline(code='601919', period='week', count=26)"),
 
     # —— 基本面 ——
     _t("query_financials",
        "查个股最新报告期财务关键指标：营收/净利及同比、ROE、毛利率、净利率、每股经营现金流、EPS。",
-       _CODE, ["code"]),
-    _t("query_company_info", "查公司基本概况：所属行业、总股本/流通股、上市日期等。", _CODE, ["code"]),
-    _t("query_reports", "查个股近期研报列表（标题/机构/评级/日期）。", _CODE, ["code"]),
-    _t("query_news", "查个股近期新闻（标题/时间/来源）。", _CODE, ["code"]),
+       _CODE, ["code"],
+       "爱美客最新一季报赚了多少、毛利率多高 → query_financials(code='300896')"),
+    _t("query_company_info", "查公司基本概况：所属行业、总股本/流通股、上市日期等。", _CODE, ["code"],
+       "这家公司是做什么的、盘子多大 → query_company_info(code='002594')"),
+    _t("query_reports", "查个股近期研报列表（标题/机构/评级/日期）。", _CODE, ["code"],
+       "卖方最近怎么评论恒瑞医药 → query_reports(code='600276')"),
+    _t("query_news", "查个股近期新闻（标题/时间/来源）。", _CODE, ["code"],
+       "三一重工最近有什么动静 → query_news(code='600031')"),
 
     # —— 资金面与筹码 ——
     _t("query_fund_flow",
        "查个股资金流向：最近若干日主力/超大单/大单/中单/小单净流入，并附近 5 日、20 日累计主力净额。",
        {**_CODE, "days": {"type": "integer", "description": "明细返回最近多少日，默认 10，最大 60"}},
-       ["code"]),
-    _t("query_margin", "查个股融资融券：融资余额、融资买入/偿还、融券余额趋势（最近若干期）。", _CODE, ["code"]),
-    _t("query_holders", "查个股股东户数变化（户数增减 = 筹码集中或分散的直接证据）。", _CODE, ["code"]),
-    _t("query_block_trade", "查个股大宗交易记录：成交价、折溢价率、成交量、买卖营业部。", _CODE, ["code"]),
-    _t("query_dragon_tiger", "查个股龙虎榜：近 30 日上榜记录、最近一次买卖席位 TOP5、机构专用席位净买额。", _CODE, ["code"]),
-    _t("query_dividend", "查个股历史分红方案：每股派息、股息率、除权除息日、分红进度。", _CODE, ["code"]),
+       ["code"],
+       "紫金矿业的钱最近在流入还是流出 → query_fund_flow(code='601899')"),
+    _t("query_margin", "查个股融资融券：融资余额、融资买入/偿还、融券余额趋势（最近若干期）。", _CODE, ["code"],
+       "杠杆资金对中信证券的态度 → query_margin(code='600030')"),
+    _t("query_holders", "查个股股东户数变化（户数增减 = 筹码集中或分散的直接证据）。", _CODE, ["code"],
+       "筹码在向少数人集中还是扩散 → query_holders(code='000858')"),
+    _t("query_block_trade", "查个股大宗交易记录：成交价、折溢价率、成交量、买卖营业部。", _CODE, ["code"],
+       "最近谁在大宗折价甩卖 → query_block_trade(code='601012')"),
+    _t("query_dragon_tiger", "查个股龙虎榜：近 30 日上榜记录、最近一次买卖席位 TOP5、机构专用席位净买额。", _CODE, ["code"],
+       "涨停是游资拉的还是有机构参与 → query_dragon_tiger(code='002104')"),
+    _t("query_dividend", "查个股历史分红方案：每股派息、股息率、除权除息日、分红进度。", _CODE, ["code"],
+       "工商银行历年分红与股息率 → query_dividend(code='601398')"),
 
     # —— 事件与风险 ——
-    _t("query_announcements", "查个股近期公告（标题/日期/类型）。查风险与重大事项先用这个。", _CODE, ["code"]),
-    _t("query_lockup", "查个股限售解禁：历史解禁记录 + 未来 90 天待解禁事件（日期/类型/股数/占比）。", _CODE, ["code"]),
-    _t("query_investor_qa", "查个股投资者互动易问答（公司对投资者提问的官方回复，常含经营细节）。", _CODE, ["code"]),
+    _t("query_announcements", "查个股近期公告（标题/日期/类型）。查风险与重大事项先用这个。", _CODE, ["code"],
+       "最近有没有减持/并购/业绩预告 → query_announcements(code='601899')"),
+    _t("query_lockup", "查个股限售解禁：历史解禁记录 + 未来 90 天待解禁事件（日期/类型/股数/占比）。", _CODE, ["code"],
+       "未来三个月有多少限售股要解禁 → query_lockup(code='688981')"),
+    _t("query_investor_qa", "查个股投资者互动易问答（公司对投资者提问的官方回复，常含经营细节）。", _CODE, ["code"],
+       "公司在互动易上怎么回应订单问题 → query_investor_qa(code='002460')"),
 
     # —— 行业与板块 ——
-    _t("query_concepts", "查个股所属板块与概念归属，以及当下被市场归到哪些热门概念在炒。", _CODE, ["code"]),
+    _t("query_concepts", "查个股所属板块与概念归属，以及当下被市场归到哪些热门概念在炒。", _CODE, ["code"],
+       "这家公司蹭上了哪些概念 → query_concepts(code='000977')"),
     _t("query_industry_comparison", "查全市场行业板块横向对比：各行业涨跌幅、成交额、领涨股。看板块强弱用。",
-       {"top_n": {"type": "integer", "description": "返回前 N 个行业，默认 20"}}),
+       {"top_n": {"type": "integer", "description": "返回前 N 个行业，默认 20"}},
+       example="今天哪些行业领涨、哪些垫底 → query_industry_comparison(top_n=10)"),
     _t("query_industry_reports", "按关键词查行业研报（非个股），了解卖方对某赛道的最新覆盖。",
        {"keywords": {"type": "array", "items": {"type": "string"}, "description": "行业关键词，如 ['光模块','算力']"},
-        "days": {"type": "integer", "description": "回溯天数，默认 90"}}),
+        "days": {"type": "integer", "description": "回溯天数，默认 90"}},
+       example="卖方怎么看 AI 算力赛道 → query_industry_reports(keywords=['算力','光模块'])"),
 
     # —— 市场层 ——
     _t("query_market",
        "查大盘与市场情绪。scope: indices=A股指数 / global=全球指数 / emotion=短线情绪(连板梯队/封板率) / turnover=全市场成交额 TOP20 / overview=大盘总览(指数+情绪+板块资金流)。",
        {"scope": {"type": "string", "enum": ["indices", "global", "emotion", "turnover", "overview"],
-                  "description": "要查的范围，默认 overview"}}),
+                  "description": "要查的范围，默认 overview"}},
+       example="今天市场整体怎么样 → query_market(scope='overview')"),
     _t("query_news_radar",
        "查资讯雷达：12 条赛道的行业资讯聚合（非个股新闻，看产业面动态用）。可传 track 只看某条赛道（如「半导体」「AI」）。",
        {"track": {"type": "string", "description": "赛道名关键词，留空看全部"},
-        "per_track": {"type": "integer", "description": "每条赛道取最新几条，默认 5"}}),
+        "per_track": {"type": "integer", "description": "每条赛道取最新几条，默认 5"}},
+       example="半导体产业最近有什么动态 → query_news_radar(track='半导体')"),
     _t("search_public_news",
        "联网搜索公开资料，用于核验已经识别出的重大事件。仅当现有公告/新闻指向重大变化且资料不足时调用一次，不要用于普通事件或批量扫标的。",
        {"query": {"type": "string", "description": "精确查询词，包含公司/板块名和重大事件关键词"},
         "count": {"type": "integer", "description": "返回条数，默认 5，最大 8"}},
-       ["query"]),
+       ["query"],
+       "核实「某公司获得大额订单」传闻 → search_public_news(query='公司名 大额订单')"),
 
     # —— 海外 ——
     _t("query_global_stock",
        "查美股 / 港股 / 韩股个股：行情 + 关键财务指标（韩股仅行情）。美股用字母代码(AAPL)，港股用数字(00700)，韩股 6 位数字加 .KS(005930.KS)。",
        {"symbol": {"type": "string", "description": "美股字母代码 / 港股代码 / 韩股 XXXXXX.KS"}},
-       ["symbol"]),
+       ["symbol"],
+       "英伟达现在的情况 → query_global_stock(symbol='NVDA')"),
     _t("query_hk_cashflow",
        "查港股现金流量表：经营/投资/筹资活动现金流净额、现金及等价物净增加、期初/期末现金，多期、附同比。仅港股，代码用数字如 00700。",
        {"symbol": {"type": "string", "description": "港股代码，如 00700"}},
-       ["symbol"]),
+       ["symbol"],
+       "腾讯经营现金流趋势 → query_hk_cashflow(symbol='00700')"),
 ]
 
 TOOL_NAMES = [t["function"]["name"] for t in TOOLS]
