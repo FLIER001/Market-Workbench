@@ -52,6 +52,11 @@ export function Pulse() {
               await revalidate(false);
               break;
             }
+            if (fresh.cache_state === "error") {
+              await revalidate(false);
+              setErr(`更新失败，继续展示上次成功数据：${fresh.refresh_error || "数据源暂不可用"}`);
+              break;
+            }
           } catch { /* 瞬时失败继续轮询 */ }
         }
       }
@@ -100,6 +105,12 @@ export function Pulse() {
 
       {err && (
         <div className="mb-4 rounded border border-danger/30 bg-danger/5 p-3 text-sm text-danger">{err}</div>
+      )}
+
+      {data?.cache_state === "error" && !err && (
+        <div className="mb-4 rounded border border-warning/30 bg-warning/5 p-3 text-sm text-warning">
+          本次更新失败，当前展示上次成功缓存：{data.refresh_error || "数据源暂不可用"}
+        </div>
       )}
 
       <div className="grid gap-6 lg:grid-cols-[1fr_380px]">

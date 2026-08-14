@@ -2,7 +2,7 @@
 
 # Market Workbench
 
-[![Version](https://img.shields.io/badge/version-1.2.0-1f6feb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.3.0-1f6feb)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)](https://react.dev/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
@@ -27,11 +27,11 @@ A locally hosted research workspace for China A-shares, with Hong Kong and US ma
 
 | Area | What it covers |
 |---|---|
-| Market overview | A-share indices, global markets, market breadth, turnover, sector flows and daily review |
+| Market overview | A-share indices, global markets, market breadth, turnover, sector flows, global expectations and daily review |
 | Macro and liquidity | Macro indicators, liquidity signals, source metadata and freshness state |
 | Securities and watchlists | A-share, HK and US quotes; charts, valuation, financials, filings, reports, fund flows and grouped watchlists |
 | Sectors and gold | Industry-chain research, Shenwan industry and thematic-board views, multi-factor gold indicators |
-| Portfolio and funds | Equity and fund holdings, closed positions, fund search, NAV, screening and watchlists |
+| Portfolio and screening | Equity and fund holdings, closed positions, fund search, NAV and watchlists; Manager-First fund screening and a reserved stock-screening entry |
 | News and research | Public-news aggregation, personal report archive, research notes and reflection review |
 | AI and MCP | OpenAI-compatible APIs, local CLIs and MCP data tools; models and keys remain yours |
 

@@ -848,6 +848,28 @@ export interface CnGoldSpotData {
   stale?: boolean;
 }
 
+// PAXG-USD 暗盘现货（Binance 公共镜像，7×24）
+export interface PaxgSpotData {
+  name: string | null;
+  price: number | null;
+  prev_close: number | null;
+  change: number | null;
+  change_pct: number | null;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  volume: number | null;
+  time: string | null;
+  date: string | null;
+  fetched_at: string | null;
+  stale?: boolean;
+  minute: {
+    date: string;
+    prev_close: number;
+    points: MinutePoint[];
+  } | null;
+}
+
 // ---- 全球预期概率（Polymarket + Kalshi 双源，globalpercent 移植） ----
 export interface PulseMarket {
   question: string | null;
@@ -885,6 +907,11 @@ export interface PulseOverview {
   core_modules: string[];
   modules: PulseModule[];
   updating?: boolean;
+  cache_state?: "fresh" | "stale" | "refreshing" | "error";
+  cached_at?: string | null;
+  data_as_of?: string | null;
+  refresh_error?: string | null;
+  refresh_attempted_at?: string | null;
 }
 
 export interface PulseHistoryPoint {
@@ -901,6 +928,7 @@ export const api = {
   goldScore: (refresh = false) => get<GoldScoreData>(`/gold/score${refresh ? "?refresh=true" : ""}`),
   goldSpot: () => get<GoldSpotData>("/gold/spot"),
   cnGoldSpot: () => get<CnGoldSpotData>("/gold/cn-spot"),
+  paxgSpot: () => get<PaxgSpotData>("/gold/paxg"),
   pulseOverview: (refresh = false) => get<PulseOverview>(`/pulse/overview${refresh ? "?refresh=true" : ""}`),
   pulseHistory: (tokenId: string, interval = "1w") =>
     get<{ history: PulseHistoryPoint[] }>(`/pulse/history?token_id=${encodeURIComponent(tokenId)}&interval=${interval}`)

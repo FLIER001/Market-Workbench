@@ -140,6 +140,17 @@ _CN_GOLD_TTL = 20  # 秒
 _CN_GOLD_CACHE: dict[str, tuple[float, dict]] = {}
 _CN_GOLD_LOCK = threading.Lock()
 
+# PAXG-USD 暗盘现货（Binance 公共行情镜像 data-api.binance.vision，7×24）。
+# 腾讯 hf_XAU / 纽约 GC 有盘前盘后空档；PAXG 每枚锚定 1 盎司伦敦金 Good Delivery，
+# 7×24 交易、暗盘时段同样出价，补齐夜间/周末空档。
+_PAXG_SYMBOL = "PAXGUSDT"
+_BINANCE_DATA_API = "https://data-api.binance.vision"
+_PAXG_TTL = 20  # 秒；7×24 交易，与现货节奏对齐
+_PAXG_CACHE: dict[str, tuple[float, dict]] = {}
+_PAXG_CHART_TTL = 60  # 分钟线没有必要跟随 20 秒 ticker 重拉全天数据
+_PAXG_CHART_CACHE: dict[str, tuple[float, dict]] = {}
+_PAXG_LOCK = threading.Lock()
+
 
 def _parse_hf_quotes(raw: str) -> dict[str, dict]:
     """解析腾讯 hf_ 前缀行情（逗号分隔，非 A 股 `~` 分隔）。
@@ -352,6 +363,142 @@ def cn_gold_spot() -> dict:
             payload["stale"] = True
             return payload
         return {"au0": None, "au9999": None, "autd": None, "fetched_at": None, "stale": True}
+
+def _binance_get(path: str, timeout: int = 12) -> bytes:
+    """Binance 公共行情镜像（data-api.binance.vision）GET。仅标准库。"""
+    cmd = ["curl", "-L", "-s", "--max-time", str(timeout),
+           "-H", "Accept: application/json", f"{_BINANCE_DATA_API}{path}"]
+    r = subprocess.run(cmd, capture_output=True, timeout=timeout + 5)
+    return r.stdout if r.returncode == 0 and r.stdout else b""
+
+
+def _bj_midnight_ms() -> int:
+    """当日北京 00:00 对应的 UTC 毫秒时间戳（Binance klines 以 UTC ms 计）。"""
+    now = datetime.now(BEIJING)
+    mid = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return int(mid.timestamp() * 1000)
+
+
+def _parse_binance_klines(raw: bytes) -> list[dict]:
+    """解析 Binance klines 数组 → [{time, price, volume, mod}]（北京时间时钟分）。"""
+    try:
+        rows = json.loads(raw.decode("utf-8", "ignore"))
+    except (ValueError, json.JSONDecodeError):
+        return []
+    points: list[dict] = []
+    for k in rows:
+        # [openTime, o, h, l, close, volume, closeTime, qvol, trades, ...]
+        if not isinstance(k, list) or len(k) < 6:
+            continue
+        try:
+            ot = int(k[0])
+            close = float(k[4])
+            vol = float(k[5])
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(close) or close <= 0:
+            continue
+        bj = datetime.fromtimestamp(ot / 1000, BEIJING)
+        points.append({
+            "time": bj.strftime("%H:%M"),
+            "price": close,
+            "volume": vol,
+            "mod": bj.hour * 60 + bj.minute,
+            "ot": ot,
+        })
+    return points
+
+
+def paxg_usd_spot() -> dict:
+    """PAXG-USD 暗盘现货：7×24 实时行情 + 当日分时。
+
+    数据源：Binance 公共行情镜像（data-api.binance.vision）。每枚 PAXG 锚定 1
+    盎司伦敦金 Good Delivery，与现货黄金同口径、暗盘时段也连续出价。失败回退
+    最近一次成功结果（stale 标记）。
+    """
+    now = time.time()
+    with _PAXG_LOCK:
+        hit = _PAXG_CACHE.get("paxg")
+        if hit and now - hit[0] < _PAXG_TTL:
+           return hit[1]
+        try:
+            mid_ms = _bj_midnight_ms()
+            today = datetime.now(BEIJING).strftime("%Y-%m-%d")
+            chart_hit = _PAXG_CHART_CACHE.get("minute")
+            chart = chart_hit[1] if chart_hit and now - chart_hit[0] < _PAXG_CHART_TTL and chart_hit[1]["date"] == today else None
+            if chart is None:
+                # 昨日收盘：北京午夜前最后一根 1m k 线的 close（当日分时基准）
+                yk = _parse_binance_klines(_binance_get(
+                    f"/api/v3/klines?symbol={_PAXG_SYMBOL}&interval=1m&limit=1&endTime={mid_ms - 1}"))
+                prev_close = yk[-1]["price"] if yk else None
+                # 当日分时：自北京 00:00 起 1m k 线，按 UTC ms 游标分页取全量
+                points: list[dict] = []
+                cursor = mid_ms
+                now_ms = int(datetime.now(BEIJING).timestamp() * 1000)
+                for _ in range(3):  # 3×1000 分钟 ≈ 50h，足够覆盖单日
+                    page = _parse_binance_klines(_binance_get(
+                        f"/api/v3/klines?symbol={_PAXG_SYMBOL}&interval=1m&limit=1000&startTime={cursor}"))
+                    if not page:
+                        break
+                    points.extend(page)
+                    if len(page) < 1000:
+                        break
+                    cursor = page[-1]["ot"] + 60_000
+                    if cursor > now_ms:
+                        break
+                if points:
+                    chart = {"date": today, "prev_close": prev_close, "points": points}
+                    _PAXG_CHART_CACHE["minute"] = (now, chart)
+                elif chart_hit and chart_hit[1]["date"] == today:
+                    chart = chart_hit[1]
+            prev_close = chart.get("prev_close") if chart else None
+            points = list(chart.get("points") or []) if chart else []
+            # 实时最新价：24h ticker lastPrice 优先，落回分时末点
+            tk_raw = _binance_get(f"/api/v3/ticker/24hr?symbol={_PAXG_SYMBOL}")
+            tk = json.loads(tk_raw.decode("utf-8", "ignore")) if tk_raw else {}
+            last = points[-1] if points else None
+            last_price = float(tk["lastPrice"]) if tk.get("lastPrice") else (last["price"] if last else None)
+            if last_price is None:
+                raise ValueError("无实时价格")
+            if prev_close is None and tk.get("prevClosePrice"):
+                prev_close = float(tk["prevClosePrice"])
+            change = round(last_price - prev_close, 2) if prev_close else None
+            change_pct = round(change / prev_close * 100, 2) if change is not None and prev_close else None
+            # 用 ticker 最新价覆盖分时末点，保证图尾与卡片一致
+            if last and points:
+                points[-1] = {**last, "price": last_price}
+            chart_points = [{"time": p["time"], "price": p["price"], "volume": p["volume"]}
+                           for p in points]
+            payload = {
+                "name": "PAXG-USD（现货黄金暗盘）",
+                "price": last_price,
+                "prev_close": prev_close,
+                "change": change,
+                "change_pct": change_pct,
+                "open": float(tk["openPrice"]) if tk.get("openPrice") else None,
+                "high": float(tk["highPrice"]) if tk.get("highPrice") else None,
+                "low": float(tk["lowPrice"]) if tk.get("lowPrice") else None,
+                "volume": float(tk["volume"]) if tk.get("volume") else None,
+                "time": last["time"] if last else datetime.now(BEIJING).strftime("%H:%M"),
+                "date": today,
+                "fetched_at": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M"),
+               "minute": {
+                   "date": today,
+                   "prev_close": prev_close or 0.0,
+                   "points": chart_points,
+                    # 7×24：x 轴固定覆盖当日 00:00–24:00（北京时钟分钟）
+                    "market_minutes": [[0, 1440]],
+               },
+            }
+            _PAXG_CACHE["paxg"] = (now, payload)
+            return payload
+        except Exception:  # noqa: BLE001 — 网络/解析异常统一回退
+            pass
+        if hit:
+            payload = dict(hit[1])
+            payload["stale"] = True
+            return payload
+        return {"name": None, "price": None, "fetched_at": None, "minute": None, "stale": True}
 
 
 # ---------------------------------------------------------------------------

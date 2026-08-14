@@ -513,3 +513,52 @@ def test_gold_current_score_is_appended_without_overwriting_latest_observation()
 
     gold_score._append_current_score(rows, "2026-08-11", 45.0)
     assert rows[-1] == {"date": "2026-08-11", "v": 45.0}
+
+
+def test_parse_binance_paxg_klines():
+    """Binance klines 数组 → 北京时间分时点；openTime(UTC ms)→北京时钟分。"""
+    import gold_score
+    # openTime=1786550400000 → 北京 2026-08-13 00:00；下一根 00:01
+    raw = b'[[1786550400000,"4406.06","4442.95","4364.20","4405.10","12.3",1786550459999,54200,28,"","",0],' \
+         b'[1786550460000,"4405.10","4406.00","4404.00","4405.80","8.1",1786550519999,35700,19,"","",0]]'
+    pts = gold_score._parse_binance_klines(raw)
+    assert len(pts) == 2
+    assert pts[0]["time"] == "00:00" and math.isclose(pts[0]["price"], 4405.10)
+    assert pts[0]["mod"] == 0
+    assert pts[1]["time"] == "00:01" and pts[1]["mod"] == 1
+    assert math.isclose(pts[1]["volume"], 8.1)
+    assert pts[0]["ot"] == 1786550400000
+    # 非法 JSON / 空数组 → []
+    assert gold_score._parse_binance_klines(b'') == []
+    assert gold_score._parse_binance_klines(b'[]') == []
+
+
+def test_paxg_reuses_minute_chart_within_one_minute(monkeypatch):
+    import gold_score
+
+    calls: list[str] = []
+    monkeypatch.setattr(gold_score, "_PAXG_CACHE", {})
+    monkeypatch.setattr(gold_score, "_PAXG_CHART_CACHE", {})
+    clock = iter([100.0, 121.0])
+    monkeypatch.setattr(gold_score.time, "time", lambda: next(clock))
+
+    def fetch(path: str, timeout: int = 12) -> bytes:
+        calls.append(path)
+        if "ticker/24hr" in path:
+            return b'{"lastPrice":"4405.80","prevClosePrice":"4400","openPrice":"4401","highPrice":"4410","lowPrice":"4390","volume":"10"}'
+        return b"previous" if "endTime=" in path else b"chart"
+
+    def parse(raw: bytes) -> list[dict]:
+        if raw == b"previous":
+            return [{"time": "23:59", "price": 4400.0, "volume": 1.0, "mod": 1439, "ot": 1}]
+        if raw == b"chart":
+            return [{"time": "00:00", "price": 4405.0, "volume": 2.0, "mod": 0, "ot": 2}]
+        return []
+
+    monkeypatch.setattr(gold_score, "_binance_get", fetch)
+    monkeypatch.setattr(gold_score, "_parse_binance_klines", parse)
+
+    assert gold_score.paxg_usd_spot()["price"] == 4405.8
+    assert gold_score.paxg_usd_spot()["price"] == 4405.8
+    assert sum("klines" in path for path in calls) == 2
+    assert sum("ticker/24hr" in path for path in calls) == 2

@@ -11,7 +11,7 @@ import { Macro } from "@/pages/Macro";
 import { Gold } from "@/pages/Gold";
 import { Pulse } from "@/pages/Pulse";
 import { Watchlist } from "@/pages/Watchlist";
-import { Funds } from "@/pages/Funds";
+import { Screening } from "@/pages/Screening";
 import { ResearchHub } from "@/pages/ResearchHub";
 import { Settings } from "@/pages/Settings";
 import { Login } from "@/pages/Login";
@@ -33,7 +33,8 @@ export const router = createBrowserRouter([
       { path: "/sectors/:key", element: <SectorDetail /> },
       { path: "/sector-scores", element: <Navigate to="/sectors" replace /> },
       { path: "/portfolio", element: <Portfolio /> },
-      { path: "/funds", element: <Funds /> },
+      { path: "/screening", element: <Screening /> },
+      { path: "/funds", element: <Navigate to="/screening" replace /> },
       { path: "/stock-data", element: <StockData /> },
       { path: "/macro", element: <Macro /> },
       { path: "/gold", element: <Gold /> },

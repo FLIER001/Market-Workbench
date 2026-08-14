@@ -28,7 +28,7 @@ const NAV = [
   { to: "/watchlist", icon: Star, label: "自选" },
   { to: "/portfolio", icon: Wallet, label: "持仓" },
   { to: "/sectors", icon: LayoutGrid, label: "板块研究", match: "/sectors" },
-  { to: "/funds", icon: PieChart, label: "标的筛选" },
+  { to: "/screening", icon: PieChart, label: "标的筛选", match: "/screening" },
   { to: "/gold", icon: Coins, label: "黄金" },
   { to: "/research", icon: FileText, label: "研究", match: "/research" },
 ];

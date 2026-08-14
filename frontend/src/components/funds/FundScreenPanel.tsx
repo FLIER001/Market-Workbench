@@ -72,13 +72,9 @@ export function FundScreenPanel() {
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-sm font-semibold"><ShieldCheck className="h-4 w-4 text-primary" />PFS V3.0 · Manager-First</div>
-            <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
-              现任团队任期对齐后再评价产品净值；缺失的持仓 Alpha、真实资金流、策略容量与平台事件使用 50 分中性先验，并由置信度收缩。
-            </p>
           </div>
           <div className="text-right text-xs text-muted-foreground">
             <div>数据日 {data?.as_of || "—"} · 生成 {data?.generated_at || "—"}</div>
-            <div className={cn("mt-1", data?.stale && "text-warning")}>{data?.stale ? `旧快照：${data.refresh_error || "刷新失败"}` : "当前快照"}</div>
           </div>
         </div>
         <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
@@ -115,7 +111,6 @@ export function FundScreenPanel() {
 
       <GlassCard className="overflow-x-auto p-0">
         {!data ? <div className="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" />首次构建需汇总经理任期与风险数据…</div> : <>
-          <div className="flex items-center justify-between border-b border-border/60 px-4 py-2.5 text-xs text-muted-foreground"><span>当前显示 {rows.length} / {data.candidate_count} 只；同一策略内比较，点击行查看 Research Card</span><span>{data.methodology.formula}</span></div>
           <table className="w-full min-w-[1040px] text-sm">
             <thead><tr className="border-b border-border/60 text-left text-xs text-muted-foreground">
               <th className="px-4 py-3 font-medium">基金 / 现任团队</th><th className="px-3 py-3 font-medium">真实策略初标</th><th className="px-3 py-3 font-medium">PFS</th>

@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { MinuteKline } from "@/lib/api";
 
 const HEADER_HEIGHT = 58;
+const COMPACT_HEADER_HEIGHT = 0;
 // A 股交易日分钟槽数（09:30-11:30 / 13:00-15:00），用于决定 x 轴刻度密度
 const A_SHARE_MINUTES = 242;
 
@@ -19,7 +20,7 @@ const compactVolume = (value: number) => {
 // "0930" → 当日第 N 分钟（自午夜）
 const minuteOfDay = (time: string) =>
   {
-    const [h, m] = time.split(":");
+    const [h, m] = time.includes(":") ? time.split(":") : [time.slice(0, 2), time.slice(2)];
     return Number.parseInt(h, 10) * 60 + Number.parseInt(m, 10);
   };
 
@@ -45,10 +46,12 @@ export function MinuteChart({
   data,
   height = 460,
   volRatio,
+  compact = false,
 }: {
   data: MinuteKline;
   height?: number;
   volRatio?: number;
+  compact?: boolean;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
@@ -61,13 +64,14 @@ export function MinuteChart({
     if (!element) return;
     const update = () => {
       const rect = element.getBoundingClientRect();
-      setSize({ width: Math.max(rect.width, 320), height: Math.max(rect.height, 320) });
+      // compact 模式贴合容器实际高度；普通模式保留 320 下限（header+量柱）。
+      setSize({ width: Math.max(rect.width, 320), height: compact ? Math.max(rect.height, 60) : Math.max(rect.height, 320) });
     };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(element);
     return () => observer.disconnect();
-  }, []);
+  }, [compact]);
 
   useEffect(() => {
     const observer = new MutationObserver(() => setThemeTick((tick) => tick + 1));
@@ -122,13 +126,16 @@ export function MinuteChart({
     const span = Math.max(...mods) - minMod + 1;
     return { totalMinutes: Math.max(A_SHARE_MINUTES, Math.min(span, 24 * 60)), slotOffset: minMod, slotRanges: null };
   }, [points, data.market_minutes]);
-  const svgHeight = Math.max(size.height - HEADER_HEIGHT, 260);
+  const headerH = compact ? COMPACT_HEADER_HEIGHT : HEADER_HEIGHT;
+  // compact 模式：图表贴合容器高度（无 header）；普通模式保留 260 下限。
+  const svgHeight = compact ? size.height : Math.max(size.height - headerH, 260);
   const leftAxis = size.width < 560 ? 46 : 56;
   const rightAxis = size.width < 560 ? 48 : 58;
   const chartWidth = Math.max(size.width - leftAxis - rightAxis, 180);
-  const priceHeight = Math.max(180, Math.round((svgHeight - 48) * 0.76));
-  const volumeTop = priceHeight + 16;
-  const volumeHeight = Math.max(svgHeight - volumeTop - 28, 42);
+  // compact：价格区占满全高、不画量柱；普通：价格 76% + 量柱 24%。
+  const priceHeight = compact ? svgHeight : Math.max(180, Math.round((svgHeight - 48) * 0.76));
+  const volumeTop = compact ? svgHeight : priceHeight + 16;
+  const volumeHeight = compact ? 0 : Math.max(svgHeight - volumeTop - 28, 42);
   const panelBottom = volumeTop + volumeHeight;
   const xAt = (index: number) => leftAxis + (index / (totalMinutes - 1)) * chartWidth;
 
@@ -420,36 +427,38 @@ export function MinuteChart({
       role="img"
       aria-label={`${data.date}分时图，最新价${latestPrice.toFixed(2)}，涨跌幅${changePct.toFixed(2)}%`}
     >
-      <div className="absolute inset-x-0 top-0 flex h-[58px] items-center justify-between gap-4 border-b border-border/35 px-4">
-        <div className="flex min-w-0 items-baseline gap-2.5">
-          <span className="font-mono text-[22px] font-semibold tracking-tight" style={{ color: trendColor }}>
-            {latestPrice.toFixed(2)}
-          </span>
-          <span className="font-mono text-xs font-semibold" style={{ color: trendColor }}>
-            {change > 0 ? "+" : ""}
-            {change.toFixed(2)}
-            <span className="ml-1.5">
-              {changePct > 0 ? "+" : ""}
-              {changePct.toFixed(2)}%
+      {!compact && (
+        <div className="absolute inset-x-0 top-0 flex h-[58px] items-center justify-between gap-4 border-b border-border/35 px-4">
+          <div className="flex min-w-0 items-baseline gap-2.5">
+            <span className="font-mono text-[22px] font-semibold tracking-tight" style={{ color: trendColor }}>
+              {latestPrice.toFixed(2)}
             </span>
-          </span>
-          <span className="hidden text-[10px] text-muted-foreground/50 sm:inline">截至 {clockAt(lastIdx)}</span>
-        </div>
-        <div className="hidden items-center gap-4 text-[10px] md:flex">
-          <span className="text-muted-foreground">今开 <b className="ml-1 font-mono font-medium text-foreground">{openPrice.toFixed(2)}</b></span>
-          <span className="text-muted-foreground">最高 <b className="ml-1 font-mono font-medium text-danger">{highPrice.toFixed(2)}</b></span>
-          <span className="text-muted-foreground">最低 <b className="ml-1 font-mono font-medium text-success">{lowPrice.toFixed(2)}</b></span>
-          {hasVolume && <span className="text-muted-foreground">总量 <b className="ml-1 font-mono font-medium text-foreground">{compactVolume(totalVolume)}</b></span>}
-          {volRatio != null && (
-            <span className="text-muted-foreground">
-              量比{" "}
-              <b className={volRatio > 1.5 ? "font-mono text-danger" : volRatio < 0.8 ? "font-mono text-success" : "font-mono text-foreground"}>
-                {volRatio.toFixed(2)}
-              </b>
+            <span className="font-mono text-xs font-semibold" style={{ color: trendColor }}>
+              {change > 0 ? "+" : ""}
+              {change.toFixed(2)}
+              <span className="ml-1.5">
+                {changePct > 0 ? "+" : ""}
+                {changePct.toFixed(2)}%
+              </span>
             </span>
-          )}
+            <span className="hidden text-[10px] text-muted-foreground/50 sm:inline">截至 {clockAt(lastIdx)}</span>
+          </div>
+          <div className="hidden items-center gap-4 text-[10px] md:flex">
+            <span className="text-muted-foreground">今开 <b className="ml-1 font-mono font-medium text-foreground">{openPrice.toFixed(2)}</b></span>
+            <span className="text-muted-foreground">最高 <b className="ml-1 font-mono font-medium text-danger">{highPrice.toFixed(2)}</b></span>
+            <span className="text-muted-foreground">最低 <b className="ml-1 font-mono font-medium text-success">{lowPrice.toFixed(2)}</b></span>
+            {hasVolume && <span className="text-muted-foreground">总量 <b className="ml-1 font-mono font-medium text-foreground">{compactVolume(totalVolume)}</b></span>}
+            {volRatio != null && (
+              <span className="text-muted-foreground">
+                量比{" "}
+                <b className={volRatio > 1.5 ? "font-mono text-danger" : volRatio < 0.8 ? "font-mono text-success" : "font-mono text-foreground"}>
+                  {volRatio.toFixed(2)}
+                </b>
+              </span>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       <svg
         className="absolute inset-x-0 bottom-0"
@@ -515,9 +524,9 @@ export function MinuteChart({
           strokeWidth="1.8"
           strokeLinejoin="round"
           strokeLinecap="round"
-          vectorEffect="non-scaling-stroke"
-        />
-        {hasVolume && (
+        vectorEffect="non-scaling-stroke"
+      />
+        {hasVolume && !compact && (
           <path
             d={averagePath}
             fill="none"
@@ -530,7 +539,7 @@ export function MinuteChart({
           />
         )}
 
-        {bars.slice(firstIdx, lastIdx + 1).map((bar, offset) => (
+        {!compact && bars.slice(firstIdx, lastIdx + 1).map((bar, offset) => (
           <rect
             key={firstIdx + offset}
             x={bar.x - Math.max(chartWidth / totalMinutes / 2 - 0.35, 0.65)}
@@ -614,18 +623,20 @@ export function MinuteChart({
           </g>
         ))}
 
-        <text
-          x={leftAxis - 8}
-          y={volumeTop + 2}
-          textAnchor="end"
-          dominantBaseline="hanging"
-          fontSize="9"
-          fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
-          fill={muted}
-          opacity="0.6"
-        >
-          {compactVolume(maxVolume)}
-        </text>
+        {!compact && (
+          <text
+            x={leftAxis - 8}
+            y={volumeTop + 2}
+            textAnchor="end"
+            dominantBaseline="hanging"
+            fontSize="9"
+            fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
+            fill={muted}
+            opacity="0.6"
+          >
+            {compactVolume(maxVolume)}
+          </text>
+        )}
         {timeTicks.map((tick) => (
           <text
             key={`time-${tick.index}`}
@@ -643,18 +654,20 @@ export function MinuteChart({
         ))}
       </svg>
 
-      <div className="pointer-events-none absolute left-[64px] top-[66px] flex items-center gap-3 text-[10px]">
-        <span className="flex items-center gap-1.5 text-muted-foreground">
-          <i className="h-0.5 w-3 rounded-full" style={{ backgroundColor: priceColor }} />
-          价格
-        </span>
-        {latestAverage != null && hasVolume && (
+      {!compact && (
+        <div className="pointer-events-none absolute left-[64px] top-[66px] flex items-center gap-3 text-[10px]">
           <span className="flex items-center gap-1.5 text-muted-foreground">
-            <i className="h-0.5 w-3 rounded-full" style={{ backgroundColor: averageColor }} />
-            均价 <b className="font-mono font-medium" style={{ color: averageColor }}>{latestAverage.toFixed(2)}</b>
+            <i className="h-0.5 w-3 rounded-full" style={{ backgroundColor: priceColor }} />
+            价格
           </span>
-        )}
-      </div>
+          {latestAverage != null && hasVolume && (
+            <span className="flex items-center gap-1.5 text-muted-foreground">
+              <i className="h-0.5 w-3 rounded-full" style={{ backgroundColor: averageColor }} />
+              均价 <b className="font-mono font-medium" style={{ color: averageColor }}>{latestAverage.toFixed(2)}</b>
+            </span>
+          )}
+        </div>
+      )}
 
       {hover && (
         <div
@@ -677,10 +690,14 @@ export function MinuteChart({
             </b>
             {hasVolume && (
               <>
-                <span className="text-muted-foreground">均价</span>
-                <b className="text-right font-mono font-medium" style={{ color: averageColor }}>
-                  {hover.average?.toFixed(2) ?? "—"}
-                </b>
+                {!compact && (
+                  <>
+                    <span className="text-muted-foreground">均价</span>
+                    <b className="text-right font-mono font-medium" style={{ color: averageColor }}>
+                      {hover.average?.toFixed(2) ?? "—"}
+                    </b>
+                  </>
+                )}
                 <span className="text-muted-foreground">成交量</span>
                 <b className="text-right font-mono font-medium text-foreground">{hover.volume > 0 ? compactVolume(hover.volume) : "—"}</b>
               </>

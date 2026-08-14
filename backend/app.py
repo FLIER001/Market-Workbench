@@ -1333,3 +1333,12 @@ def gold_cn_spot():
         return {"data": gold_score_layer.cn_gold_spot()}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"国内金价异常：{e}") from e
+
+
+@app.get("/api/gold/paxg")
+def gold_paxg():
+    """PAXG-USD 暗盘现货：7×24 实时行情 + 当日分时（Binance 公共镜像），20 秒缓存。"""
+    try:
+        return {"data": gold_score_layer.paxg_usd_spot()}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"PAXG 暗盘异常：{e}") from e

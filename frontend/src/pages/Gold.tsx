@@ -5,7 +5,7 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { MinuteChart } from "@/components/ui/MinuteChart";
 import { Sparkline } from "@/components/ui/Sparkline";
 import { AskAiButton } from "@/components/ui/AskAiButton";
-import { api, type GoldScoreData, type GoldIndicator, type HistPoint, type CnGoldSpotData, type MinuteKline } from "@/lib/api";
+import { api, type GoldScoreData, type GoldIndicator, type HistPoint, type PaxgSpotData, type MinuteKline } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useSWR } from "@/hooks/useSWR";
 
@@ -39,78 +39,50 @@ const DIM_WEIGHT: Record<string, string> = {
 
 const SPOT_REFRESH_MS = 20_000;
 
-function LiveGoldCard({ cnSpot }: { cnSpot: CnGoldSpotData | null }) {
-  const [minuteData, setMinuteData] = useState<MinuteKline | null>(null);
-  const [loading, setLoading] = useState(true);
+function LiveGoldCard({ paxg }: { paxg: PaxgSpotData | null }) {
+  // PAXG-USD 暗盘分时已由后端一并返回；前端不再单独拉 AU0，直接用后端 minute
+  const minuteData: MinuteKline | null = paxg?.minute
+    ? { date: paxg.minute.date, prev_close: paxg.minute.prev_close, points: paxg.minute.points }
+    : null;
 
   const lastPoint = minuteData?.points.length ? minuteData.points[minuteData.points.length - 1] : null;
-  const change = minuteData?.prev_close && lastPoint ? lastPoint.price - minuteData.prev_close : null;
-  const changePct = minuteData?.prev_close && lastPoint ? (change! / minuteData.prev_close) * 100 : null;
+  const price = paxg?.price ?? lastPoint?.price ?? null;
+  const prevClose = paxg?.prev_close ?? minuteData?.prev_close ?? null;
+  const change = paxg?.change ?? (prevClose && price != null ? price - prevClose : null);
+  const changePct = paxg?.change_pct ?? (prevClose && change != null ? (change / prevClose) * 100 : null);
   const isUp = changePct != null && changePct > 0;
   const isDown = changePct != null && changePct < 0;
-
-  // AU0 当日分时，随现货轮询节奏同步刷新（后端 30 秒缓存）
-  useEffect(() => {
-    let cancelled = false;
-    let timer: number | null = null;
-    const tick = async () => {
-      try {
-        const result = await api.minuteKline("AU0");
-        if (!cancelled && result) setMinuteData(result);
-      } catch {
-        /* 静默保留旧图 */
-      }
-      if (!cancelled) {
-        setLoading(false);
-        timer = window.setTimeout(tick, SPOT_REFRESH_MS);
-      }
-    };
-    void tick();
-    return () => { cancelled = true; if (timer !== null) window.clearTimeout(timer); };
-  }, []);
+  const lastTime = minuteData && minuteData.points.length > 0 ? minuteData.points[minuteData.points.length - 1].time : null;
 
   return (
-    <GlassCard className="flex flex-col gap-4 p-5">
-      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
-        <div>
-          <div className="text-sm font-medium">沪金主力</div>
-          <div className="mt-0.5 text-[11px] text-muted-foreground">AU0 · 元/克 · 约 20 秒刷新</div>
+    <GlassCard className="flex h-full flex-col p-4">
+      <div className="mb-2 flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium">PAXG-USD</div>
+          <div className="text-[10px] text-muted-foreground">现货黄金暗盘 · USD/枚 · 7×24</div>
         </div>
-        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-          <div className="text-4xl font-extrabold tabular-nums leading-none tracking-tight">
-            {minuteData?.points.length ? minuteData.points[minuteData.points.length - 1].price.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}
+        <div className="text-right">
+          <div className="text-lg font-bold tabular-nums leading-none">
+            {price != null ? price.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}
           </div>
-          <div className={cn("flex items-baseline gap-1.5 text-sm font-semibold tabular-nums",
+          <div className={cn("mt-0.5 flex items-center justify-end gap-1 text-[11px] font-semibold tabular-nums",
             isUp ? "text-danger" : isDown ? "text-success" : "text-muted-foreground")}>
-            {isUp ? <TrendingUp className="h-3.5 w-3.5 self-center" /> : isDown ? <TrendingDown className="h-3.5 w-3.5 self-center" /> : null}
+            {isUp ? <TrendingUp className="h-3 w-3" /> : isDown ? <TrendingDown className="h-3 w-3" /> : null}
             <span>{change != null ? `${change > 0 ? "+" : ""}${change.toFixed(2)}` : "—"}</span>
             <span>{changePct != null ? `(${changePct > 0 ? "+" : ""}${changePct.toFixed(2)}%)` : ""}</span>
           </div>
-          {minuteData && minuteData.points.length > 0 && (
-            <span className="text-[11px] tabular-nums text-muted-foreground/70">
-              {minuteData.date}{" "}
-              {(() => {
-                const t = minuteData.points[minuteData.points.length - 1].time;
-                const [h, m] = t.split(":").map(Number);
-                return `${String(h % 24).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-              })()}
-            </span>
-          )}
-          {cnSpot?.stale && <span className="text-[11px] text-warning">缓存</span>}
         </div>
       </div>
-
-      <div className="border-t border-border/40 pt-4">
-        {loading ? (
-          <div className="flex h-[320px] items-center justify-center text-[11px] text-muted-foreground">
-            加载中...
-          </div>
-        ) : minuteData && minuteData.points.length >= 2 ? (
-          <div className="h-[320px]">
-            <MinuteChart data={minuteData} height={320} />
-          </div>
+      {lastTime && (
+        <div className="mb-1 text-[10px] tabular-nums text-muted-foreground/60">
+          {minuteData?.date} {lastTime}{paxg?.stale ? " · 缓存" : ""}
+        </div>
+      )}
+      <div className="min-h-0 flex-1">
+        {minuteData && minuteData.points.length >= 2 && paxg ? (
+          <MinuteChart data={minuteData} height={180} compact />
         ) : (
-          <div className="flex h-[320px] items-center justify-center text-[11px] text-muted-foreground">
+          <div className="flex h-full min-h-[120px] items-center justify-center text-[11px] text-muted-foreground">
             分时数据暂不可用
           </div>
         )}
@@ -160,7 +132,7 @@ function IndicatorCard({ ind }: { ind: GoldIndicator }) {
 export function Gold() {
   const [err, setErr] = useState<string | null>(null);
   const [spot, setSpot] = useState<GoldScoreData | null>(null);
-  const [cnSpot, setCnSpot] = useState<CnGoldSpotData | null>(null);
+  const [paxg, setPaxg] = useState<PaxgSpotData | null>(null);
 
   const { loading, revalidating, revalidate } = useSWR<GoldScoreData>(
     "gold:v4",
@@ -179,8 +151,8 @@ export function Gold() {
     let timer: number | null = null;
     const tick = async () => {
       try {
-        const [score, cn] = await Promise.all([api.goldScore(), api.cnGoldSpot()]);
-        if (!cancelled) { setSpot(score); setCnSpot(cn); }
+        const [score, px] = await Promise.all([api.goldScore(), api.paxgSpot()]);
+        if (!cancelled) { setSpot(score); setPaxg(px); }
       } catch { /* 静默保留旧值 */ }
       if (!cancelled) timer = window.setTimeout(tick, SPOT_REFRESH_MS);
     };
@@ -207,7 +179,7 @@ export function Gold() {
   const aiContext = spot
     ? [
         `黄金多维评分（${spot.date}）：总分 ${total != null ? total.toFixed(0) : "—"}/100，信号「${spot.signal ?? "—"}」，置信度 ${spot.confidence}，模式 ${spot.mode}，覆盖率 ${(spot.coverage * 100).toFixed(0)}%`,
-        cnSpot?.au0 ? `国内金价：沪金主力 AU0 ${cnSpot.au0.price.toFixed(2)} 元/克 (${cnSpot.au0.change_pct != null ? (cnSpot.au0.change_pct > 0 ? "+" : "") + cnSpot.au0.change_pct.toFixed(2) + "%" : "—"})` : "国内金价：暂不可用",
+        paxg?.price ? `现货黄金暗盘：PAXG-USD ${paxg.price.toFixed(2)} 美元/枚 (${paxg.change_pct != null ? (paxg.change_pct > 0 ? "+" : "") + paxg.change_pct.toFixed(2) + "%" : "—"})` : "现货黄金暗盘：暂不可用",
         spot.top_positive_drivers.length ? `利多驱动：${spot.top_positive_drivers.join("、")}` : "利多驱动：暂无明显",
         spot.top_negative_drivers.length ? `利空驱动：${spot.top_negative_drivers.join("、")}` : "利空驱动：暂无明显",
         `维度得分：${DIM_ORDER.map((name) => {
@@ -263,11 +235,8 @@ export function Gold() {
             </div>
           )}
 
-          <div className="mb-5">
-            <LiveGoldCard cnSpot={cnSpot} />
-          </div>
-
-          <div className="mb-5 grid gap-4 lg:grid-cols-[auto_1fr]">
+          <div className="mb-5 grid items-stretch gap-4 lg:grid-cols-[minmax(220px,1fr)_auto_minmax(220px,1fr)]">
+            <LiveGoldCard paxg={paxg} />
             <GlassCard glow className="p-5">
               <div className="flex items-center gap-5">
                 <div className="relative h-32 w-32">
