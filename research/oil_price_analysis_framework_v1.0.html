@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>油价研究应以边际物理稀缺、预期库存与风险溢价为主线</title>
+<style>
+:root{--bg:#ffffff;--fg:#17202a;--muted:#5f6b76;--line:#d9dee3;--soft:#f6f8fa;--accent:#1f4e79;--accent2:#365f91;--good:#246b45;--warn:#8a5a00;--bad:#8b2e2e}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",Arial,sans-serif;line-height:1.62;font-size:15px}
+main{max-width:1180px;margin:0 auto;padding:52px 44px 90px}
+h1{font-size:34px;line-height:1.25;margin:0 0 12px;letter-spacing:-.02em}
+h2{font-size:24px;margin:46px 0 16px;padding-top:8px;border-top:2px solid var(--fg)}
+h3{font-size:18px;margin:25px 0 9px;color:var(--accent)}
+h4{font-size:16px;margin:22px 0 8px}
+p{margin:8px 0}
+a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+.meta{color:var(--muted);font-size:13px;margin-bottom:26px}
+.lead{font-size:18px;line-height:1.75;margin:22px 0 26px}
+.summary{background:var(--soft);border-left:5px solid var(--accent);padding:18px 22px;margin:24px 0}
+.summary p{margin:7px 0}
+.callout{border:1px solid var(--line);border-left:4px solid var(--accent2);padding:14px 18px;margin:18px 0;background:#fff}
+.callout.warn{border-left-color:var(--warn)}
+.callout.bad{border-left-color:var(--bad)}
+.kicker{font-size:12px;font-weight:700;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+strong{font-weight:700}
+code{background:var(--soft);padding:1px 5px;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.92em}
+.eq{font-family:Cambria,"Times New Roman",serif;background:var(--soft);border:1px solid var(--line);padding:12px 16px;margin:12px 0;overflow:auto;white-space:nowrap}
+.table-wrap{overflow-x:auto;border:1px solid var(--line);margin:16px 0 24px}
+table{border-collapse:collapse;width:100%;min-width:850px;font-size:13.5px}
+th,td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top;text-align:left}
+th{background:var(--soft);font-weight:700;position:sticky;top:0;z-index:1}
+tr:last-child td{border-bottom:none}
+ul,ol{padding-left:22px}li{margin:4px 0}
+.tag{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 8px;margin:2px 4px 2px 0;font-size:12px;color:var(--muted);background:#fff}
+.good{color:var(--good)}.warn-text{color:var(--warn)}.bad-text{color:var(--bad)}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:16px 0}
+.card{border:1px solid var(--line);padding:15px 17px;background:#fff}
+.card h3{margin-top:0}
+.small{font-size:12.5px;color:var(--muted)}
+.toc{columns:2;column-gap:38px;background:var(--soft);padding:18px 26px;border:1px solid var(--line)}
+.toc a{display:block;margin:5px 0;break-inside:avoid}
+.ref{font-size:13px;margin:9px 0;padding-bottom:9px;border-bottom:1px dotted var(--line)}
+.ref:last-child{border-bottom:none}
+.footer{margin-top:52px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+@media(max-width:760px){main{padding:28px 18px 60px}h1{font-size:28px}.grid{grid-template-columns:1fr}.toc{columns:1}.table-wrap{margin-left:-4px;margin-right:-4px}body{font-size:14px}}
+@media(prefers-color-scheme:dark){:root{--bg:#111418;--fg:#e8edf2;--muted:#a9b2bc;--line:#343b43;--soft:#1a1f25;--accent:#7fb3df;--accent2:#8bb9df;--good:#7cc99d;--warn:#e0b462;--bad:#e28a8a}.card,.callout{background:#14191e}.tag{background:#14191e}}
+@media print{body{font-size:11pt}main{max-width:none;padding:0}a{color:inherit;text-decoration:none}.toc{columns:2}h2{break-before:page}.table-wrap{overflow:visible;border:none}table{min-width:0;font-size:8.5pt}th{position:static}.footer{break-before:page}}
+</style>
+</head>
+<body>
+<main>
+<div class="kicker">Technical Research Framework · Version 1.1</div>
+<h1>油价研究应以边际物理稀缺、预期库存与风险溢价为主线</h1>
+<div class="meta">2026-08-15 · 宏观/大宗商品研究、资产配置、交易与风险管理 · 全球原油及区域/品质价差</div>
+
+<div class="summary">
+<p><strong>短期（0—3个月）：边际物理稀缺主导。</strong> 优先看商业库存可用度、近端月差、实货升贴水、炼厂利润、物流、有效闲置产能和真实供应中断；年度供需差只作约束。<a href="#ref-iea-glossary">[O1]</a><a href="#ref-eia-balance">[O2]</a></p>
+<p><strong>中期（3—18个月）：预期库存路径和生产者反应函数主导。</strong> 核心变量是OPEC+纪律与闲置产能、非OPEC增量、项目投产、资本开支及需求弹性。<a href="#ref-baumeister-peersman">[A3]</a><a href="#ref-pierru">[A14]</a></p>
+<p><strong>长期：只输出情景区间。</strong> 递减率、投资、成本、效率、电动化、航空/石化和政策路径共同决定均衡；IEA与OPEC长期需求分歧应转化为情景权重与敏感性。<a href="#ref-iea-weo-cps">[O5]</a><a href="#ref-opec-woo">[O7]</a></p>
+<p><strong>预测架构：结构识别 + 实时Nowcast + 分期限模型组合 + 尾部情景。</strong> 金融变量用于识别风险溢价、拥挤度和放大机制，须由库存、期限结构和实货验证。<a href="#ref-kilian-2009">[A1]</a><a href="#ref-bk-forecast">[A7]</a><a href="#ref-cftc">[O11]</a></p>
+</div>
+
+
+<div class="toc">
+<a href="#scope">1. 研究对象与价格锚</a>
+<a href="#horizon">2. 先按期限拆分问题</a>
+<a href="#mechanism">3. 定价机制与可计算关系</a>
+<a href="#signals">4. 指标体系：从物理市场到金融市场</a>
+<a href="#crosscheck">5. 多信号交叉验证与背离解释</a>
+<a href="#models">6. 模型体系：解释、Nowcast、预测、尾部风险</a>
+<a href="#geopolitics">7. 地缘政治：从新闻强度转成“桶×时间×缓冲”</a>
+<a href="#opec">8. OPEC+与闲置产能：研究反应函数</a>
+<a href="#demand">9. 需求：从GDP叙事转向产品和炼化链</a>
+<a href="#longrun">10. 中长期：成本、投资、递减率与能源转型</a>
+<a href="#data">11. 数据工程与实时研究数据库</a>
+<a href="#backtest">12. 回测、鲁棒性与模型治理</a>
+<a href="#workflow">13. 日/周/月研究流程与标准化输出</a>
+<a href="#failure">14. 常见误判与否证条件</a>
+<a href="#implementation">15. 最小可行实现与进阶路线</a>
+<a href="#references">16. 主要文献与机构资料</a>
+</div>
+
+<h2 id="scope">1. 全球方向以Brent体系为锚，区域与品质错配用WTI、Dubai/Oman和INE SC补充</h2>
+<p><strong>全球方向以Brent体系为主，区域、物流和品质错配用跨基准价差解释。</strong> Dated Brent是Brent Complex中的核心实货基准。<a href="#ref-sp-dated">[M1]</a></p>
+<div class="table-wrap"><table>
+<thead><tr><th>层级</th><th>建议价格锚</th><th>主要用途</th><th>不宜直接解释的内容</th></tr></thead>
+<tbody>
+<tr><td>全球实货边际</td><td><strong>Dated Brent / Brent Complex</strong></td><td>全球海运轻质原油实货定价、实货紧张度、不同月份可交割资源的边际价值</td><td>美国内陆库容、亚洲中东酸油的局部供需</td></tr>
+<tr><td>全球期货与资产配置</td><td><strong>ICE Brent近月及整条曲线</strong></td><td>全球方向、期限结构、风险管理、价格预期与库存激励</td><td>不同质量/港口的实货基差</td></tr>
+<tr><td>美国物理市场</td><td><strong>NYMEX WTI / Cushing</strong></td><td>美国页岩油、Cushing库存、管输和出口经济性</td><td>全球海运市场的全部边际桶</td></tr>
+<tr><td>中东—亚洲酸油</td><td><strong>Dubai/Oman</strong></td><td>亚洲炼厂对中东中酸原油的边际采购、Brent-Dubai EFS、东西向套利</td><td>北海轻质原油单独的供应紧张</td></tr>
+<tr><td>中国人民币市场</td><td><strong>INE SC</strong></td><td>人民币计价、中质含硫原油、中国进口与在岸资金环境</td><td>把SC单独当作全球方向价格；其仓单、交割和汇率因素需单独控制</td></tr>
+</tbody></table></div>
+<div class="callout"><strong>研究规则：</strong>所有“油价”结论必须注明基准；跨品种比较先控制交割地、质量、货币、到期和滚动，避免把区域/品质基差误判为全球方向。</div>
+
+<h2 id="horizon">2. 先按期限拆分问题：同一指标在不同期限上的含义不同</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>研究层</th><th>期限</th><th>核心问题</th><th>优先指标</th><th>建议输出</th></tr></thead>
+<tbody>
+<tr><td><strong>H0 事件层</strong></td><td>盘中—2周</td><td>真实可交付供应是否突然减少？市场能否迅速绕行或补足？</td><td>实货升贴水、M1-M2/M1-M3、航运/港口、即时停产、期权偏度、跨区套利</td><td>事件冲击区间；1/5/10交易日风险；事件树</td></tr>
+<tr><td><strong>H1 短周期</strong></td><td>2周—3个月</td><td>当前紧张是否会转化为商业库存持续去化？</td><td>库存相对季节性、days of forward demand、炼厂开工、产品裂解、OPEC+兑现率、需求高频指标</td><td>方向概率、目标区间、库存路径、风险反转条件</td></tr>
+<tr><td><strong>H2 周期层</strong></td><td>3—18个月</td><td>供需缺口是否可持续？生产者和消费者如何响应价格？</td><td>全球平衡表、有效闲置产能、非OPEC增量、项目投产、页岩油资本纪律、宏观活动、产品需求</td><td>季度均价区间、平衡表情景、供给反应函数</td></tr>
+<tr><td><strong>H3 结构层</strong></td><td>18个月—10年</td><td>长期边际成本、投资不足/过剩和技术替代会把均衡区间移到哪里？</td><td>自然递减率、FID/项目管线、成本曲线、资本开支、EV/效率、航空/石化、政策情景</td><td>3—5套情景区间；关键拐点；资本周期风险</td></tr>
+</tbody></table></div>
+
+
+<h2 id="mechanism">3. 油价是库存约束下的跨期价格：供需平衡、便利收益和风险溢价共同作用</h2>
+<h3>3.1 物量恒等式：供需差最终必须体现在库存或未观测差项</h3>
+<div class="eq">ΔI<sub>t</sub> = S<sub>t</sub> − D<sub>t</sub></div>
+<p>理论上供需差对应库存变化；实务中还存在在途、未报告库存和统计差。IEA保留“miscellaneous-to-balance”，且非OECD数据时效与完整性较弱，因此月度全球平衡表不应被强行闭合。<a href="#ref-iea-glossary">[O1]</a></p>
+<h3>3.2 期限结构：当前库存稀缺会提高便利收益，使近端更强</h3>
+<div class="eq">F<sub>t,T</sub> = S<sub>t</sub> · exp[(r<sub>t</sub> + u<sub>t</sub> − y<sub>t</sub>)(T−t)]</div>
+<p><code>r</code>为融资成本，<code>u</code>为持有成本，<code>y</code>为便利收益。可用库存越低，便利收益通常越高、近端越强；远期升水扩大则提高储油激励。<a href="#ref-eia-balance">[O2]</a></p>
+<div class="callout warn"><strong>约束：</strong>backwardation同时受现货稀缺、风险溢价、资金成本、季节性和合约技术影响，必须与库存、实货基差、炼厂利润和物流交叉验证。</div>
+<h3>3.3 建议构造“库存可用度”而非只看绝对库存</h3>
+<div class="eq">DaysSupply<sub>t</sub> = CommercialStocks<sub>t</sub> / ExpectedDailyDemand<sub>t:t+h</sub></div>
+<div class="eq">InventoryZ<sub>t</sub> = (I<sub>t</sub> − SeasonalMedian<sub>week(t)</sub>) / SeasonalScale<sub>week(t)</sub></div>
+<p>库存至少同时保留绝对量、同比/季节分位、需求天数、可动用商业库存及地区/品种分布；单看绝对库存容易失真。<a href="#ref-iea-glossary">[O1]</a></p>
+<h3>3.4 油价输出应被理解为状态依赖函数</h3>
+<div class="eq">P<sub>t</sub> = f(PhysicalScarcity<sub>t</sub>, E<sub>t</sub>[Balance], Optionality<sub>t</sub>, RiskPremium<sub>t</sub>, FinancialConditions<sub>t</sub>, Quality/Location<sub>t</sub>)</div>
+<p>价格对同等供需冲击的反应取决于库存、闲置产能、物流和需求弹性；短期需求价格弹性本身也随时间变化。<a href="#ref-baumeister-peersman">[A3]</a></p>
+
+<h2 id="signals">4. 指标体系：短期优先物理市场，中期优先预期库存路径，金融变量最后确认</h2>
+<p><strong>证据优先级：</strong>真实物理量 → 期限结构/实货 → 宏观与平衡表 → 金融与情绪。重大方向判断至少需要两个独立层级同向确认。</p>
+<div class="table-wrap"><table>
+<thead><tr><th>模块</th><th>关键指标</th><th>主要解释</th><th>常见看多/看空读法</th><th>频率/典型来源</th><th>主要失真</th></tr></thead>
+<tbody>
+<tr><td>全球价格</td><td>Dated Brent、Brent M1、WTI M1、Dubai/Oman、SC</td><td>全球/区域边际桶与风险定价</td><td>方向一致时全球性更强；分化时先找物流/品质原因</td><td>日内/日；PRA、交易所</td><td>合约滚动、不同交割地与质量</td></tr>
+<tr><td>近端曲线</td><td>Brent M1-M2、M1-M6；WTI M1-M2；Dubai结构</td><td>当前稀缺、储存激励、便利收益</td><td>backwardation加深通常支持近端偏紧；contango加深通常支持累库</td><td>实时；ICE/CME/市场数据</td><td>季节性、资金成本、到期技术</td></tr>
+<tr><td>实货基差</td><td>北海/地中海/西非/美湾/中东原油升贴水</td><td>真正可交付原油的边际紧张度</td><td>实货升水与近端月差同步走强，可信度高</td><td>日；Platts/Argus</td><td>单货种品质和港口事件</td></tr>
+<tr><td>商业库存</td><td>OECD总库存、美国原油/汽油/馏分油、库欣、欧洲/日本/韩国</td><td>供需差的物理结果和缓冲</td><td>季调后持续去库偏多；持续累库偏空</td><td>周/月；EIA/IEA/各国</td><td>战略库存混入、在途、统计修订</td></tr>
+<tr><td>库存质量</td><td>days of forward demand、五年分位、可用库容、地区/品种分布</td><td>库存“够不够用”而非“多不多”</td><td>低分位+低需求天数+低闲置产能时非线性上行风险增加</td><td>周/月；自算</td><td>需求预测误差、最低运行库存不可用</td></tr>
+<tr><td>战略库存</td><td>SPR/政府库存释放与回补计划</td><td>政策性缓冲，不等同商业平衡</td><td>释放缓解短缺；回补形成边际需求</td><td>周/月/事件；政府/IEA</td><td>公告与实际流量、品质/物流匹配</td></tr>
+<tr><td>OPEC+产量</td><td>配额、实际产量、减产执行率、补偿减产</td><td>可管理供给与政策信号</td><td>实际低于目标且库存下降偏多；增产但市场仍去库说明需求/其他供给更强</td><td>月/事件；OPEC、IEA、二手来源</td><td>目标≠实际；豁免国与基准调整</td></tr>
+<tr><td>有效闲置产能</td><td>名义spare capacity×可用性×质量/物流×政策意愿</td><td>供给冲击的“保险”</td><td>有效闲置产能低时，同样中断对价格影响更大</td><td>月；EIA/IEA/OPEC+自算</td><td>名义能力能否快速、持续输出</td></tr>
+<tr><td>非OPEC供给</td><td>美国、巴西、加拿大、圭亚那等产量与项目</td><td>中期供给弹性和新增产能</td><td>项目延迟/产量低预期偏多；高于预期偏空</td><td>周/月/季；EIA/IEA/JODI/政府</td><td>初值修订、天气、维护</td></tr>
+<tr><td>美国页岩</td><td>钻机、完井、DUC、单井效率、油服成本、套保、资本开支</td><td>短至中期供给反应</td><td>价格高但资本纪律强→供给弹性低；效率改善/完井增加→弹性高</td><td>周/月/季；EIA/Baker Hughes/公司</td><td>钻机数对产量的映射随效率变化</td></tr>
+<tr><td>中断</td><td>计划/非计划停产、制裁、管道/港口、极端天气</td><td>直接减少可交付桶</td><td>净损失桶/日×持续时间越高，且替代通道越少，越偏多</td><td>事件/日；政府、公司、行业数据</td><td>重复计数、公告先于实际损失</td></tr>
+<tr><td>航运</td><td>VLCC/Suezmax/Aframax运价、航程、等待、绕行</td><td>地区套利和交付时滞</td><td>运价/航程飙升可能抬高到岸成本并造成地区错配</td><td>日；Baltic/船舶数据</td><td>运力周期本身会驱动运价</td></tr>
+<tr><td>炼厂开工</td><td>全球/区域crude runs、利用率、检修</td><td>原油直接需求</td><td>开工上升且裂解强→原油需求偏强；检修高峰需季节调整</td><td>周/月；IEA/EIA/JODI/地区统计</td><td>开工不等于终端消费</td></tr>
+<tr><td>裂解价差</td><td>汽油、gasoil/diesel、jet、naphtha cracks</td><td>炼厂边际利润和产品紧张</td><td>产品裂解普遍走强→炼厂提高加工意愿；单产品异常需拆因</td><td>实时/日；交易所/PRA</td><td>环保规格、季节性、炼能瓶颈</td></tr>
+<tr><td>产品库存</td><td>汽油、馏分油、航煤、燃料油</td><td>终端需求与炼油供给的结果</td><td>原油库存下降但产品累库可能意味着终端弱或炼厂过度加工</td><td>周/月；EIA/IEA/JODI</td><td>地区季节性差异</td></tr>
+<tr><td>宏观需求</td><td>全球工业生产、PMI新订单、贸易量、制造业活动</td><td>周期性油需，尤其柴油/货运/工业</td><td>扩张加速偏多；但需验证产品端</td><td>月；官方/CPB/PMI</td><td>服务业GDP与油需关联弱化</td></tr>
+<tr><td>中国需求</td><td>进口、炼量、表观消费、产品出口、航煤/汽油/柴油、SC价差</td><td>最大增量消费体之一及亚洲边际需求</td><td>进口强但库存同步累积并非等于消费强；需拆战略/商业补库</td><td>月/高频；海关、统计局、JODI、市场数据</td><td>库存透明度、配额与出口政策</td></tr>
+<tr><td>印度/新兴市场</td><td>成品油销售、炼量、进口、工业/交通</td><td>中长期增量需求</td><td>产品需求与炼量同升更可靠</td><td>月；政府/JODI</td><td>补贴、税制和库存口径</td></tr>
+<tr><td>航空</td><td>航班量、ASK/RPK、航煤需求</td><td>航煤需求与国际出行</td><td>运力/客运恢复偏多</td><td>日/月；航空数据/IEA</td><td>燃油效率、载客率</td></tr>
+<tr><td>石化</td><td>乙烯/芳烃开工、naphtha/LPG相对经济性</td><td>长期非燃烧型油需</td><td>石化利润与新增产能影响原料需求结构</td><td>周/月/季；行业数据</td><td>原料替代与产能过剩</td></tr>
+<tr><td>美元/利率</td><td>广义美元、实际利率、全球金融条件</td><td>计价、资金成本、跨资产风险偏好</td><td>美元走强通常对美元计价商品有压制，但方向可能被油市冲击反向驱动</td><td>实时；市场数据</td><td>强内生性，不宜单因素因果</td></tr>
+<tr><td>CFTC持仓</td><td>Managed Money净多、总多/空、周变化、OI占比</td><td>拥挤度、趋势跟随、潜在止损</td><td>极端净多+基本面转弱→下行脆弱；持仓增量需和价格/曲线联读</td><td>周；CFTC</td><td>分类是交易者类别，不代表每笔头寸动机</td></tr>
+<tr><td>期权</td><td>ATM IV、25Δ risk reversal、skew、term vol</td><td>市场隐含分布和尾部保险需求</td><td>上行skew急升但实货未动→风险溢价可能先于物理确认</td><td>实时；ICE/CME</td><td>流动性、事件溢价、模型假设</td></tr>
+<tr><td>地缘风险</td><td>GPR指数+事件级barrels-at-risk</td><td>冲突概率与真实物量风险</td><td>新闻强度只有在影响生产/运输/制裁执行时才应提高基本面权重</td><td>日/月/事件；GPR/新闻/物流</td><td>高GPR可伴随需求下滑，价格方向不固定</td></tr>
+<tr><td>长期投资</td><td>上游capex、FID、发现、开发周期、成本通胀</td><td>未来产能与成本曲线</td><td>资本开支不足+高递减率→中长期供给风险</td><td>季/年；IEA/公司/行业数据库</td><td>名义capex受成本通胀影响</td></tr>
+<tr><td>转型/替代</td><td>EV渗透、燃效、替代燃料、政策、石化/航空</td><td>长期油需路径</td><td>必须用情景而非单点假设</td><td>季/年；IEA/OPEC/政府/行业</td><td>政策逆转、技术成本路径高度不确定</td></tr>
+</tbody></table></div>
+
+<h2 id="crosscheck">5. 多信号交叉验证：价格本身不是证据，价格与物理状态的一致性才是证据</h2>
+<div class="grid">
+<div class="card"><h3>高置信度物理收紧</h3><p><strong>价格↑ + backwardation加深 + 实货升贴水↑ + 商业库存季调后↓ + 裂解/炼量不弱。</strong></p><p class="small">现货与跨期同步确认；优先排查供给中断、需求超预期或补库。</p></div>
+<div class="card"><h3>事件风险溢价先行</h3><p><strong>价格↑ + 期权上行偏度↑，但实货基差/近月差变化有限、库存未下降。</strong></p><p class="small">风险溢价先行；若物理指标未跟进，溢价更易回吐。</p></div>
+<div class="card"><h3>需求/炼化走弱</h3><p><strong>价格↓ + 裂解↓ + 炼量↓ + 产品库存↑ + 宏观活动下行。</strong></p><p class="small">产品端先弱于原油端；可信度高于单看PMI或GDP。</p></div>
+<div class="card"><h3>库存信号冲突</h3><p><strong>库存↓，但月差不强、实货不强。</strong></p><p class="small">先查位置/品质、战略库存、在途、出口、检修和统计修订，排除不可用库存下降。</p></div>
+</div>
+<h3>5.1 统一因子得分，但不让统计标准化掩盖经济含义</h3>
+<div class="eq">Score<sub>h,t</sub> = Σ<sub>k</sub> w<sub>h,k,t</sub> · q<sub>k,t</sub> · sign<sub>k</sub> · z<sub>k,t</sub></div>
+<p><code>z</code>用滚动/扩展窗口稳健标准化（median/MAD并截尾）；<code>q</code>反映数据质量与时效；<code>w</code>由样本外表现决定，并按H0—H3分别估计。</p>
+<p><strong>输出：</strong>方向概率、价格区间、波动率、尾部风险、置信度及否证条件；不输出缺乏经济含义的伪精确综合分。</p>
+
+<h2 id="models">6. 模型体系应把“解释过去”和“预测未来”分开</h2>
+<h3>6.1 结构识别层：回答“为什么涨/跌”</h3>
+<p><strong>基准：</strong>月度Bayesian SVAR / sign-restricted SVAR，至少含全球产量、全球活动、实际油价和库存；按需加入月差、运费和预期变量。冲击分为供给、全球需求、油品特定/预防性需求。<a href="#ref-kilian-2009">[A1]</a><a href="#ref-kilian-murphy">[A2]</a></p>
+<p><strong>识别纪律：</strong>先验、符号限制和弹性范围必须做敏感性，并报告历史分解的不确定度。<a href="#ref-baumeister-hamilton">[A4]</a></p>
+<h3>6.2 实时Nowcast层：回答“本月/本季真实平衡可能在哪里”</h3>
+<p>用混频动态因子、MIDAS或Bayesian mixed-frequency VAR，将日/周/月数据映射到当月供给、需求和库存；每次更新记录预测修正来源。</p>
+<h3>6.3 价格预测层：回答“未来1—18个月价格分布如何”</h3>
+<p><strong>首选分期限模型组合。</strong> 基准至少包括不变价/随机游走、期货曲线、库存/期限结构、VAR/BVAR、动态因子和正则化/树模型。实时组合在相关研究中可在最长18个月的多个期限上优于不变价基准。<a href="#ref-bk-forecast">[A7]</a></p>
+<div class="callout warn"><strong>序列定义风险：</strong>近期研究提醒，月均油价和月末油价的可预测性结论可能不同。所有模型必须固定目标序列定义；若目标用于交易，应优先匹配可交易结算价，而不是为提高统计显著性随意改用月均价。<a href="#ref-conlon">[A16]</a></div>
+<h3>6.4 状态转换层：允许弹性和反应函数变化</h3>
+<p>用TVP-BVAR、Markov-switching或rolling coefficients处理需求弹性、页岩供给弹性和OPEC+反应函数的时变性。</p>
+<h3>6.5 波动与尾部层：价格均值和风险分布分开建模</h3>
+<p>均值与尾部分开建模：短期用IV/skew、HAR/GARCH或分位数模型；地缘用事件树；长期用情景。输出P10/P50/P90等可验证分位数。</p>
+
+<h2 id="geopolitics">7. 地缘政治的研究单位应从“新闻条数”转为“净损失桶×持续时间×缓冲能力”</h2>
+<p>GPR衡量风险强度，不直接给出油价方向；冲突可同时影响供应、需求、航线、战略库存和OPEC+响应。<a href="#ref-gpr">[A11]</a></p>
+<h3>7.1 标准事件树</h3>
+<div class="eq">NetLoss<sub>t</sub> = p<sub>t</sub> · [GrossAtRisk − Rerouting − SpareCapacityDeploy − StrategicRelease] − DemandDestruction</div>
+<div class="eq">CumulativeLoss = Σ<sub>t=1..T</sub> NetLoss<sub>t</sub> · Δt</div>
+<p>事件参数至少包括：发生概率、受影响桶、替代航线、保险/船舶约束、有效闲置产能、战略库存、需求破坏和持续时间；再按库存分位与期限结构定价。</p>
+<div class="table-wrap"><table>
+<thead><tr><th>步骤</th><th>必须回答的问题</th><th>建议证据</th></tr></thead>
+<tbody>
+<tr><td>1. 物理暴露</td><td>多少产量/出口真的依赖该设施、海峡、管道或制裁豁免？</td><td>公司/政府产量、港口装船、船舶跟踪、管网能力</td></tr>
+<tr><td>2. 替代能力</td><td>能否绕行、换油种、改港口、动用库存？</td><td>管线/港口余量、运距、品质匹配、商业库存</td></tr>
+<tr><td>3. 生产者响应</td><td>其他产油国能在几天/几周内增加多少可持续产量？</td><td>有效闲置产能、历史增产速度、政策意愿</td></tr>
+<tr><td>4. 需求破坏</td><td>价格上升是否会反过来削弱交通、炼化和工业需求？</td><td>裂解、销量、航班、工业活动、地区价格弹性</td></tr>
+<tr><td>5. 市场确认</td><td>物理市场是否真的在付更高的近端价格？</td><td>实货升贴水、M1-M2、运费、库存、期权偏度</td></tr>
+</tbody></table></div>
+
+
+<h2 id="opec">8. OPEC+研究重点是“反应函数”和“有效闲置产能”，而非新闻稿里的名义配额</h2>
+<h3>8.1 自建有效闲置产能</h3>
+<div class="eq">ESC<sub>t</sub> = Σ<sub>i</sub> NominalSpare<sub>i,t</sub> × Availability<sub>i,t</sub> × QualityMatch<sub>i,t</sub> × Logistics<sub>i,t</sub> × Willingness<sub>i,t</sub> × RampSpeed<sub>i,t</sub></div>
+<p><strong>ESC是工程指标。</strong> 它把名义闲置产能折算为目标期限内真正可替代的桶；闲置产能同时影响供给弹性和尾部风险。<a href="#ref-pierru">[A14]</a></p>
+<h3>8.2 估计OPEC+反应函数</h3>
+<div class="eq">ΔQ<sup>OPEC+</sup><sub>t+1</sub> = f(PriceGap, InventoryGap, NonOPECGrowth, ESC, FiscalPressure, Cohesion, GeopoliticalConstraint)</div>
+<p>用历史会议与实际产量估计有序选择、logit/probit或规则型贝叶斯模型，预测在不同价格、库存和非OPEC供给状态下的增产/减产概率。</p>
+
+
+<h2 id="demand">9. 需求分析从“GDP×油耗弹性”下沉到产品、行业与地区</h2>
+<p><strong>需求应下沉到产品、行业和地区。</strong> 原油需求先体现为炼厂投入，最终由汽油、柴油/航煤、石化原料等终端需求和炼厂利润决定。<a href="#ref-iea-glossary">[O1]</a></p>
+<div class="table-wrap"><table>
+<thead><tr><th>需求层</th><th>关键指标</th><th>研究含义</th><th>高频替代指标</th></tr></thead>
+<tbody>
+<tr><td>交通—汽油</td><td>道路里程、零售销量、车辆保有/效率、价格</td><td>发达经济体季节性明显；长期受EV和效率压制</td><td>移动/拥堵、汽油裂解、周度销量</td></tr>
+<tr><td>货运/工业—柴油</td><td>工业生产、制造PMI、卡车/货运、建筑</td><td>对全球制造和贸易周期更敏感</td><td>港口吞吐、运价、卡车里程</td></tr>
+<tr><td>航空—航煤</td><td>RPK/ASK、国际航班、票价、机队效率</td><td>后疫情结构变化和航空效率需单独估计</td><td>航班跟踪</td></tr>
+<tr><td>石化—石脑油/LPG</td><td>乙烯/芳烃利润、裂解装置开工、原料切换</td><td>中长期增长的重要来源，但受产能过剩与原料替代影响</td><td>naphtha cracks、PDH利润</td></tr>
+<tr><td>发电/其他</td><td>气油比、电力紧缺、气候、燃料替代</td><td>在高气价、极端天气或地区电力短缺时阶段性放大</td><td>天然气价格、用电负荷</td></tr>
+</tbody></table></div>
+<p><strong>中国需拆分进口、炼量、库存和产品出口。</strong> 进口增加可能来自消费、商业/战略补库或套利，不能直接等同需求增长；JODI等跨国数据必须保留时效与完整性标签。<a href="#ref-jodi">[O10]</a></p>
+
+<h2 id="longrun">10. 中长期价格由“递减率—投资—成本曲线—替代需求”共同约束，必须使用情景</h2>
+<h3>10.1 供给侧：先算维持产量需要的投资，再算增量</h3>
+<p>新增产能先抵消自然递减，剩余部分才构成净增量；项目级供给分析应延伸到投产和爬坡。<a href="#ref-iea-oil2025">[O4]</a></p>
+<div class="eq">NetSupplyGrowth = NewCapacity + Recovery − NaturalDecline − PlannedMaintenance − UnplannedOutage</div>
+<p>资本开支拆分实际投资量与成本通胀；项目按FID、在建、试产、爬坡、平台期分层并估计延误概率。</p>
+<h3>10.2 需求侧：政策和技术采用路径差异足以改变长期均衡</h3>
+<p>长期需求分歧很大：IEA 2025 Current Policies Scenario到2050年约113 mb/d，OPEC WOO 2025接近123 mb/d。至少保留<strong>现行政策、加速转型、低转型/高需求、供给投资受限</strong>四类情景。<a href="#ref-iea-weo-cps">[O5]</a><a href="#ref-opec-woo">[O7]</a></p>
+<h3>10.3 长期价格不直接等于成本曲线</h3>
+<p>边际成本只提供中长期约束；风险资本、税费、融资/地缘溢价、OPEC+管理和需求弹性共同决定可持续价格带。</p>
+
+<h2 id="data">11. 数据工程：油价研究最容易被实时性、修订和口径差异污染</h2>
+<h3>11.1 数据库必须支持vintage</h3>
+<div class="eq">PrimaryKey = (series_id, period, as_of, release_time, revision_id)</div>
+<p>回测必须使用当时可见vintage；OECD月度数据会修订，非OECD数据还存在明显发布滞后。<a href="#ref-iea-glossary">[O1]</a></p>
+<h3>11.2 推荐字段</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>字段</th><th>含义</th><th>治理要求</th></tr></thead>
+<tbody>
+<tr><td><code>series_id</code></td><td>唯一序列</td><td>禁止用显示名称作为唯一键</td></tr>
+<tr><td><code>period</code></td><td>数据对应期</td><td>周/月/季度规范化</td></tr>
+<tr><td><code>release_time</code></td><td>首次对市场可见时间</td><td>精确到时区；防止日内前视</td></tr>
+<tr><td><code>as_of</code></td><td>数据库快照时间</td><td>每次修订保留历史版本</td></tr>
+<tr><td><code>unit</code></td><td>b/d、kb/d、mb/d、mb、美元/桶等</td><td>存原单位与标准单位</td></tr>
+<tr><td><code>scope</code></td><td>crude、NGL、total liquids、product</td><td>禁止跨口径直接相减</td></tr>
+<tr><td><code>stock_type</code></td><td>commercial / strategic / primary / floating</td><td>商业与战略库存分开</td></tr>
+<tr><td><code>quality_flag</code></td><td>官方/估算/缺失/修订/替代值</td><td>进入模型权重 <code>q</code></td></tr>
+<tr><td><code>source</code></td><td>原始来源</td><td>记录链接、表名、发布时间</td></tr>
+</tbody></table></div>
+<h3>11.3 数据源优先级</h3>
+<p><strong>数据优先级：</strong>A级官方/交易所/PRA；B级顶级期刊、央行与国际组织；C级一线投行；D级船舶、卫星、私营估算与媒体。A级定基准，D级提时效并以后续官方数据校验。</p>
+<p>JODI的timeliness、completeness、comparability可直接映射为质量标签。<a href="#ref-jodi-quality">[O9]</a></p>
+
+<h2 id="backtest">12. 回测：首先证明预测信息存在，再讨论交易收益</h2>
+<h3>12.1 样本外设计</h3>
+<ol>
+<li><strong>真实时间切分：</strong>rolling/expanding window；每一时点只允许使用当时已发布vintage。</li>
+<li><strong>基准：</strong>不变价/随机游走、期货曲线、简单季节模型。复杂模型不能只和较弱基准比较。</li>
+<li><strong>期限：</strong>1周、1月、3月、6月、12月、18月分别评估，不能把一个期限的胜率推广到所有期限。</li>
+<li><strong>指标：</strong>价格点预测用MAE/RMSE/MSPE；方向用hit ratio；概率/分布用Brier、CRPS或log score。</li>
+<li><strong>统计检验：</strong>非嵌套模型可用Diebold-Mariano类比较；嵌套模型使用适当修正。报告经济显著性和置信区间。</li>
+<li><strong>状态鲁棒性：</strong>按库存高/低、backwardation/contango、OPEC spare高/低、衰退/扩张、地缘事件分层。</li>
+</ol>
+<h3>12.2 交易回测放在第二层</h3>
+<p>预测稳定后再映射交易；回测计入滚动、bid-ask、冲击成本、融资/保证金、限仓和跳空。期货收益含roll yield，spot预测准确率不等于策略收益。</p>
+<h3>12.3 监控模型衰减</h3>
+<p>每个因子监控rolling IC、方向胜率、参数漂移、缺失率和revision surprise；失效时自动降权并记录制度变化。</p>
+
+<h2 id="workflow">13. 日/周/月研究流程：固定问题、固定证据顺序、固定否证条件</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>频率</th><th>先看什么</th><th>再看什么</th><th>最终更新</th></tr></thead>
+<tbody>
+<tr><td><strong>日内/每日</strong></td><td>Brent/WTI/Dubai/SC；M1-M2；实货基差；裂解；运费；期权</td><td>停产/制裁/港口/海峡事件；美元和利率</td><td>H0事件树、物理收紧/放松判断、价格已计入程度</td></tr>
+<tr><td><strong>每周</strong></td><td>EIA库存与炼厂开工；CFTC；钻机/完井；船期与浮仓</td><td>库存季节偏离、产品端、地区套利</td><td>H1库存路径、因子分数、情景概率</td></tr>
+<tr><td><strong>每月</strong></td><td>IEA OMR、OPEC MOMR、EIA STEO、JODI</td><td>全球平衡表修订、OPEC+实际产量、需求地区/产品分解</td><td>H1/H2季度供需与均价区间；结构冲击分解</td></tr>
+<tr><td><strong>每季/半年</strong></td><td>公司capex、项目/FID、成本、政策、IEA Oil/WEO、OPEC WOO、World Bank</td><td>页岩/深水/油砂投资弹性、EV/效率、炼能结构</td><td>H2/H3情景和长期价格带</td></tr>
+</tbody></table></div>
+<h3>13.1 标准周报/日报模板</h3>
+<p><strong>首段只写结论：</strong>物理状态 → 1—3个月库存方向 → 定价充分度 → 最大上/下行风险。证据顺序固定为：价格/曲线、库存/炼化、供给、需求、金融/持仓、事件树、模型区间、否证条件。</p>
+<h3>13.2 研究结论必须带否证条件</h3>
+<p>否证条件必须可观测，如M1-M2回归中性、商业库存连续季调累积、实货升贴水/裂解转弱、OPEC+实际增产超预期；阈值由历史回测确定。</p>
+
+<h2 id="failure">14. 常见误判：多数来自把代理变量当成目标变量</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>误判</th><th>为什么错</th><th>修正</th></tr></thead>
+<tbody>
+<tr><td>只看年度“供需缺口”</td><td>忽略库存起点、在途、地区/品质错配和数据修订</td><td>转成预期库存路径 + 月差 + 实货验证</td></tr>
+<tr><td>把OPEC+配额当产量</td><td>基准、豁免、执行率、补偿减产不同</td><td>用二手来源实际产量和出口交叉验证</td></tr>
+<tr><td>把名义闲置产能全部当可用</td><td>质量、物流、爬坡速度、政治意愿会折损</td><td>使用ESC有效闲置产能</td></tr>
+<tr><td>看到GPR上升就做多油</td><td>地缘风险也可能打击需求或没有实际桶损失</td><td>估计barrels-at-risk、持续时间、替代与库存</td></tr>
+<tr><td>看到CFTC净多增加就判基本面强</td><td>持仓分类是交易者类别，存在趋势跟随和套保</td><td>持仓只做拥挤度/放大器，先看物理层</td></tr>
+<tr><td>美元走强就机械看空油</td><td>油价、美元、利率可能被共同宏观冲击驱动</td><td>SVAR/局部投影识别共同冲击，控制风险状态</td></tr>
+<tr><td>只看原油库存</td><td>炼厂可能把原油库存转成产品库存，终端需求并未变强</td><td>原油+产品库存+裂解+炼量联读</td></tr>
+<tr><td>用今天修订数据回测过去</td><td>严重前视偏差</td><td>保留vintage与发布时间</td></tr>
+<tr><td>长期用单点油需预测</td><td>政策/技术路径分歧巨大</td><td>用IEA/OPEC等多情景并给权重/敏感性</td></tr>
+<tr><td>复杂ML模型胜过弱基准即上线</td><td>可能只是过拟合或未计成本</td><td>与no-change、futures、简单组合严格样本外比较</td></tr>
+</tbody></table></div>
+
+<h2 id="implementation">15. 最小可行实现：先把物理层和实时回测做对，再增加模型复杂度</h2>
+<h3>15.1 Phase 1：研究底座</h3>
+<ul>
+<li>统一Brent/WTI/Dubai/SC价格、月差、主要裂解和实货基差。</li>
+<li>接入EIA周度库存、IEA/OPEC/JODI月度数据，建立商业/战略库存分层。</li>
+<li>计算季节库存分位、days of forward demand、M1-M2/M1-M6、Brent-WTI/Brent-Dubai。</li>
+<li>建立OPEC+配额—实际—执行率—有效闲置产能表。</li>
+<li>上线四期限的方向/区间输出，并以no-change与futures为基准。</li>
+</ul>
+<h3>15.2 Phase 2：提高解释和实时性</h3>
+<ul>
+<li>混频Nowcast：工业活动、船运、航班、炼化、期权、CFTC、钻机。</li>
+<li>Bayesian SVAR历史分解；TVP/状态切换处理弹性变化。</li>
+<li>地缘事件数据库：事件、实际损失桶、持续时间、替代能力、价格/曲线响应。</li>
+<li>投行/机构预测统一存成“当时预测vintage”，比较误差而不是只看最新观点。</li>
+</ul>
+<h3>15.3 Phase 3：模型组合和研究自动化</h3>
+<ul>
+<li>按期限动态组合模型；权重来自滚动样本外表现。</li>
+<li>建立因子衰减监控、数据质量告警、修订冲击监控。</li>
+<li>输出概率分布、情景树和否证条件；再映射到期货/期权策略。</li>
+</ul>
+<div class="callout"><strong>建议的最终研究产品只有五个核心字段：</strong>①物理状态；②未来库存方向；③价格区间/概率；④上/下行尾部情景；⑤判断置信度及否证条件。其他数据都服务于这五个字段。</div>
+
+<h2 id="references">16. 主要文献与机构资料：优先使用可审计的一手资料</h2>
+<h3>16.1 顶级与高质量学术研究</h3>
+<div id="ref-kilian-2009" class="ref"><strong>[A1] Kilian, L. (2009).</strong> “Not All Oil Price Shocks Are Alike: Disentangling Demand and Supply Shocks in the Crude Oil Market.” <em>American Economic Review</em>, 99(3), 1053–1069. DOI: 10.1257/aer.99.3.1053. 核心用途：供应/全球需求/油品特定需求的结构分解。</div>
+<div id="ref-kilian-murphy" class="ref"><strong>[A2] Kilian, L. &amp; Murphy, D. P. (2014).</strong> “The Role of Inventories and Speculative Trading in the Global Market for Crude Oil.” <em>Journal of Applied Econometrics</em>. 核心用途：把库存纳入结构模型，识别投机与预防性需求。</div>
+<div id="ref-baumeister-peersman" class="ref"><strong>[A3] Baumeister, C. &amp; Peersman, G. (2013).</strong> “Time-Varying Effects of Oil Supply Shocks on the US Economy.” <em>American Economic Journal: Macroeconomics</em>, 5(4), 1–28. 核心用途：需求弹性与价格响应随时间变化。</div>
+<div id="ref-baumeister-hamilton" class="ref"><strong>[A4] Baumeister, C. &amp; Hamilton, J. D. (2019).</strong> “Structural Interpretation of Vector Autoregressions with Incomplete Identification: Revisiting the Role of Oil Supply and Demand Shocks.” <em>American Economic Review</em>. 核心用途：识别不确定性与先验敏感性。</div>
+<div id="ref-hamilton" class="ref"><strong>[A5] Hamilton, J. D. (2009).</strong> “Causes and Consequences of the Oil Shock of 2007–08.” <em>Brookings Papers on Economic Activity</em>. 核心用途：需求强劲与供给停滞对2007–08油价的解释。</div>
+<div id="ref-knittel" class="ref"><strong>[A6] Knittel, C. R. &amp; Pindyck, R. S. (2016).</strong> “The Simple Economics of Commodity Price Speculation.” <em>American Economic Journal: Macroeconomics</em>. 核心用途：储存、库存与投机的经济约束。</div>
+<div id="ref-bk-forecast" class="ref"><strong>[A7] Baumeister, C. &amp; Kilian, L. (2015).</strong> “Forecasting the Real Price of Oil in a Changing World: A Forecast Combination Approach.” <em>Journal of Business &amp; Economic Statistics</em>. 核心用途：实时、多模型、分期限预测组合。</div>
+<div id="ref-gorton" class="ref"><strong>[A8] Gorton, G., Hayashi, F. &amp; Rouwenhorst, K. G. (2013).</strong> “The Fundamentals of Commodity Futures Returns.” <em>Review of Finance</em>, 17(1), 35–105. 核心用途：库存、便利收益、basis与期货风险溢价。</div>
+<div id="ref-cheng-xiong" class="ref"><strong>[A9] Cheng, I.-H. &amp; Xiong, W. (2014).</strong> “Financialization of Commodity Markets.” <em>Annual Review of Financial Economics</em>. 核心用途：金融化、风险分担与信息发现。</div>
+<div id="ref-singleton" class="ref"><strong>[A10] Singleton, K. J. (2014).</strong> “Investor Flows and the 2008 Boom/Bust in Oil Prices.” <em>Management Science</em>. 核心用途：投资者资金流、期限结构与风险溢价。</div>
+<div id="ref-gpr" class="ref"><strong>[A11] Caldara, D. &amp; Iacoviello, M. (2022).</strong> “Measuring Geopolitical Risk.” <em>American Economic Review</em>. 核心用途：新闻文本地缘风险指标。</div>
+<div id="ref-ready" class="ref"><strong>[A12] Ready, R. (2018).</strong> “Oil Prices and the Stock Market.” <em>Review of Finance</em>. 核心用途：用资产价格信息区分油价供需冲击。</div>
+<div id="ref-david" class="ref"><strong>[A13] David, A. (2019).</strong> “Exploration Activity, Long-run Decisions, and Risk Premium in Energy Futures.” <em>Review of Financial Studies</em>. 核心用途：勘探投资、期货basis和风险溢价。</div>
+<div id="ref-pierru" class="ref"><strong>[A14] Pierru, A., Smith, J. L. &amp; Zamrik, T. (2018).</strong> “OPEC’s Impact on Oil Price Volatility: The Role of Spare Capacity.” <em>The Energy Journal</em>. 核心用途：闲置产能作为价格波动缓冲。</div>
+<div id="ref-gundersen" class="ref"><strong>[A15] Gundersen, T. S. (2020).</strong> “The Impact of U.S. Supply Shocks on the Global Oil Price.” <em>The Energy Journal</em>. 核心用途：美国页岩供给冲击的全球传导。</div>
+<div id="ref-conlon" class="ref"><strong>[A16] Conlon, T., Cotter, J. &amp; Eyiah-Donkor, E. (2023).</strong> “Forecasting the Price of Oil: A Cautionary Note.” <em>Journal of Commodity Markets</em>. 核心用途：月均价与月末价目标定义对可预测性结论的影响。</div>
+<div id="ref-bk-jep" class="ref"><strong>[A17] Baumeister, C. &amp; Kilian, L. (2016).</strong> “Forty Years of Oil Price Fluctuations: Why the Price of Oil May Still Surprise Us.” <em>Journal of Economic Perspectives</em>. 核心用途：供需冲击、预期与预测不确定性的综述。</div>
+<div id="ref-alquist" class="ref"><strong>[A18] Alquist, R., Kilian, L. &amp; Vigfusson, R. J. (2013).</strong> “Forecasting the Price of Oil.” <em>Handbook of Economic Forecasting</em>. 核心用途：不变价、期货、调查和计量模型的预测比较。</div>
+
+<h3>16.2 国际组织、监管机构与市场基础设施</h3>
+<div id="ref-iea-glossary" class="ref"><strong>[O1] IEA — Oil Market Report Glossary / Methodology.</strong> <a href="https://www.iea.org/articles/oil-market-report-glossary">https://www.iea.org/articles/oil-market-report-glossary</a>. 供需、库存、days of forward demand、数据时滞、修订和miscellaneous-to-balance。</div>
+<div id="ref-eia-balance" class="ref"><strong>[O2] U.S. EIA — What Drives Crude Oil Prices: Balance.</strong> <a href="https://www.eia.gov/finance/markets/crudeoil/balance.php">https://www.eia.gov/finance/markets/crudeoil/balance.php</a>. 库存、供需平衡与期货价差。</div>
+<div id="ref-iea-omr" class="ref"><strong>[O3] IEA — Oil Market Report.</strong> <a href="https://www.iea.org/topics/oil-market-report">https://www.iea.org/topics/oil-market-report</a>. 短期全球供需、库存、炼化、贸易与价格。</div>
+<div id="ref-iea-oil2025" class="ref"><strong>[O4] IEA (2025) — Oil 2025.</strong> <a href="https://www.iea.org/reports/oil-2025">https://www.iea.org/reports/oil-2025</a>. 至2030年的供需、炼化、贸易和项目。</div>
+<div id="ref-iea-weo-cps" class="ref"><strong>[O5] IEA (2025) — World Energy Outlook 2025, Current Policies Scenario.</strong> <a href="https://www.iea.org/reports/world-energy-outlook-2025/current-policies-scenario">https://www.iea.org/reports/world-energy-outlook-2025/current-policies-scenario</a>. 长期政策情景与油需。</div>
+<div id="ref-opec-momr" class="ref"><strong>[O6] OPEC — Monthly Oil Market Report.</strong> <a href="https://publications.opec.org/momr/">https://publications.opec.org/momr/</a>. OPEC对价格、宏观、需求、供应、炼化、航运、库存和平衡的月度评估。</div>
+<div id="ref-opec-woo" class="ref"><strong>[O7] OPEC (2025) — World Oil Outlook 2025.</strong> <a href="https://www.opec.org/pr-detail/570-10-july-2025.html">https://www.opec.org/pr-detail/570-10-july-2025.html</a>. 长期油需、投资与能源情景。</div>
+<div id="ref-worldbank" class="ref"><strong>[O8] World Bank (2025) — Commodity Markets Outlook, October 2025.</strong> <a href="https://www.worldbank.org/en/research/commodity-markets">https://www.worldbank.org/en/research/commodity-markets</a>. 宏观、能源与商品价格情景及可下载数据。</div>
+<div id="ref-jodi-quality" class="ref"><strong>[O9] JODI — Oil Database Participation Assessment.</strong> <a href="https://www.jodidata.org/oil/support/user-guide/assessments.aspx">https://www.jodidata.org/oil/support/user-guide/assessments.aspx</a>. 数据时效、完整性和可比性。</div>
+<div id="ref-jodi" class="ref"><strong>[O10] JODI — Oil World Database.</strong> <a href="https://www.jodidata.org/oil/database/overview.aspx">https://www.jodidata.org/oil/database/overview.aspx</a>. 生产、贸易、库存、炼厂投入、产出和需求。</div>
+<div id="ref-cftc" class="ref"><strong>[O11] CFTC — Disaggregated Commitments of Traders.</strong> <a href="https://www.cftc.gov/MarketReports/CommitmentsofTraders/DisaggregatedExplanatoryNotes/index.htm">https://www.cftc.gov/MarketReports/CommitmentsofTraders/DisaggregatedExplanatoryNotes/index.htm</a>. Producer/Merchant、Swap Dealers、Managed Money和Other Reportables分类。</div>
+<div id="ref-eia-steo" class="ref"><strong>[O12] U.S. EIA — Short-Term Energy Outlook Data.</strong> <a href="https://www.eia.gov/outlooks/steo/data.php">https://www.eia.gov/outlooks/steo/data.php</a>. 美国与国际短期供需、库存、产量和价格预测。</div>
+
+<h3>16.3 价格基准与顶尖金融机构公开研究</h3>
+<div id="ref-sp-dated" class="ref"><strong>[M1] S&amp;P Global Commodity Insights — Platts Dated Brent Price Assessment.</strong> <a href="https://www.spglobal.com/energy/en/pricing-benchmarks/assessments/crude-oil/dated-brent-price-explained">https://www.spglobal.com/energy/en/pricing-benchmarks/assessments/crude-oil/dated-brent-price-explained</a>. Brent实货基准与Brent Complex。</div>
+<div id="ref-jpm-2026" class="ref"><strong>[F1] J.P. Morgan Global Research (2026) — Oil Prices Forecast.</strong> <a href="https://www.jpmorgan.com/insights/global-research/commodities/oil-prices">https://www.jpmorgan.com/insights/global-research/commodities/oil-prices</a>. 公开研究强调需求破坏、OECD商业库存去化与价格预测的关系。</div>
+<div id="ref-gs-2025" class="ref"><strong>[F2] Goldman Sachs Research (2025) — How geopolitics will ripple through oil prices.</strong> <a href="https://www.goldmansachs.com/insights/articles/how-geopolitics-will-ripple-through-oil-prices-in-2025">https://www.goldmansachs.com/insights/articles/how-geopolitics-will-ripple-through-oil-prices-in-2025</a>. 非OPEC供给、OPEC+闲置产能和地缘风险。</div>
+<div id="ref-ms-scenarios" class="ref"><strong>[F3] Morgan Stanley Research (2026) — Iran Conflict: Three Market Scenarios Investors Should Consider.</strong> <a href="https://www.morganstanley.com/insights/articles/iran-conflict-three-market-scenarios-investors-consider">https://www.morganstanley.com/insights/articles/iran-conflict-three-market-scenarios-investors-consider</a>. 以运输恢复速度和持续时间构造能源冲击情景。</div>
+
+<h3>16.4 文献使用原则</h3>
+<p>文献分工：顶级论文用于结构识别和预测方法；官方/国际组织用于口径、实时数据和情景；PRA/交易所用于价格发现；投行研究用于市场实践校验。机构目标价不作为模型真值。</p>
+
+<div class="footer">
+<p><strong>适用边界：</strong>研究与模型设计框架，不构成投资建议；阈值、权重、弹性和仓位映射均须基于真实时间数据单独回测。</p>
+<p><strong>说明：</strong>ESC与综合因子得分为工程化构造，须用历史数据校准，不属于官方统计。</p>
+</div>
+</main>
+</body>
+</html>

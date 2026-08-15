@@ -2,7 +2,7 @@
 
 # Market Workbench
 
-[![Version](https://img.shields.io/badge/version-1.4.1-1f6feb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.5.0-1f6feb)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)](https://react.dev/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
@@ -35,7 +35,7 @@
 | 自选 | 股票与 ETF 分组、实时行情与研究入口 |
 | 板块 | 产业链研究、申万行业与主题板块观察 |
 | 黄金 | 黄金多维评分、现货行情、PAXG 国内金价折算与历史走势 |
-| 债市 | 建设中 |
+| 债市 | 收益率曲线与期限/信用利差、Shibor、LPR、中美利差、八状态框架与分品种评分 |
 | 持仓 | 股票及基金持仓、已清仓记录与收益跟踪 |
 | 标的筛选 | Manager-First 基金筛选；自然语言个股筛选（AI 逐项核验，不内置候选池） |
 | 资讯 | 公开资讯聚合与公告跟踪 |

@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 import astock
+import bonds as bonds_layer
 import chat as chat_layer
 import cli_runtime
 import gstock
@@ -1317,6 +1318,60 @@ def market_macro(refresh: bool = False):
         return {"data": market.get_macro(force=refresh)}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"宏观经济指标异常：{e}") from e
+
+
+@app.get("/api/bonds/curve")
+def bonds_curve(refresh: bool = False):
+    """中债收益率曲线 + 期限/信用利差序列。缓存 6 小时，last-good 兜底。"""
+    try:
+        return {"data": bonds_layer.get_curve(force=refresh)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"债市曲线异常：{e}") from e
+
+
+@app.get("/api/bonds/overview")
+def bonds_overview(refresh: bool = False):
+    """债市页聚合：曲线 / 资金利率 / 政策利率锚 / 中债指数 / 中美对照。各块独立降级。"""
+    try:
+        return {"data": bonds_layer.get_overview(force=refresh)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"债市总览异常：{e}") from e
+
+
+@app.get("/api/bonds/framework")
+def bonds_framework(refresh: bool = False):
+    """研究框架八状态仪表盘（Macro/Policy/Funding/SupplyDemand/CurveTP/Credit/Positioning/Global）。"""
+    try:
+        return {"data": bonds_layer.get_framework(force=refresh)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"债市框架异常：{e}") from e
+
+
+@app.get("/api/bonds/calc")
+def bonds_calc(refresh: bool = False):
+    """小型计算层：各关键期限 carry / roll / breakeven（曲线推导，确定性公式）。"""
+    try:
+        return {"data": bonds_layer.get_calc(force=refresh)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"债市计算异常：{e}") from e
+
+
+@app.get("/api/bonds/positioning")
+def bonds_positioning(refresh: bool = False):
+    """仓位与拥挤度：国债期货四品种主力持仓/成交及近一年分位。"""
+    try:
+        return {"data": bonds_layer.get_positioning(force=refresh)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"债市仓位异常：{e}") from e
+
+
+@app.get("/api/bonds/segments")
+def bonds_segments(refresh: bool = False):
+    """分品种评分：短债/中短/长债/超长/信用/杠杆套息，八状态加权 + carry 锚 + 失效条件。"""
+    try:
+        return {"data": bonds_layer.get_segments(force=refresh)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"债市分品种评分异常：{e}") from e
 
 
 @app.get("/api/gold/score")

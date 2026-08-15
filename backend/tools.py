@@ -14,6 +14,8 @@ chat.py / mcp_server.py 共用本模块，新增工具只需改这里一处。
 from __future__ import annotations
 
 import html
+import json
+import os
 import re
 import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
@@ -23,6 +25,10 @@ import gstock
 import market
 import newsradar
 import cache_runtime
+import bonds
+import gold_score
+import sector_scores
+import sw_level2_scores
 
 # ——— schema 简写：让 20+ 个工具定义保持一屏可读 ———
 
@@ -149,6 +155,46 @@ TOOLS: list[dict] = [
        {"symbol": {"type": "string", "description": "港股代码，如 00700"}},
        ["symbol"],
        "腾讯经营现金流趋势 → query_hk_cashflow(symbol='00700')"),
+
+    # —— 市场研判层（各页面的合成分与分解，客观数据非建议） ——
+    _t("query_macro_composite",
+       "查宏观总分：8 模块合成分 + 各模块得分/权重/贡献分解 + 近 3 年总分走势。看整体宏观环境冷热用。",
+       example="当前宏观环境综合处于什么状态、由哪些模块驱动 → query_macro_composite()"),
+    _t("query_liquidity_composite",
+       "查中美流动性综合得分：合成分/状态 + 各分项（银行间资金压力/政策利率/债市/杠杆温度等）得分与贡献。看资金面松紧用。",
+       example="现在流动性是松是紧、结构上谁在拖累 → query_liquidity_composite()"),
+    _t("query_sector_scores",
+       "查行业评分（申万一级）：各行业综合得分/所处阶段/估值分位/动量等，历史回测口径。看行业景气与轮动位置用。",
+       {"top_n": {"type": "integer", "description": "返回前 N 个行业，默认 15"}},
+       example="哪些行业评分处于景气高位、哪些在低位 → query_sector_scores(top_n=15)"),
+    _t("query_gold_score",
+       "查黄金多维评分：总分/信号 + 五维（机会成本/资金仓位/避险/结构性需求/趋势确认）+ 正负贡献因子。",
+       example="黄金现在什么评分、哪些因子在拖累 → query_gold_score()"),
+    _t("query_bonds_curve",
+       "查中债国债收益率曲线（3M-30Y 关键期限）+ 期限利差（10Y-1Y 等）+ AAA 信用利差的历史序列。",
+       example="当前收益率曲线形态、期限利差在什么位置 → query_bonds_curve()"),
+    _t("query_bonds_overview",
+       "查债市全景快照：收益率曲线与关键期限日变动 + Shibor 资金利率（O/N-1Y 各期限）+ LPR 政策利率锚 "
+       "+ 中债新综合指数 + 中美 10Y 利差。问「债市现在什么状态」先用这个。",
+       example="债市整体什么状态、资金面紧不紧 → query_bonds_overview()"),
+    _t("query_bonds_framework",
+       "查中国债市研究框架八状态仪表盘：宏观与通胀/政策与融资/资金面/供需与机构行为/曲线与风险补偿/信用利差/"
+       "仓位与拥挤度/海外与汇率，各状态 [-2,+2] 评分（正分=对债券价格有利）并附所用指标与分位。"
+       "研究框架见站内 china_bond_research_framework：宏观状态→政策反应→资金与融资→供需与机构行为→曲线与溢价。",
+       example="债市框架八个状态各自什么读数、哪些偏多哪些偏空 → query_bonds_framework()"),
+    _t("query_bonds_calc",
+       "查债市计算层：各关键期限（3M-30Y）3 个月持有期的 carry（票息-资金成本）/ roll（骑乘）/ 静态合计 / "
+       "盈亏平衡收益率上行幅度，单位 bp，由当期中债曲线确定性推导。",
+       example="现在哪个期限的 carry+roll 最厚、能扛多少收益率上行 → query_bonds_calc()"),
+    _t("query_bonds_positioning",
+       "查债市仓位与拥挤度：国债期货四品种（TS/TF/T/TL）主力持仓量、成交量及各自近一年分位。"
+       "持仓高分位 + 价格高位 = 久期拥挤的常用代理（框架 §9.2）。",
+       example="国债期货持仓是不是处于高位、久期交易挤不拥挤 → query_bonds_positioning()"),
+    _t("query_bonds_segments",
+       "查债市分品种评分：短债(1-3Y)/中短债(3-5Y)/长债(5-10Y)/超长债(20Y+)/信用债(AAA)/杠杆套息 六个品种，"
+       "按框架 §11.2 多期限权重先验对八状态加权得出 [-2,+2] 相对分，附前三大驱动、carry+roll 静态锚与各自失效条件。"
+       "问「该配短债还是长债、信用还是利率」用这个。",
+       example="现在短端和长端哪个更值得配、信用债评分如何 → query_bonds_segments()"),
 ]
 
 TOOL_NAMES = [t["function"]["name"] for t in TOOLS]
@@ -229,12 +275,73 @@ def _kline(args: dict):
 
 _FFLOW_DELAY = "https://push2delay.eastmoney.com/api/qt/stock/fflow/daykline/get"
 
+# 主源（东财 push2his）断连时的历史序列快照：成功时落盘、失败时回补，
+# 避免第三方源再挂时近 5/20/60 日累计整体缺失（同 market.py 指数流向的思路）。
+_FFLOW_SNAPSHOT = os.path.join(
+    os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research"),
+    "stock_fflow_snapshot.json")
+
+
+def _fflow_load_snapshot() -> dict:
+    try:
+        with open(_FFLOW_SNAPSHOT, encoding="utf-8") as f:
+            d = json.load(f)
+        if isinstance(d, dict) and all(isinstance(v, list) for v in d.values()):
+            return d
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {}
+
+
+def _fflow_save_snapshot(code: str, rows: list[dict]) -> None:
+    snap = _fflow_load_snapshot()
+    snap[code] = rows[-120:]
+    try:
+        os.makedirs(os.path.dirname(_FFLOW_SNAPSHOT), exist_ok=True)
+        tmp = _FFLOW_SNAPSHOT + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(snap, f, ensure_ascii=False)
+        os.replace(tmp, _FFLOW_SNAPSHOT)
+    except OSError:
+        pass
+
+
+def _fund_flow_sina(code: str) -> list[dict]:
+    """历史资金流（第二源：新浪）。
+
+    东财 push2his 在部分网络下持续断连（TCP 通、应用层直接掐），push2delay 只有当天 1 条；
+    新浪这条线路能拿约 60 个交易日的历史。字段口径不同：r0=超大单 r1=大单 r2=中单 r3=小单，
+    主力 = r0_net + r1_net（与东财口径一致）。
+    """
+    import requests
+
+    daima = ("sh" if code.startswith("6") else "sz") + code
+    url = ("https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+           "MoneyFlow.ssl_qsfx_lscjfb")
+    d = requests.get(url, params={"page": 1, "num": 60, "sort": "opendate", "asc": 0,
+                                  "daima": daima},
+                     headers={"User-Agent": astock.UA,
+                              "Referer": "https://finance.sina.com.cn/"}, timeout=12).json()
+    out = []
+    for r in d or []:
+        try:
+            out.append({
+                "date": r["opendate"],
+                "main_net": float(r["r0_net"]) + float(r["r1_net"]),
+                "super_net": float(r["r0_net"]), "large_net": float(r["r1_net"]),
+                "mid_net": float(r["r2_net"]), "small_net": float(r["r3_net"]),
+            })
+        except (KeyError, TypeError, ValueError):
+            continue
+    out.reverse()  # 接口按日期倒序，翻成正序对齐东财
+    return out
+
 
 def _fund_flow_today(code: str) -> list[dict]:
-    """当日资金流（备用源）。
+    """当日资金流（东财延迟行情线路）。
 
-    主源 push2his 在部分网络下连不通（本机实测被拒），push2delay 这条延迟行情线路仍可达，
-    代价是只给当天一条、拿不到历史。宁可给「今天」也不要整块缺失。
+    push2delay 稳定可达，代价是只给当天一条、拿不到历史。放在新浪之后，
+    专门用来覆盖第三方源尚未更新的当日末点。
     """
     import requests
 
@@ -263,22 +370,51 @@ def _fund_flow_today(code: str) -> list[dict]:
 def _fund_flow(args: dict):
     code = str(args["code"])
     rows = astock.stock_fund_flow_120d(code)
-    if not rows:
+    source = "东方财富"
+    if rows:
+        _fflow_save_snapshot(code, rows)
+    else:
+        # 第二源：新浪历史 60 日；末点用东财延迟线路补当天（新浪当日晚上才更新）
         try:
-            rows = _fund_flow_today(code)
+            rows = _fund_flow_sina(code)
         except Exception:  # noqa: BLE001
             rows = []
-        if rows:  # 备用源只有当日，明说清楚，别让模型误以为是完整历史
-            return {"unit": "元", "note": "主源不可达，以下仅为当日资金流，无历史累计",
-                    "recent": rows}
+        if rows:
+            source = "新浪财经"
+            try:
+                today = _fund_flow_today(code)
+                if today and today[-1]["date"] > rows[-1]["date"]:
+                    rows.append(today[-1])
+            except Exception:  # noqa: BLE001
+                pass
+        # 第三层兜底：东财延迟线路（仅当天）+ 本地快照历史拼接
+        if not rows:
+            try:
+                rows = _fund_flow_today(code)
+            except Exception:  # noqa: BLE001
+                rows = []
+            cached = _fflow_load_snapshot().get(code, [])
+            if rows and cached and cached[-1]["date"] <= rows[-1]["date"]:
+                rows = [r for r in cached if r["date"] < rows[-1]["date"]] + rows
+                source = "东方财富(延迟)+本地缓存"
+            elif rows:
+                source = "东方财富(延迟)"
+            elif cached:
+                rows = cached  # 全部外源不可达，至少给上次成功的历史
+                source = "本地缓存"
+    # 只要有 ≥1 天新数据就续写快照：主源长期断连时靠新浪/延迟线路把历史攒起来
+    if rows:
+        cached = _fflow_load_snapshot().get(code, [])
+        if not cached or rows[-1]["date"] > cached[-1]["date"]:
+            _fflow_save_snapshot(code, rows)
     if not rows:
-        return {"error": "无资金流数据"}
+        return {"error": "无资金流数据（东财/新浪均不可达且无本地缓存）"}
     days = max(1, min(int(args.get("days") or 10), 60))
     tail = rows[-days:]
     def _sum(n: int) -> float:
         return round(sum(r.get("main_net", 0) for r in rows[-n:]) / 1e8, 3)
     return {
-        "unit": "元（汇总项单位：亿元）",
+        "unit": "元（汇总项单位：亿元）", "source": source,
         "main_net_5d_yi": _sum(5), "main_net_20d_yi": _sum(20), "main_net_60d_yi": _sum(60),
         "recent": _pick(tail, ("date", "main_net", "super_net", "large_net", "mid_net", "small_net"), days),
     }
@@ -437,6 +573,161 @@ def _public_news_search(args: dict):
 
 
 # name -> 执行函数。绝大多数是「调后端函数 + 裁剪」，复杂的抽成上面的私有函数。
+def _macro_composite(args: dict):
+    """宏观总分：合成分 + 模块贡献分解 + 近 3 年走势（hist 只留 date/v，指标明细不进上下文）。"""
+    d = market.get_macro() or {}
+    comp = d.get("composite") or {}
+    hist = [(p.get("date"), p.get("v")) for p in (comp.get("hist") or []) if isinstance(p, dict)]
+    modules = [
+        {k: m.get(k) for k in ("name", "score", "desc", "coverage", "confidence")}
+        for m in (d.get("modules") or []) if isinstance(m, dict)
+    ]
+    out = {
+        "as_of": d.get("updated"),
+        "score": comp.get("score"), "state": comp.get("state"),
+        "drivers": comp.get("drivers"),
+        "parts": comp.get("parts"),
+        "modules": modules,
+        "hist_recent": hist[-40:],
+    }
+    return out or {"error": "宏观数据暂不可用"}
+
+
+def _liquidity_composite(args: dict):
+    """中美流动性综合得分：合成分/状态 + 分项贡献 + 近期走势。"""
+    d = market.get_liquidity() or {}
+    out = {"as_of": d.get("assembled_at") or d.get("updated")}
+    for side, key in (("cn", "cn_composite"), ("us", "us_composite")):
+        comp = d.get(key) or {}
+        if comp:
+            hist = [(p.get("date"), p.get("v")) for p in (comp.get("hist") or []) if isinstance(p, dict)]
+            out[side] = {
+                "score": comp.get("score"), "state": comp.get("state"),
+                "desc": comp.get("desc"), "parts": comp.get("parts"),
+                "hist_recent": hist[-40:],
+            }
+    if len(out) <= 1:
+        return {"error": "流动性数据暂不可用"}
+    return out
+
+
+def _sector_scores(args: dict) -> dict:
+    """行业评分：每行只留得分/阶段/估值分位等关键字段。"""
+    d = sector_scores.get_sector_scores() or {}
+    industries = d.get("industries") or []
+    top_n = max(1, min(int(args.get("top_n") or 15), 31))
+    def _row(ind: dict) -> dict:
+        val = ind.get("valuation") or {}
+        return {
+            "name": ind.get("name"), "score": ind.get("score"), "phase": ind.get("phase"),
+            "latest_return": ind.get("latest_return"),
+            "pe_pct": val.get("pe_pct"), "pe": val.get("pe"),
+        }
+    rows = [_row(i) for i in industries if isinstance(i, dict)]
+    return {
+        "as_of": d.get("as_of"), "source": d.get("current_source_label"),
+        "industries": rows[:top_n],
+    } or {"error": "行业评分暂不可用"}
+
+
+def _gold_score(args: dict):
+    """黄金评分：总分/信号 + 五维得分 + 正负贡献因子各取前 5。"""
+    d = gold_score.get_gold_score() or {}
+    if not d.get("gold_score"):
+        return {"error": "黄金评分暂不可用"}
+    def _drv(items):
+        return [{k: x.get(k) for k in ("name", "score", "weight", "desc")} for x in (items or [])[:5] if isinstance(x, dict)]
+    return {
+        "date": d.get("date"), "score": d.get("gold_score"),
+        "signal": d.get("signal"), "confidence": d.get("confidence"),
+        "coverage": d.get("coverage"),
+        "top_positive_drivers": _drv(d.get("top_positive_drivers")),
+        "top_negative_drivers": _drv(d.get("top_negative_drivers")),
+    }
+
+
+def _bonds_curve(args: dict):
+    """债市曲线：当期整条曲线 + 各利差只留最新值与近 40 点走势。"""
+    d = bonds.get_curve() or {}
+    if not d.get("curve"):
+        return {"error": "债市数据暂不可用"}
+    def _tail(series: dict) -> dict:
+        return {k: v[-40:] for k, v in (series or {}).items()}
+    return {
+        "date": d.get("date"), "curve": d.get("curve"),
+        "spreads": _tail(d.get("spreads")), "credit": _tail(d.get("credit")),
+        "source": d.get("source"),
+    }
+
+
+def _bonds_framework(args: dict):
+    """八状态仪表盘：模型侧裁掉 hist 趋势（页面专用），只留分位/权重/单项分。"""
+    d = bonds.get_framework() or {}
+    states = d.get("states") or []
+    if not states:
+        return {"error": "债市框架暂不可用"}
+    slim = []
+    for s in states:
+        parts = [{k: p.get(k) for k in ("key", "label", "pct", "score", "weight")}
+                 for p in (s.get("parts") or [])]
+        slim.append({k: s.get(k) for k in ("key", "name", "score", "meaning")} | {"parts": parts})
+    return {
+        "date": d.get("date"), "states": slim, "coverage": d.get("coverage"),
+        "method": d.get("method"),
+    }
+
+
+def _bonds_overview(args: dict):
+    """债市全景：各子块只留最新值 + 日/月变动，序列只带迷你走势，控 token。"""
+    d = bonds.get_overview() or {}
+
+    def _last(series):
+        pts = series or []
+        return pts[-1]["v"] if pts else None
+
+    def _chg(series, days=1):
+        pts = series or []
+        return round((pts[-1]["v"] - pts[-1 - days]["v"]) * 100, 1) if len(pts) > days else None
+
+    def _mini(series, n=30):
+        pts = (series or [])[-n:]
+        return pts if len(pts) > 1 else None
+
+    out: dict = {}
+    curve = d.get("curve") or {}
+    if curve.get("curve"):
+        yields = curve.get("yields") or {}
+        out["curve"] = {
+            "date": curve.get("date"),
+            "points": curve["curve"],
+            "daily_chg_bp": {k: _chg(v) for k, v in yields.items() if _chg(v) is not None},
+            "spreads_bp": {k: _last(v) for k, v in (curve.get("spreads") or {}).items()},
+            "credit_spreads_bp": {k: _last(v) for k, v in (curve.get("credit") or {}).items()},
+        }
+    funding = d.get("funding") or {}
+    if funding.get("series"):
+        out["funding"] = {
+            "date": funding.get("date"),
+            "shibor": {k: {"value": _last(v), "chg_bp": _chg(v)}
+                       for k, v in funding["series"].items()},
+        }
+    policy = d.get("policy") or {}
+    if policy.get("anchors"):
+        out["policy"] = {"date": policy.get("date"), "anchors": policy["anchors"]}
+    index = d.get("index") or {}
+    if index.get("series"):
+        out["index"] = {"date": index.get("date"), "value": _last(index["series"]),
+                        "trend": _mini(index["series"], 60)}
+    globe = d.get("global") or {}
+    if globe.get("series"):
+        out["global"] = {"date": globe.get("date"),
+                         "cn_10y": globe["series"][-1]["cn"],
+                         "us_10y": globe["series"][-1]["us"],
+                         "spread_bp": _last(globe.get("spread")),
+                         "spread_trend": _mini(globe.get("spread"), 60)}
+    return out or {"error": "债市数据暂不可用"}
+
+
 _HANDLERS = {
     "query_quote": lambda a: astock.tencent_quote([str(c) for c in a.get("codes", [])]),
     "query_valuation": lambda a: astock.full_valuation(str(a["code"])),
@@ -468,6 +759,16 @@ _HANDLERS = {
     "search_public_news": _public_news_search,
     "query_global_stock": lambda a: gstock.us_hk_stock(str(a.get("symbol", ""))) or {"error": "未找到该美股/港股/韩股代码"},
     "query_hk_cashflow": lambda a: gstock.hk_cashflow(str(a.get("symbol", ""))) or {"error": "未找到该港股现金流（仅港股支持）"},
+    "query_macro_composite": _macro_composite,
+    "query_liquidity_composite": _liquidity_composite,
+    "query_sector_scores": _sector_scores,
+    "query_gold_score": _gold_score,
+    "query_bonds_curve": _bonds_curve,
+    "query_bonds_overview": _bonds_overview,
+    "query_bonds_framework": _bonds_framework,
+    "query_bonds_calc": lambda a: bonds.get_calc() or {"error": "债市计算层暂不可用"},
+    "query_bonds_positioning": lambda a: bonds.get_positioning() or {"error": "国债期货量仓暂不可用"},
+    "query_bonds_segments": lambda a: bonds.get_segments() or {"error": "分品种评分暂不可用"},
 }
 
 

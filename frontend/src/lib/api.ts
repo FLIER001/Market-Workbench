@@ -987,12 +987,164 @@ export interface PulseHistoryPoint {
   p: number | null;
 }
 
+// —— 债市（中债收益率曲线 + 期限/信用利差）——
+export interface BondsCurvePoint { tenor: string; value: number }
+export interface BondsCurveData {
+  date: string;
+  curve: BondsCurvePoint[];
+  yields?: Record<string, HistPoint[]>;
+  spreads: Record<string, HistPoint[]>;
+  credit: Record<string, HistPoint[]>;
+  source: string;
+  cache_state?: string;
+  cached_at?: string | null;
+  data_as_of?: string | null;
+  refresh_error?: string | null;
+}
+
+// —— 债市总览（曲线 / 资金 / 政策锚 / 指数 / 全球对照聚合）——
+export interface BondsSeriesPoint { date: string; v: number }
+export interface BondsFundingData {
+  date: string;
+  series: Record<string, BondsSeriesPoint[]>;
+  source: string;
+}
+export interface BondsPolicyAnchor {
+  key: string;
+  label: string;
+  value: number | null;
+  chg_bp: number | null;
+  date: string;
+}
+export interface BondsPolicyData {
+  date: string;
+  anchors: BondsPolicyAnchor[];
+  lpr_1y: BondsSeriesPoint[];
+  lpr_5y: BondsSeriesPoint[];
+  source: string;
+}
+export interface BondsIndexData {
+  date: string;
+  series: BondsSeriesPoint[];
+  source: string;
+}
+export interface BondsGlobalPoint { date: string; cn: number; us: number }
+export interface BondsGlobalData {
+  date: string;
+  series: BondsGlobalPoint[];
+  spread: BondsSeriesPoint[];
+  source: string;
+}
+// —— 债市计算层：carry / roll / breakeven（曲线推导）——
+export interface BondsCalcRow {
+  tenor: string;
+  years: number;
+  yield: number;
+  carry_bp_3m: number;
+  roll_bp_3m: number;
+  total_static_bp_3m: number;
+  breakeven_bp_3m: number | null;
+}
+export interface BondsCalcData {
+  date: string;
+  funding_cost: number | null;
+  horizon_years: number;
+  rows: BondsCalcRow[];
+  method: string;
+  source: string;
+}
+// —— 仓位与拥挤度：国债期货量仓 ——
+export interface BondsPositionContract {
+  symbol: string;
+  label: string;
+  date: string;
+  close: number | null;
+  oi: number;
+  oi_pct_1y: number;
+  volume: number | null;
+  vol_pct_1y: number | null;
+}
+export interface BondsPositioningData {
+  date: string;
+  contracts: BondsPositionContract[];
+  source: string;
+  method: string;
+}
+// —— 分品种评分：短债/中短/长债/超长/信用/杠杆套息 ——
+export interface BondsSegmentDriver {
+  state: string;
+  contribution: number;
+  weight: number;
+}
+export interface BondsSegmentRow {
+  segment: string;
+  score: number;
+  drivers: BondsSegmentDriver[];
+  invalidation: string;
+  anchor_tenor?: string;
+  carry_roll_bp_3m?: number;
+  breakeven_bp_3m?: number | null;
+}
+export interface BondsSegmentsData {
+  date: string;
+  rows: BondsSegmentRow[];
+  method: string;
+  notes: string[];
+  cache_state?: string;
+  cached_at?: string | null;
+  data_as_of?: string | null;
+  refresh_error?: string | null;
+}
+export interface BondsOverviewData {
+  curve?: BondsCurveData;
+  funding?: BondsFundingData;
+  policy?: BondsPolicyData;
+  index?: BondsIndexData;
+  global?: BondsGlobalData;
+  calc?: BondsCalcData;
+  positioning?: BondsPositioningData;
+}
+
+// —— 债市研究框架：八状态仪表盘 ——
+export interface BondsFrameworkPart {
+  key: string;
+  label: string;
+  pct: number;
+  score: number;
+  weight: number;
+  hist?: { date: string | null; v: number | null }[];
+}
+export interface BondsFrameworkState {
+  key: string;
+  name: string;
+  score: number | null;
+  meaning: string;
+  parts: BondsFrameworkPart[];
+}
+export interface BondsFrameworkData {
+  date: string;
+  states: BondsFrameworkState[];
+  coverage: number;
+  notes: string[];
+  method: string;
+  cache_state?: string;
+  cached_at?: string | null;
+  data_as_of?: string | null;
+  refresh_error?: string | null;
+}
+
 export const api = {
   health: () => get<{ ok: boolean }>("/health"),
   indices: () => get<IndexQuote[]>("/indices"),
   marketOverview: () => get<MarketOverview>("/market/overview"),
   liquidity: (refresh = false) => get<LiquidityData>(`/market/liquidity${refresh ? "?refresh=true" : ""}`),
   macro: (refresh = false) => get<MacroData>(`/market/macro${refresh ? "?refresh=true" : ""}`),
+  bondsCurve: (refresh = false) => get<BondsCurveData>(`/bonds/curve${refresh ? "?refresh=true" : ""}`),
+  bondsOverview: (refresh = false) => get<BondsOverviewData>(`/bonds/overview${refresh ? "?refresh=true" : ""}`),
+  bondsFramework: (refresh = false) => get<BondsFrameworkData>(`/bonds/framework${refresh ? "?refresh=true" : ""}`),
+  bondsCalc: (refresh = false) => get<BondsCalcData>(`/bonds/calc${refresh ? "?refresh=true" : ""}`),
+  bondsPositioning: (refresh = false) => get<BondsPositioningData>(`/bonds/positioning${refresh ? "?refresh=true" : ""}`),
+  bondsSegments: (refresh = false) => get<BondsSegmentsData>(`/bonds/segments${refresh ? "?refresh=true" : ""}`),
   goldScore: (refresh = false) => get<GoldScoreData>(`/gold/score${refresh ? "?refresh=true" : ""}`),
   au0Hist: (days = 400) => get<Au0HistData>(`/gold/au0-hist?days=${days}`),
   goldSpot: () => get<GoldSpotData>("/gold/spot"),

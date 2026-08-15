@@ -59,6 +59,7 @@ SYSTEM_PROMPT = f"""你是 Market Workbench 里的投研助理。你可以调用
 - 市场层：query_market（scope=indices/global/emotion/turnover/overview）/ query_news_radar（赛道资讯）
 - 联网核验：search_public_news（只在现有证据指向重大事件、仍需外部资料核实时调用一次；普通事件不要调用）
 - 海外：query_global_stock（美股 AAPL / 港股 00700 / 韩股 005930.KS）/ query_hk_cashflow（港股现金流量表，仅港股）
+- 市场研判层：query_macro_composite（宏观总分与模块分解）/ query_liquidity_composite（中美流动性综合得分）/ query_sector_scores（行业评分与轮动位置）/ query_gold_score（黄金多维评分）/ query_bonds_curve（中债收益率曲线与利差）——这些是各页面的合成分与贡献分解，属客观数据口径；引用时陈述分值与状态即可，不要包装成买卖建议
 
 用工具的方式：**先想清楚要回答什么，再挑最相关的 2-5 个工具**，不要一次把所有工具都调一遍。
 估值贵贱看 query_valuation_percentile，资金动向看 query_fund_flow，风险排查看 query_announcements + query_lockup。
