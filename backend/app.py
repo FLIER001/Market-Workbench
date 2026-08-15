@@ -17,6 +17,7 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -34,6 +35,7 @@ import timing
 import users
 import market
 import gold_score as gold_score_layer
+import oil as oil_layer
 import myreports as mr
 import reflection as reflect_layer
 import plate_scores as plate_scores_layer
@@ -72,6 +74,8 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+# GZip：债市框架/分品种等大 payload（含 3 年趋势序列）压缩传输，184KB → ~27KB
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # 可选鉴权：设了 VR_API_KEY 就要求所有 /api/* 带 `Authorization: Bearer <key>`
 #   （本地自托管不设=开放；公网部署务必设，否则别人能读你的持仓/调你的后端）。
@@ -1417,3 +1421,30 @@ def gold_paxg():
         return {"data": gold_score_layer.paxg_usd_spot()}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"PAXG 暗盘异常：{e}") from e
+
+
+@app.get("/api/oil/score")
+def oil_score(refresh: bool = False):
+    """油价多维评分（框架 V1.0）：物理稀缺/供给/炼化/仓位/溢价/美元/动量。缓存 1 小时。"""
+    try:
+        return {"data": oil_layer.get_oil_score(force=refresh)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"油价评分异常：{e}") from e
+
+
+@app.get("/api/oil/spot")
+def oil_spot():
+    """实时油价：Brent / WTI / 天然气（腾讯 hf_），20 秒缓存。"""
+    try:
+        return {"data": oil_layer.oil_spot()}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"实时油价异常：{e}") from e
+
+
+@app.get("/api/oil/brent-hist")
+def oil_brent_hist(days: int = Query(400, ge=60, le=1000)):
+    """布伦特连续（OIL）日K收盘序列：评分卡旁油价近1年走势，1 小时缓存。"""
+    try:
+        return {"data": oil_layer.brent_daily_history(days)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"布伦特日K异常：{e}") from e

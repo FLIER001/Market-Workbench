@@ -930,6 +930,69 @@ export interface PaxgSpotData {
   } | null;
 }
 
+// ---- 油价多维评分（框架 V1.0）----
+export interface OilIndicator {
+  key: string; label: string; dimension: string; weight: number;
+  effective_weight?: number; data_status?: "fresh" | "stale";
+  value: number | null; value_text: string | null; chg: number | null; date: string | null;
+  score: number | null; signal: number | null; hist: HistPoint[]; note: string;
+}
+export interface OilDimensionMeta {
+  name: string;
+  note: string;
+}
+export interface OilStructure {
+  brent_wti: HistPoint[];
+  sc_brent_ratio: HistPoint[];
+  spr: HistPoint[];
+  days_of_supply: HistPoint[];
+  usdcny: number | null;
+  note: string;
+}
+export interface OilScoreData {
+  schema_version: number;
+  date: string; oil_score: number | null; signal: string | null; confidence: string;
+  hist?: HistPoint[];
+  coverage: number;
+  mode: string;
+  dimensions: Record<string, { score: number; weight: number; effective_weight?: number; hist?: HistPoint[] }>;
+  dimension_order?: OilDimensionMeta[];
+  indicators: OilIndicator[];
+  top_positive_drivers: string[]; top_negative_drivers: string[];
+  structure?: OilStructure;
+  data_quality: string; updated: string;
+  stale?: boolean;
+  source_status?: Array<{
+    key: string; label: string; status: "fresh" | "stale" | "missing";
+    latest_period: string | null; age_days?: number | null; max_age_days?: number | null;
+  }>;
+}
+// 布伦特连续（OIL）日K收盘序列：评分卡旁油价近1年走势
+export interface BrentHistData {
+  symbol: string;
+  points: HistPoint[];
+  fetched_at: string | null;
+  stale?: boolean;
+}
+// 实时油价（腾讯 hf_ 行情）
+export interface OilSpotQuote {
+  name: string;
+  price: number;
+  change_pct: number | null;
+  prev_close: number | null;
+  high: number | null;
+  low: number | null;
+  time: string;
+  date: string;
+}
+export interface OilSpotData {
+  brent: OilSpotQuote | null;
+  wti: OilSpotQuote | null;
+  ng: OilSpotQuote | null;
+  fetched_at: string | null;
+  stale?: boolean;
+}
+
 // ---- 全球预期概率（Polymarket + Kalshi 双源，globalpercent 移植） ----
 export interface PulseMarket {
   question: string | null;
@@ -1080,6 +1143,7 @@ export interface BondsSegmentRow {
   segment: string;
   score: number;
   drivers: BondsSegmentDriver[];
+  hist?: BondsSeriesPoint[];
   invalidation: string;
   anchor_tenor?: string;
   carry_roll_bp_3m?: number;
@@ -1119,6 +1183,7 @@ export interface BondsFrameworkState {
   name: string;
   score: number | null;
   meaning: string;
+  hist?: BondsSeriesPoint[];
   parts: BondsFrameworkPart[];
 }
 export interface BondsFrameworkData {
@@ -1150,6 +1215,9 @@ export const api = {
   goldSpot: () => get<GoldSpotData>("/gold/spot"),
   cnGoldSpot: () => get<CnGoldSpotData>("/gold/cn-spot"),
   paxgSpot: () => get<PaxgSpotData>("/gold/paxg"),
+  oilScore: (refresh = false) => get<OilScoreData>(`/oil/score${refresh ? "?refresh=true" : ""}`),
+  oilSpot: () => get<OilSpotData>("/oil/spot"),
+  brentHist: (days = 400) => get<BrentHistData>(`/oil/brent-hist?days=${days}`),
   pulseOverview: (refresh = false) => get<PulseOverview>(`/pulse/overview${refresh ? "?refresh=true" : ""}`),
   pulseInsight: (module: string) =>
     get<PulseInsight | null>(`/pulse/insight?module=${encodeURIComponent(module)}`),

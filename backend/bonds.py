@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 import astock
 import cache_runtime
+from bisect import bisect_left
 
 BEIJING = timezone(timedelta(hours=8))
 
@@ -30,16 +31,37 @@ TENORS: list[tuple[str, str]] = [
 TENOR_ORDER = ["3月", "6月", "1年", "3年", "5年", "7年", "10年", "30年"]
 
 
-def _tail(points: list[dict], n: int = 90) -> list[dict]:
+def _tail(points: list[dict], n: int = 780) -> list[dict]:
+    """截尾到 n 点（780 日 ≈ 3 年交易日；月度指标由调用方自行截 36）。"""
     return points[-n:] if len(points) > n else points
 
 
 def _fetch_yield_frame(days: int):
-    """近 days 日的三条中债曲线（国债 / AAA 中短票 / AAA 商行债），失败返回 None。"""
-    end = datetime.now(BEIJING)
-    start = end - timedelta(days=days)
+    """近 days 日的三条中债曲线（国债 / AAA 中短票 / AAA 商行债），失败返回 None。
+
+    接口对超过约 1 年的窗口直接返回空，按 365 日分段拉取后拼接。
+    """
     ak = astock._akshare()
-    return ak.bond_china_yield(start_date=start.strftime("%Y%m%d"), end_date=end.strftime("%Y%m%d"))
+    end = datetime.now(BEIJING)
+    frames = []
+    remaining = days
+    seg_end = end
+    while remaining > 0:
+        span = min(remaining, 365)
+        seg_start = seg_end - timedelta(days=span)
+        try:
+            df = ak.bond_china_yield(start_date=seg_start.strftime("%Y%m%d"),
+                                     end_date=seg_end.strftime("%Y%m%d"))
+        except Exception:  # noqa: BLE001
+            df = None
+        if df is not None and not df.empty:
+            frames.append(df)
+        remaining -= span
+        seg_end = seg_start
+    if not frames:
+        return None
+    import pandas as pd
+    return pd.concat(frames, ignore_index=True)
 
 
 def _series_by_tenor(df, curve_name: str) -> dict[str, list[dict]]:
@@ -64,7 +86,8 @@ def _series_by_tenor(df, curve_name: str) -> dict[str, list[dict]]:
 
 
 def _curve_payload() -> dict:
-    df = _fetch_yield_frame(90)
+    # 回溯 1200 日（≈3 年交易日）：覆盖状态分 3 年回算；分位窗口仍由 _pct/_pct_at 控制。
+    df = _fetch_yield_frame(1200)
     if df is None or df.empty:
         return {}
     gov = _series_by_tenor(df, "中债国债收益率曲线")
@@ -319,7 +342,7 @@ def _index_payload() -> dict:
         return {}
     return {
         "date": pts[-1]["date"],
-        "series": _tail(pts, 250),
+        "series": _tail(pts),
         "source": "中债-新综合指数（中债估值中心，AKShare 转接）",
     }
 
@@ -354,8 +377,8 @@ def _global_payload() -> dict:
         return {}
     return {
         "date": pts[-1]["date"],
-        "series": _tail(pts, 250),
-        "spread": _tail(spread, 250),
+        "series": _tail(pts),
+        "spread": _tail(spread),
         "source": "中美国债收益率（AKShare 转接）",
     }
 
@@ -366,10 +389,54 @@ def get_global(force: bool = False) -> dict:
 
 # ——— 页面聚合 ———
 
-def get_overview(force: bool = False) -> dict:
-    """债市页一次性聚合：曲线 / 资金 / 政策锚 / 指数 / 全球对照 / 计算层。
+def _slim_curve(curve: dict) -> dict:
+    """overview 用的曲线瘦身版：整条当期曲线 + 各序列只留近 120 点。
 
-    每个子块独立失败降级（空 dict），不互相阻塞。
+    完整 3 年序列只服务框架回算（get_framework 内部直取 get_curve），
+    不随 overview 下发（裸 payload 会到 600KB+）。
+    """
+    if not curve:
+        return {}
+    return {
+        "date": curve.get("date"),
+        "curve": curve.get("curve"),
+        "yields": {k: v[-120:] for k, v in (curve.get("yields") or {}).items()},
+        "spreads": {k: v[-120:] for k, v in (curve.get("spreads") or {}).items()},
+        "credit": {k: v[-120:] for k, v in (curve.get("credit") or {}).items()},
+        "source": curve.get("source"),
+    }
+
+
+def _slim_funding(funding: dict) -> dict:
+    if not funding:
+        return {}
+    return {
+        "date": funding.get("date"),
+        "series": {k: v[-120:] for k, v in (funding.get("series") or {}).items()},
+        "source": funding.get("source"),
+    }
+
+
+def _slim_positioning(pos: dict) -> dict:
+    if not pos:
+        return {}
+    return {
+        "date": pos.get("date"),
+        "contracts": [
+            {**{k: v for k, v in c.items() if k != "oi_hist"},
+             "oi_hist": (c.get("oi_hist") or [])[-120:]}
+            for c in (pos.get("contracts") or [])
+        ],
+        "source": pos.get("source"),
+        "method": pos.get("method"),
+    }
+
+
+def get_overview(force: bool = False) -> dict:
+    """债市页一次性聚合：曲线 / 资金 / 政策锚 / 指数 / 全球对照 / 计算层 / 量仓。
+
+    每个子块独立失败降级（空 dict），不互相阻塞；序列裁到近 120 点控体积，
+    完整 3 年序列由 /bonds/framework 与 /bonds/segments 端点按需提供。
     """
     curve = get_curve(force=force)
     shibor = get_shibor()
@@ -379,14 +446,142 @@ def get_overview(force: bool = False) -> dict:
     calc = get_calc()
     positioning = get_positioning()
     return {
-        "curve": curve,
-        "funding": shibor,
+        "curve": _slim_curve(curve),
+        "funding": _slim_funding(shibor),
         "policy": policy,
-        "index": index,
-        "global": globe,
+        "index": {"date": index.get("date"), "series": (index.get("series") or [])[-120:],
+                  "source": index.get("source")} if index else {},
+        "global": {"date": globe.get("date"), "series": (globe.get("series") or [])[-120:],
+                   "spread": (globe.get("spread") or [])[-120:], "source": globe.get("source")} if globe else {},
         "calc": calc,
-        "positioning": positioning,
+        "positioning": _slim_positioning(positioning),
     }
+
+
+# ——— 宏观长序列补齐（供框架 3 年回算；与 market.get_macro 的短序列独立）———
+# 数据缺口：market 层部分指标（社融存量同比、DR007-OMO 利差）只有当期几个月到 140 日，
+# 不够 3 年回算。这里用可回溯的公开源重建：
+# - 社融存量同比：官方存量表（当期 7 个月）作锚 + shrzgm 月增量（2015 起）回推存量，算同比；
+# - 资金利率-政策锚利差：东财银行间拆借隔夜（2004 起）× OMO 7D 利率时间表。
+
+_OMO_SCHEDULE = [  # 7 天逆回购操作利率（公开市场业务公告，生效日 → 利率%）
+    ("2020-03-30", 2.20), ("2022-01-17", 2.10), ("2022-08-15", 2.00),
+    ("2023-06-13", 1.90), ("2023-08-15", 1.80), ("2024-07-22", 1.70),
+    ("2024-09-27", 1.50), ("2025-05-08", 1.40),
+]
+
+
+def _omo_on(date: str) -> float | None:
+    rate = None
+    for effective, value in _OMO_SCHEDULE:
+        if effective <= date:
+            rate = value
+        else:
+            break
+    return rate
+
+
+def _afre_stock_payload() -> dict:
+    """社融存量同比（3 年+）：官方存量锚 + shrzgm 月增量回推。
+
+    官方表只给最新 7 个月的存量/同比；shrzgm 增量自 2015 年完整。
+    以官方最新存量为锚逐月倒扣增量得到存量序列，同比由存量直接算出，
+    与官方公布的当月同比交叉验证（偏差 <0.2pp 视为通过）。
+    """
+    try:
+        import macro_fetch
+        official = macro_fetch.social_financing_stock() or {}
+    except Exception:  # noqa: BLE001
+        official = {}
+    anchor_date = anchor_level = None
+    if official.get("stock_level_hist"):
+        pts = sorted(official["stock_level_hist"], key=lambda p: p["date"])
+        anchor_date, anchor_level = pts[-1]["date"], pts[-1]["v"]
+    if not anchor_date:
+        return {}
+    ak = astock._akshare()
+    df = ak.macro_china_shrzgm()
+    if df is None or df.empty:
+        return {}
+    flows: dict[str, float] = {}
+    for _, r in df.iterrows():
+        m = str(r["月份"])
+        # '202604' → '2026-04'（补零，与官方存量表日期对齐）
+        d = f"{m[:4]}-{m[4:6].zfill(2)}" if len(m) == 6 else m
+        try:
+            flows[d] = float(r["社会融资规模增量"])
+        except (TypeError, ValueError):
+            continue
+    if anchor_date not in flows and not any(p["date"] == anchor_date for p in official.get("stock_level_hist", [])):
+        return {}
+    # 官方存量月份优先（避免增量源滞后引入误差），其余月份由后一月存量倒扣当月增量回推
+    levels: dict[str, float] = {p["date"]: p["v"] for p in official.get("stock_level_hist", [])}
+    months = sorted({*flows.keys(), *levels.keys()})
+    months = [m for m in months if m <= anchor_date]
+    for i in range(len(months) - 2, -1, -1):
+        m = months[i]
+        if m in levels:
+            continue
+        nxt = months[i + 1]
+        base = levels.get(nxt)
+        if base is None or m not in flows:
+            continue
+        levels[m] = round(base - flows[m] / 10000.0, 4)  # 增量亿元 → 万亿元
+    # 同比（万亿口径直接比值）；官方公布月份优先采用官方值（回推在两端累积误差 ~1pp）
+    official_growth = {p["date"]: p["v"] for p in official.get("hist", [])}
+    hist = []
+    for m in sorted(levels):
+        year_ago = f"{int(m[:4]) - 1}-{m[5:]}"
+        if year_ago not in levels or levels[year_ago] <= 0:
+            continue
+        v = official_growth.get(m, round((levels[m] / levels[year_ago] - 1) * 100, 2))
+        hist.append({"date": m, "v": v})
+    hist = hist[-36:]
+    if len(hist) < 24:
+        return {}
+    dev = [abs(p["v"] - official_growth[p["date"]]) for p in hist[-7:] if p["date"] in official_growth]
+    return {
+        "date": hist[-1]["date"],
+        "hist": hist,
+        "value": hist[-1]["v"],
+        "validated": (max(dev) < 1.5) if dev else None,
+        "source": "人民银行存量表 + 社融增量回推（官方同比优先）",
+    }
+
+
+def get_afre_stock(force: bool = False) -> dict:
+    return cache_runtime.get("bonds:afre", _afre_stock_payload, valid=lambda v: bool(v.get("hist")), ttl=24 * 3600, force=force)
+
+
+def _ib_overnight_payload() -> dict:
+    """银行间隔夜利率 3 年序列（东财中国银行同业拆借市场·隔夜），减 OMO 得资金-政策锚利差。"""
+    ak = astock._akshare()
+    df = ak.rate_interbank(market="中国银行同业拆借市场", symbol="Shibor人民币", indicator="隔夜")
+    if df is None or df.empty:
+        return {}
+    cutoff = (datetime.now(BEIJING) - timedelta(days=1200)).strftime("%Y-%m-%d")
+    hist = []
+    for _, r in df.iterrows():
+        d = str(r.get("报告日") or "")[:10]
+        try:
+            v = float(r.get("利率"))
+        except (TypeError, ValueError):
+            continue
+        if d < cutoff or v != v:
+            continue
+        omo = _omo_on(d)
+        hist.append({"date": d, "v": round(v, 4), "spread_bp": round((v - omo) * 100, 1) if omo else None})
+    if len(hist) < 100:
+        return {}
+    return {
+        "date": hist[-1]["date"],
+        "series": _tail(hist),
+        "source": "东财·银行间同业拆借隔夜 × 人民银行 OMO 7D",
+    }
+
+
+def get_ib_overnight(force: bool = False) -> dict:
+    return cache_runtime.get("bonds:ib_on", _ib_overnight_payload, valid=lambda v: bool(v.get("series")), ttl=6 * 3600, force=force)
 
 
 # ——— 研究框架层：八状态仪表盘 ———
@@ -422,6 +617,71 @@ def _score_from_pct(pct: float | None, direction: str) -> float | None:
     return _clamp(s if direction == "up" else -s)
 
 
+def _pct_at(hist: list, idx: int, n: int = 60) -> float | None:
+    """hist[idx] 在其前 n 期窗口内的分位（0-1）。历史回算用：禁止用未来数据。"""
+    vals = [p["v"] for p in (hist or [])[: idx + 1][-n:] if isinstance(p.get("v"), (int, float))]
+    if len(vals) < 8:
+        return None
+    cur = vals[-1]
+    rank = sum(1 for v in vals if v <= cur)
+    return rank / len(vals)
+
+
+def _score_at_vals(values: list[float], idx: int, direction: str, n: int = 60) -> float | None:
+    """滚动分位映射（回算热路径：直接吃值序列，禁止用未来数据）。"""
+    window = values[: idx + 1][-n:]
+    if len(window) < 8:
+        return None
+    cur = window[-1]
+    rank = sum(1 for v in window if v <= cur)
+    return _score_from_pct(rank / len(window), direction)
+
+
+def _state_hist(parts: list[dict], max_points: int = 740) -> list[dict]:
+    """逐期回算状态分（近 3 年≈740 个交易日；月度指标约 36 点，不足按可用长度）。
+
+    每个 part 用自身 hist（date→v）按滚动 60 期窗口分位映射成 [-2,+2]
+    （direction 存于 part["_direction"]），逐日期对可用指标加权。只用当期及
+    以前的数据，无前视。
+    """
+    all_dates: set[str] = set()
+    for p in parts:
+        for pt in p.get("hist") or []:
+            if pt.get("date"):
+                all_dates.add(str(pt["date"]))
+    dates = sorted(all_dates)
+    # 预展开：每个 part 的 (方向, 权重, 日期→值, 有序日期, 完整序列)。
+    # 序列只建一次，循环里按序号切片，避免逐日期重建。
+    expanded = []
+    for p in parts:
+        h = [(str(pt.get("date")), pt.get("v")) for pt in (p.get("hist") or [])
+             if pt.get("date") is not None and pt.get("v") is not None]
+        if not h:
+            continue
+        order = [d for d, _ in h]
+        lookup = dict(h)
+        expanded.append((p.get("_direction", "up"), p.get("weight", 1.0), lookup, order,
+                         list(lookup.values())))
+    out: list[dict] = []
+    for d in dates:
+        num = den = 0.0
+        for direction, weight, lookup, order, values in expanded:
+            v = lookup.get(d)
+            if v is None:
+                continue
+            idx = bisect_left(order, d)  # order 有序，等价于 index(d) 但 O(log n)
+            if idx >= len(order) or order[idx] != d:
+                continue
+            s = _score_at_vals(values, idx, direction)
+            if s is None:
+                continue
+            num += s * weight
+            den += weight
+        if den > 0:
+            out.append({"date": d, "v": round(_clamp(num / den), 3)})
+    return out[-max_points:]
+
+
 def _macro_state(cn: dict) -> dict:
     """Macro：增长/通胀/信用对债券的方向读数（基本面越弱越利好债券）。"""
     parts: list[dict] = []
@@ -434,9 +694,9 @@ def _macro_state(cn: dict) -> dict:
         s = _score_from_pct(pct, direction)
         if s is None:
             return
-        hist = [{"date": p.get("date"), "v": p.get("v")} for p in (ind.get("hist") or [])[-60:]]
+        hist = [{"date": p.get("date"), "v": p.get("v")} for p in (ind.get("hist") or [])]
         parts.append({"key": key, "label": label, "pct": round(pct, 2), "score": round(s, 2),
-                      "weight": weight, "hist": hist})
+                      "weight": weight, "hist": hist, "_direction": direction})
 
     add("pmi", "制造业 PMI（越弱越利好债）", "down", 1.2)
     add("gdp", "GDP 同比", "down", 1.0)
@@ -448,9 +708,11 @@ def _macro_state(cn: dict) -> dict:
         return {}
     tw = sum(p["weight"] for p in parts)
     score = _clamp(sum(p["score"] * p["weight"] for p in parts) / tw)
+    hist = _state_hist(parts)
     return {
         "key": "macro", "name": "宏观与通胀", "score": round(score, 2),
         "meaning": "增长/通胀/信用边际变化（正分=基本面偏弱，利好债券）",
+        "hist": hist,
         "parts": parts,
     }
 
@@ -467,13 +729,23 @@ def _policy_state(cn: dict) -> dict:
         s = _score_from_pct(pct, direction)
         if s is None:
             return
-        hist = [{"date": p.get("date"), "v": p.get("v")} for p in (ind.get("hist") or [])[-60:]]
+        hist = [{"date": p.get("date"), "v": p.get("v")} for p in (ind.get("hist") or [])]
         parts.append({"key": key, "label": label, "pct": round(pct, 2), "score": round(s, 2),
-                      "weight": weight, "hist": hist})
+                      "weight": weight, "hist": hist, "_direction": direction})
 
     add("social_financing_stock", "社融存量同比（越高越利好债）", "up", 1.0)
     add("fiscal_revenue_expenditure", "财政收支差额同比（扩张越强越利好债）", "down", 0.8)
     add("special_bond_issuance", "专项债发行（供给增=利率债供给压力，利空债）", "down", 0.8)
+    # 社融存量同比：market 层只有 7 个月；换成重建的 3 年序列
+    afre = get_afre_stock() or {}
+    for p in parts:
+        if p["key"] == "social_financing_stock" and afre.get("hist"):
+            p["hist"] = afre["hist"]
+            p["label"] = "社融存量同比（3 年重建，越高越利好债）"
+            pct = _pct(afre["hist"])
+            s = _score_from_pct(pct, "up")
+            if s is not None:
+                p["pct"], p["score"] = round(pct, 2), round(s, 2)
     if not parts:
         return {}
     tw = sum(p["weight"] for p in parts)
@@ -481,6 +753,7 @@ def _policy_state(cn: dict) -> dict:
     return {
         "key": "policy", "name": "政策与融资", "score": round(score, 2),
         "meaning": "货币/财政/政府债净供给的方向读数（正分=条件对债券友好）",
+        "hist": _state_hist(parts),
         "parts": parts,
     }
 
@@ -488,25 +761,34 @@ def _policy_state(cn: dict) -> dict:
 def _funding_state(cn: dict) -> dict:
     """Funding：资金价格相对政策锚的偏离（越便宜越利好债券）。
 
-    复用 market 宏观层的两个现成序列：
-    - dr007_policy_spread：DR007 - 7 天逆回购利率（bp），资金价格与政策锚的偏离；
-    - ncd_aaa_spread：AAA 存单 1Y - 政策利率（bp），银行边际负债成本压力。
+    - 隔夜-OMO 利差：本层 get_ib_overnight 重建的 3 年日频序列（东财拆借隔夜 × OMO 时间表）；
+    - 存单-政策利率利差：market 宏观层 ncd_aaa_spread（短序列，仅当期分位参与）。
     """
     parts: list[dict] = []
-    for key, label, weight in (
-        ("dr007_policy_spread", "DR007 - OMO 7D 利差（bp）", 1.4),
-        ("ncd_aaa_spread", "AAA 存单 1Y - 政策利率（bp）", 1.0),
+    ib = get_ib_overnight() or {}
+    spread = [{"date": p["date"], "v": p["spread_bp"]} for p in (ib.get("series") or [])
+              if p.get("spread_bp") is not None]
+    if spread:
+        pct = _pct(spread)
+        s = _score_from_pct(pct, "down")  # 利差分位越低 = 资金越松
+        if s is not None:
+            parts.append({"key": "ib_overnight_omo", "label": "银行间隔夜 - OMO 7D 利差（bp）",
+                          "pct": round(pct, 2), "score": round(s, 2), "weight": 1.4,
+                          "hist": spread, "_direction": "down"})
+    for key, label, weight, direction in (
+        ("dr007_policy_spread", "DR007 - OMO 7D 利差（bp）", 0.6, "down"),
+        ("ncd_aaa_spread", "AAA 存单 1Y - 政策利率（bp）", 1.0, "down"),
     ):
         ind = cn.get(key)
         if not ind:
             continue
         pct = _pct(ind.get("hist"))
-        s = _score_from_pct(pct, "down")  # 利差分位越低 = 资金越松
+        s = _score_from_pct(pct, direction)
         if s is None:
             continue
-        hist = [{"date": p.get("date"), "v": p.get("v")} for p in (ind.get("hist") or [])[-60:]]
+        hist = [{"date": p.get("date"), "v": p.get("v")} for p in (ind.get("hist") or [])]
         parts.append({"key": key, "label": label, "pct": round(pct, 2), "score": round(s, 2),
-                      "weight": weight, "hist": hist})
+                      "weight": weight, "hist": hist, "_direction": direction})
     if not parts:
         return {}
     tw = sum(p["weight"] for p in parts)
@@ -514,6 +796,7 @@ def _funding_state(cn: dict) -> dict:
     return {
         "key": "funding", "name": "资金面", "score": round(score, 2),
         "meaning": "资金价格相对政策锚的偏离（正分=资金偏松，利好债券）",
+        "hist": _state_hist(parts),
         "parts": parts,
     }
 
@@ -527,12 +810,15 @@ def _supply_state(cn: dict) -> dict:
     s = _score_from_pct(pct, "down")
     if s is None:
         return {}
-    hist = [{"date": p.get("date"), "v": p.get("v")} for p in (ind.get("hist") or [])[-60:]]
+    hist = [{"date": p.get("date"), "v": p.get("v")} for p in (ind.get("hist") or [])]
+    parts = [{"key": "special_bond_issuance", "label": "专项债发行（亿元）",
+              "pct": round(pct, 2), "score": round(s, 2), "weight": 1.0, "hist": hist,
+              "_direction": "down"}]
     return {
         "key": "supply_demand", "name": "供需与机构行为", "score": round(s, 2),
         "meaning": "政府债供给节奏代理（正分=供给压力偏小）；机构行为维度需人工/AI 结合托管数据补足",
-        "parts": [{"key": "special_bond_issuance", "label": "专项债发行（亿元）",
-                   "pct": round(pct, 2), "score": round(s, 2), "weight": 1.0, "hist": hist}],
+        "hist": _state_hist(parts),
+        "parts": parts,
     }
 
 
@@ -552,7 +838,7 @@ def _curve_tp_state(curve: dict, index: dict) -> dict:
         if s is None:
             continue
         parts.append({"key": key, "label": label, "pct": round(pct, 2), "score": round(s, 2),
-                      "weight": weight, "hist": hist[-60:]})
+                      "weight": weight, "hist": hist, "_direction": "up"})
     # 中债指数动量：债价趋势确认（近 20 日涨跌幅在自身 60 日窗口的分位）
     series = (index.get("series") or []) if index else []
     if len(series) >= 60:
@@ -562,11 +848,12 @@ def _curve_tp_state(curve: dict, index: dict) -> dict:
         rank = sum(1 for w in windows if w <= mom)
         pct = rank / len(windows)
         s = _clamp((pct - 0.5) * 4.0)
-        # 动量序列：滚动 20 日涨跌幅（近 60 点）
+        # 动量序列：滚动 20 日涨跌幅（可回算全长度）
         mom_hist = [{"date": series[i]["date"], "v": round((vals[i] / vals[i - 20] - 1) * 100, 3)}
-                    for i in range(max(20, len(series) - 60), len(series))]
+                    for i in range(20, len(series))]
         parts.append({"key": "index_mom_20d", "label": "中债指数 20 日动量（%）",
-                      "pct": round(pct, 2), "score": round(s, 2), "weight": 1.0, "hist": mom_hist})
+                      "pct": round(pct, 2), "score": round(s, 2), "weight": 1.0,
+                      "hist": mom_hist, "_direction": "up"})
     if not parts:
         return {}
     tw = sum(p["weight"] for p in parts)
@@ -574,6 +861,7 @@ def _curve_tp_state(curve: dict, index: dict) -> dict:
     return {
         "key": "curve_tp", "name": "曲线与风险补偿", "score": round(score, 2),
         "meaning": "期限利差与债价动量的市场读数（正分=风险补偿偏足 / 趋势偏多）",
+        "hist": _state_hist(parts),
         "parts": parts,
     }
 
@@ -595,15 +883,16 @@ def _credit_state(curve: dict, cn: dict) -> dict:
         if s is None:
             continue
         parts.append({"key": key, "label": label, "pct": round(pct, 2), "score": round(s, 2),
-                      "weight": weight, "hist": hist[-60:]})
+                      "weight": weight, "hist": hist, "_direction": "up"})
     ind = cn.get("credit_spread_aaa")
     if ind:
         pct = _pct(ind.get("hist"))
         s = _score_from_pct(pct, "up")
         if s is not None:
-            hist = [{"date": p.get("date"), "v": p.get("v")} for p in (ind.get("hist") or [])[-60:]]
+            hist = [{"date": p.get("date"), "v": p.get("v")} for p in (ind.get("hist") or [])]
             parts.append({"key": "credit_spread_aaa", "label": "宏观层 AAA 信用利差（bp）",
-                          "pct": round(pct, 2), "score": round(s, 2), "weight": 1.0, "hist": hist})
+                          "pct": round(pct, 2), "score": round(s, 2), "weight": 1.0,
+                          "hist": hist, "_direction": "up"})
     if not parts:
         return {}
     tw = sum(p["weight"] for p in parts)
@@ -611,6 +900,7 @@ def _credit_state(curve: dict, cn: dict) -> dict:
     return {
         "key": "credit", "name": "信用利差", "score": round(score, 2),
         "meaning": "信用风险补偿的市场读数（正分=利差补偿偏足）",
+        "hist": _state_hist(parts),
         "parts": parts,
     }
 
@@ -627,7 +917,7 @@ def _positioning_payload() -> dict:
     ak = astock._akshare()
     from datetime import date
     end = date.today().strftime("%Y%m%d")
-    start = (date.today() - timedelta(days=500)).strftime("%Y%m%d")
+    start = (date.today() - timedelta(days=1200)).strftime("%Y%m%d")
     out = []
     for sym, label in _FUT_SYMBOLS:
         try:
@@ -648,7 +938,7 @@ def _positioning_payload() -> dict:
         dates = [str(d)[:10] for d in df["日期"].tolist()]
         # 持仓走势（近 120 点，与 oi/vol 等长切片；日期对齐过滤后的长度）
         n = min(len(oi), len(dates))
-        oi_hist = [{"date": dates[len(dates) - n + i], "v": oi[len(oi) - n + i]} for i in range(n)][-120:]
+        oi_hist = [{"date": dates[len(dates) - n + i], "v": oi[len(oi) - n + i]} for i in range(n)][-780:]
         out.append({
             "symbol": sym, "label": label,
             "date": dates[-1],
@@ -688,7 +978,7 @@ def _positioning_state() -> dict:
         s = _clamp(-(c["oi_pct_1y"] - 0.5) * 4.0)
         parts.append({"key": c["symbol"], "label": f"{c['label']}主力持仓分位",
                       "pct": c["oi_pct_1y"], "score": round(s, 2), "weight": 1.0,
-                      "hist": (c.get("oi_hist") or [])[-120:]})
+                      "hist": c.get("oi_hist") or [], "_direction": "down"})
     if not parts:
         return {
             "key": "positioning", "name": "仓位与拥挤度", "score": None,
@@ -700,6 +990,7 @@ def _positioning_state() -> dict:
     return {
         "key": "positioning", "name": "仓位与拥挤度", "score": round(score, 2),
         "meaning": "国债期货持仓分位（正分=持仓偏低/不拥挤，利好债券；负分=拥挤偏高）",
+        "hist": _state_hist(parts),
         "parts": parts,
     }
 
@@ -713,12 +1004,14 @@ def _global_state(globe: dict) -> dict:
     s = _score_from_pct(pct, "up")  # 中美利差分位越高 = 外部约束越松
     if s is None:
         return {}
+    parts = [{"key": "cn_us_10y", "label": "中美 10Y 利差（bp）",
+              "pct": round(pct, 2), "score": round(s, 2), "weight": 1.0,
+              "hist": spread, "_direction": "up"}]
     return {
         "key": "global", "name": "海外与汇率", "score": round(s, 2),
         "meaning": "中美 10Y 利差的市场读数（正分=外部利率约束偏松）",
-        "parts": [{"key": "cn_us_10y", "label": "中美 10Y 利差（bp）",
-                   "pct": round(pct, 2), "score": round(s, 2), "weight": 1.0,
-                   "hist": spread[-60:]}],
+        "hist": _state_hist(parts),
+        "parts": parts,
     }
 
 
@@ -744,6 +1037,14 @@ def _framework_payload() -> dict:
         _global_state(globe),
     ]
     states = [s for s in states if s]
+    # payload 瘦身：part 级 hist 只留近 60 点（弹层趋势图用）；状态级 hist 已是近 3 年。
+    for s in states:
+        for p in s.get("parts") or []:
+            h = p.get("hist")
+            if isinstance(h, list) and len(h) > 60:
+                p["hist"] = h[-60:]
+            p.pop("_direction", None)
+        s.pop("_direction", None)
     scored = [s for s in states if s.get("score") is not None]
 
     notes = [
@@ -804,15 +1105,22 @@ _SEGMENT_INVALIDATION: dict[str, str] = {
 
 
 def _segments_payload() -> dict:
-    """分品种评分：状态驱动分 + carry/roll 静态锚 + 失效条件。"""
+    """分品种评分：状态驱动分 + carry/roll 静态锚 + 失效条件 + 逐期回算趋势。"""
     fw = get_framework() or {}
     states = {s["key"]: s for s in fw.get("states", []) if s.get("score") is not None}
     calc = get_calc() or {}
     rows_by_tenor = {r["tenor"]: r for r in calc.get("rows", [])}
 
+    # 各状态历史得分的公共日期轴（取全状态日期并集，用于品种分回算；近 3 年）
+    all_dates: set[str] = set()
+    for s in states.values():
+        for pt in s.get("hist") or []:
+            if pt.get("date"):
+                all_dates.add(str(pt["date"]))
+    dates = sorted(all_dates)[-740:]
+
     rows = []
     for seg, weights in _SEGMENT_WEIGHTS.items():
-        drivers = []
         contrib = 0.0
         tw = 0.0
         for key, w in weights.items():
@@ -834,10 +1142,25 @@ def _segments_payload() -> dict:
              "weight": weights[k]}
             for k, v in sorted_states[:3]
         ]
+        # 逐期回算：每个日期对可用状态加权（与当期同口径）
+        hist_maps = {k: {str(p["date"]): p["v"] for p in (states[k].get("hist") or [])}
+                     for k in weights if k in states and states[k].get("hist")}
+        hist = []
+        for d in dates:
+            num = den = 0.0
+            for k, w in weights.items():
+                v = hist_maps.get(k, {}).get(d)
+                if v is None:
+                    continue
+                num += v * w
+                den += w
+            if den > 0:
+                hist.append({"date": d, "v": round(_clamp(num / den * 1.6), 3)})
         row: dict = {
             "segment": seg,
             "score": round(score, 2),
             "drivers": drivers,
+            "hist": hist,
             "invalidation": _SEGMENT_INVALIDATION[seg],
         }
         anchor = _SEGMENT_ANCHOR.get(seg)

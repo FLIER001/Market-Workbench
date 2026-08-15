@@ -9,6 +9,7 @@ import { StockData } from "@/pages/StockData";
 import { Liquidity } from "@/pages/Liquidity";
 import { Macro } from "@/pages/Macro";
 import { Gold } from "@/pages/Gold";
+import { Oil } from "@/pages/Oil";
 import { Bonds } from "@/pages/Bonds";
 import { Pulse } from "@/pages/Pulse";
 import { Watchlist } from "@/pages/Watchlist";
@@ -39,6 +40,7 @@ export const router = createBrowserRouter([
       { path: "/stock-data", element: <StockData /> },
       { path: "/macro", element: <Macro /> },
       { path: "/gold", element: <Gold /> },
+      { path: "/oil", element: <Oil /> },
       { path: "/bonds", element: <Bonds /> },
       { path: "/pulse", element: <Pulse /> },
       { path: "/liquidity", element: <Liquidity /> },

@@ -27,6 +27,7 @@ import newsradar
 import cache_runtime
 import bonds
 import gold_score
+import oil
 import sector_scores
 import sw_level2_scores
 
@@ -170,6 +171,10 @@ TOOLS: list[dict] = [
     _t("query_gold_score",
        "查黄金多维评分：总分/信号 + 五维（机会成本/资金仓位/避险/结构性需求/趋势确认）+ 正负贡献因子。",
        example="黄金现在什么评分、哪些因子在拖累 → query_gold_score()"),
+    _t("query_oil_score",
+       "查油价多维评分：总分/信号 + 七维（边际物理稀缺/供给弹性/炼化需求/计价环境/风险溢价/仓位/趋势）"
+       "+ 正负贡献因子 + Brent-WTI/SC比率/SPR/需求天数结构层。",
+       example="原油现在什么评分、库存和供给端什么状态 → query_oil_score()"),
     _t("query_bonds_curve",
        "查中债国债收益率曲线（3M-30Y 关键期限）+ 期限利差（10Y-1Y 等）+ AAA 信用利差的历史序列。",
        example="当前收益率曲线形态、期限利差在什么位置 → query_bonds_curve()"),
@@ -646,6 +651,35 @@ def _gold_score(args: dict):
     }
 
 
+def _oil_score(args: dict):
+    """油价评分：总分/信号 + 七维得分 + 指标明细（裁掉 hist）+ 结构层最新值。"""
+    d = oil.get_oil_score() or {}
+    if not d.get("oil_score"):
+        return {"error": "油价评分暂不可用"}
+    st = d.get("structure") or {}
+
+    def _last(points):
+        pts = points or []
+        return pts[-1].get("v") if pts else None
+    return {
+        "date": d.get("date"), "score": d.get("oil_score"),
+        "signal": d.get("signal"), "confidence": d.get("confidence"),
+        "coverage": d.get("coverage"),
+        "dimensions": {k: v.get("score") for k, v in (d.get("dimensions") or {}).items()},
+        "indicators": [{k: i.get(k) for k in ("label", "dimension", "value_text", "score", "date")}
+                       for i in (d.get("indicators") or [])],
+        "top_positive_drivers": d.get("top_positive_drivers"),
+        "top_negative_drivers": d.get("top_negative_drivers"),
+        "structure": {
+            "brent_wti": _last(st.get("brent_wti")),
+            "sc_brent_ratio": _last(st.get("sc_brent_ratio")),
+            "spr_kb": _last(st.get("spr")),
+            "days_of_supply": _last(st.get("days_of_supply")),
+        },
+        "data_quality": d.get("data_quality"),
+    }
+
+
 def _bonds_curve(args: dict):
     """债市曲线：当期整条曲线 + 各利差只留最新值与近 40 点走势。"""
     d = bonds.get_curve() or {}
@@ -674,6 +708,21 @@ def _bonds_framework(args: dict):
     return {
         "date": d.get("date"), "states": slim, "coverage": d.get("coverage"),
         "method": d.get("method"),
+    }
+
+
+def _bonds_segments(args: dict):
+    """分品种评分：模型侧裁掉 hist 趋势与 part 明细，只留分数/驱动/锚/失效条件。"""
+    d = bonds.get_segments() or {}
+    rows = d.get("rows") or []
+    if not rows:
+        return {"error": "分品种评分暂不可用"}
+    slim = [{k: r.get(k) for k in ("segment", "score", "drivers", "invalidation",
+                                   "anchor_tenor", "carry_roll_bp_3m", "breakeven_bp_3m")}
+            for r in rows]
+    return {
+        "date": d.get("date"), "rows": slim,
+        "method": d.get("method"), "notes": d.get("notes"),
     }
 
 
@@ -763,12 +812,13 @@ _HANDLERS = {
     "query_liquidity_composite": _liquidity_composite,
     "query_sector_scores": _sector_scores,
     "query_gold_score": _gold_score,
+    "query_oil_score": _oil_score,
     "query_bonds_curve": _bonds_curve,
     "query_bonds_overview": _bonds_overview,
     "query_bonds_framework": _bonds_framework,
     "query_bonds_calc": lambda a: bonds.get_calc() or {"error": "债市计算层暂不可用"},
     "query_bonds_positioning": lambda a: bonds.get_positioning() or {"error": "国债期货量仓暂不可用"},
-    "query_bonds_segments": lambda a: bonds.get_segments() or {"error": "分品种评分暂不可用"},
+    "query_bonds_segments": _bonds_segments,
 }
 
 

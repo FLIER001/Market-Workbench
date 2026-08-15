@@ -967,8 +967,18 @@ def _pct_rank(series: list[float], current: float) -> float:
 
 
 def _score_history(rows: list[tuple[str, float]], reference: list[float] | None = None) -> list[tuple[str, float]]:
-    ref = reference or [v for _, v in rows]
-    return [(d, _pct_rank(ref, v) * 100) for d, v in rows]
+    """逐点扩展窗口分位：每个历史时点只用截至当日的数据，避免前视偏差。
+
+    reference 仅约束参照窗口的截止范围（如近 5 年），窗口左端仍随时间推进；
+    最后一点的分位与当前实盘评分一致。"""
+    values = [v for _, v in rows]
+    ref = reference or values
+    ref_limit = len(ref)
+    out: list[tuple[str, float]] = []
+    for i, (d, v) in enumerate(rows):
+        end = min(i + 1, ref_limit)
+        out.append((d, _pct_rank(values[:end], v) * 100))
+    return out
 
 
 def _crowding_cap(score: float, level_pct: float, rising: bool) -> float:
@@ -1007,7 +1017,9 @@ def _dimension_score_history(parts: list[tuple[str, float]], score_histories: di
 
 
 def _append_current_score(hist: list[dict], current_date: str, score: float) -> None:
-    """把当前计算值作为独立时点放入趋势，避免覆盖最近观测日。"""
+    """把当前计算值作为独立时点放入趋势，避免覆盖最近观测日。
+
+    周末/节假日计算的分数落到最近已有观测日，避免历史里出现非交易日时点。"""
     point = {"date": current_date, "v": score}
     if hist and hist[-1]["date"] == current_date:
         hist[-1] = point
@@ -1141,7 +1153,7 @@ def _load_gold_snapshot():
 
 
 def _build() -> dict:
-    current_date = datetime.now(BEIJING).strftime("%Y-%m-%d")
+    wall_date = datetime.now(BEIJING).strftime("%Y-%m-%d")
     _SOURCE_STATUS.clear()
     fred_real = _fred_series("DFII10", 1300)             # G01 长历史/兜底/交叉校验
     treasury_real = _treasury_real_yield_10y()            # G01 财政部当年日度主源
@@ -1233,11 +1245,10 @@ def _build() -> dict:
             crowd_note = f"仓位处于历史 {level_pct * 100:.0f}% 分位，触发拥挤度上限 {capped:.0f}"
         ind = _mk_indicator("g04_comex", cot, capped, sig[-1],
                             crowd_note or "CFTC Disaggregated COT 管理基金净多头/未平仓合约")
-        sig_ref = sig[-260:]
-        level_ref = [v for _, v in cot[-260:]]
+        level_values = [v for _, v in cot]
         ind["_score_hist"] = [
-            (cot[i + 4][0], _crowding_cap(_pct_rank(sig_ref, value) * 100,
-                                          _pct_rank(level_ref, cot[i + 4][1]), value > 0))
+            (cot[i + 4][0], _crowding_cap(_pct_rank(sig[:i + 1], value) * 100,
+                                          _pct_rank(level_values[:i + 5], cot[i + 4][1]), value > 0))
             for i, value in enumerate(sig)
         ]
         indicators.append(ind); scored_keys["g04_comex"] = ind
@@ -1262,8 +1273,10 @@ def _build() -> dict:
         ind = _mk_indicator("g05_stress", ofr, score, sig[-1], state_note)
         real_dates, dxy_dates = [d for d, _ in real], [d for d, _ in dxy]
         stress_hist = []
-        for day, value in zip([d for d, _ in ofr[60:]], sig):
-            score_at = _pct_rank(sig, value) * 100
+        sig_dates = [d for d, _ in ofr[60:]]
+        for i, (day, value) in enumerate(zip(sig_dates, sig)):
+            # 逐点扩展窗口分位：只用截至当日的信号，避免前视
+            score_at = _pct_rank(sig[:i + 1], value) * 100
             ri, di = bisect_right(real_dates, day) - 1, bisect_right(dxy_dates, day) - 1
             if ri >= 20 and di >= 20 and real[ri][1] > real[ri - 20][1] and dxy[di][1] > dxy[di - 20][1]:
                 score_at = min(score_at, 50)
@@ -1292,6 +1305,17 @@ def _build() -> dict:
     # G07：SHAUPM折 USD/oz − LBMA AM，20日均值对3年滚动中位数的偏离。
     if len(sge_pm) > 130 and len(lbma_am) > 130 and fx:
         fx_map = dict(fx)
+        # 汇率序列起点晚于 SGE 时，用最近已知汇率前向补齐，避免溢价序列缺日
+        # （20日均值窗口被拉稀为 25-34 个日历日的混合窗口）。
+        fx_days = sorted(fx_map)
+        first_fx = fx_days[0]
+        for d, _ in sge_pm:
+            if d < first_fx and d not in fx_map:
+                fx_map[d] = fx_map[first_fx]
+            elif d not in fx_map:
+                i = bisect_right(fx_days, d) - 1
+                if i >= 0:
+                    fx_map[d] = fx_map[fx_days[i]]
         lbma_map = dict(lbma_am)
         prem: list[tuple[str, float]] = []
         for d, cny_g in sge_pm:
@@ -1354,6 +1378,8 @@ def _build() -> dict:
         [(ind["key"], ind["effective_weight"]) for ind in scored], score_histories,
         {ind["key"]: ind["effective_weight"] for ind in scored},
     )
+    # 观测日 = 已有趋势的最近观测日（周末/节假日计算沿用上一观测日，不制造非交易日时点）
+    current_date = total_hist[-1]["date"] if total_hist else wall_date
     if total is not None:
         _append_current_score(total_hist, current_date, total)
     dims: dict[str, dict] = {}
@@ -1366,7 +1392,7 @@ def _build() -> dict:
         score = round(sum(s * part_w for s, part_w in got) / w, 1)
         hist = _dimension_score_history(parts, score_histories,
                                         {k: scored_keys[k]["effective_weight"] for k, _ in parts if k in scored_keys})
-        _append_current_score(hist, current_date, score)
+        _append_current_score(hist, hist[-1]["date"] if hist else wall_date, score)
         dims[name] = {"score": score, "weight": _DIM_WEIGHT[name],
                       "effective_weight": round(w, 4), "hist": hist}
 

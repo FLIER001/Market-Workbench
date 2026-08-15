@@ -126,16 +126,22 @@ function FrameworkPanel({ fw }: { fw?: BondsFrameworkData }) {
             <button
               key={s.key}
               onClick={() => setOpen(s)}
-              className="rounded-xl border border-border/60 bg-background/30 p-3 text-left transition-colors hover:border-primary/40"
+              className="rounded-xl border border-border/60 bg-background/30 p-3.5 text-left transition-colors hover:border-primary/40"
             >
-              <div className="mb-1.5 flex items-center justify-between gap-2">
-                <span className="text-xs font-medium">{s.name}</span>
-                <span className={cn("text-sm font-bold tabular-nums", tone.text)}>
-                  {s.score == null ? "—" : (s.score > 0 ? "+" : "") + s.score.toFixed(2)}
+              <div className="flex items-start justify-between gap-3">
+                <span className="text-xs font-medium leading-snug">{s.name}</span>
+                <span className="flex flex-col items-end leading-tight">
+                  <span className={cn("text-lg font-bold tabular-nums", tone.text)}>
+                    {s.score == null ? "—" : (s.score > 0 ? "+" : "") + s.score.toFixed(2)}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">{tone.label}</span>
                 </span>
               </div>
-              <StateBar score={s.score} />
-              <div className={cn("mt-1 text-[10px]", tone.text)}>{tone.label}</div>
+              {s.hist && s.hist.length > 1 && (
+                <div className="mt-2">
+                  <Sparkline data={s.hist} height={44} valueSuffix="" />
+                </div>
+              )}
             </button>
           );
         })}
@@ -227,35 +233,30 @@ function SegmentPanel({ seg }: { seg?: BondsSegmentsData }) {
         {seg.rows.map((r: BondsSegmentRow) => {
           const tone = STATE_TONE(r.score);
           return (
-            <div key={r.segment} className="rounded-xl border border-border/60 bg-background/30 p-3">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-semibold">{r.segment}</span>
-                <span className={cn("text-sm font-bold tabular-nums", tone.text)}>
-                  {r.score > 0 ? "+" : ""}{r.score.toFixed(2)}
+            <div key={r.segment} className="rounded-xl border border-border/60 bg-background/30 p-3.5">
+              <div className="flex items-start justify-between gap-3">
+                <span className="text-sm font-semibold">{r.segment}</span>
+                <span className="flex flex-col items-end leading-tight">
+                  <span className={cn("text-lg font-bold tabular-nums", tone.text)}>
+                    {r.score > 0 ? "+" : ""}{r.score.toFixed(2)}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">{tone.label}</span>
                 </span>
               </div>
-              <StateBar score={r.score} />
-              <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
-                <span>{tone.label}</span>
-                {r.carry_roll_bp_3m != null && (
-                  <span className={r.carry_roll_bp_3m >= 0 ? "text-success" : "text-danger"}>
-                    静态 carry+roll {r.carry_roll_bp_3m >= 0 ? "+" : ""}{r.carry_roll_bp_3m.toFixed(0)} bp / 3M
-                  </span>
-                )}
-              </div>
-              {r.drivers.length > 0 && (
-                <div className="mt-1.5 space-y-0.5 border-t border-border/40 pt-1.5">
-                  {r.drivers.slice(0, 3).map((d) => (
-                    <div key={d.state} className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
-                      <span className="truncate">{d.state}</span>
-                      <span className={cn("shrink-0 tabular-nums", d.contribution >= 0 ? "text-success/80" : "text-danger/80")}>
-                        {d.contribution >= 0 ? "+" : ""}{d.contribution.toFixed(2)}
-                      </span>
-                    </div>
-                  ))}
+              {r.hist && r.hist.length > 1 && (
+                <div className="mt-2">
+                  <Sparkline data={r.hist} height={44} valueSuffix="" />
                 </div>
               )}
-              <p className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground/70" title={r.invalidation}>
+              {r.carry_roll_bp_3m != null && (
+                <div className="mt-1.5 text-[11px]">
+                  <span className="text-muted-foreground">静态 carry+roll：</span>
+                  <span className={cn("font-medium tabular-nums", r.carry_roll_bp_3m >= 0 ? "text-success" : "text-danger")}>
+                    {r.carry_roll_bp_3m >= 0 ? "+" : ""}{r.carry_roll_bp_3m.toFixed(0)} bp / 3M
+                  </span>
+                </div>
+              )}
+              <p className="mt-2 border-t border-border/40 pt-2 text-[10px] leading-relaxed text-muted-foreground/70" title={r.invalidation}>
                 <AlertCircle className="mr-0.5 inline h-3 w-3 align-[-1px]" />失效：{r.invalidation}
               </p>
             </div>
