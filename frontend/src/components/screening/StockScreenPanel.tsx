@@ -67,17 +67,27 @@ interface TaskData {
 const EMPTY: TaskData = { question: "", answer: "", tools: [], started: false };
 const TASK_KEY = backgroundTaskKey("stock-screen", "nl");
 
-export function StockScreenPanel() {
+export function StockScreenPanel({ prefill }: { prefill?: string | null }) {
   const task = useBackgroundTask<TaskData>(TASK_KEY, EMPTY);
   const running = task.status === "running";
   const err = task.status === "error" ? task.error : null;
   const { question, answer, tools, started } = task.data;
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const prefillUsed = useRef(false);
 
   useEffect(() => {
     if (started && !running) inputRef.current?.focus();
   }, [started, running]);
+
+  // 外部带参跳转进来时填入输入框，不自动发送（避免误触发一次 LLM 调用）
+  useEffect(() => {
+    if (prefill && !prefillUsed.current && inputRef.current) {
+      inputRef.current.value = prefill;
+      prefillUsed.current = true;
+      inputRef.current?.focus();
+    }
+  }, [prefill]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });

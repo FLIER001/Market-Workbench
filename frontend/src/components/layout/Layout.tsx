@@ -3,7 +3,8 @@ import { Link, Outlet, useLocation } from "react-router-dom";
 import {
   Activity, Radar, LayoutGrid, Wallet, Settings, Search,
   Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github, Globe,
-  Star, FileText, Droplets, Loader2, PieChart, Coins, Gauge, Landmark, Flame,
+  Star, FileText, Droplets, Loader2, PieChart, Coins, Gauge, Landmark, Flame, Scale,
+  ChevronDown, type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
@@ -19,15 +20,25 @@ import appPackage from "../../../package.json";
 const APP_VERSION = `v${appPackage.version}`;
 const REPO_URL = "https://github.com/FLIER001/Vibe-Research";
 
-const NAV = [
+type NavItem = { to: string; icon: LucideIcon; label: string; match?: string };
+type NavNode = NavItem & { children?: NavItem[] };
+
+const NAV: NavNode[] = [
   { to: "/daily-review", icon: Activity, label: "市场全景" },
+  {
+    to: "/allocation",
+    icon: Scale,
+    label: "择时配置",
+    children: [
+      { to: "/macro", icon: Globe, label: "宏观面" },
+      { to: "/liquidity", icon: Droplets, label: "资金面" },
+    ],
+  },
   { to: "/pulse", icon: Gauge, label: "全球预期" },
-  { to: "/macro", icon: Globe, label: "宏观面" },
-  { to: "/liquidity", icon: Droplets, label: "资金面" },
   { to: "/intel", icon: Radar, label: "资讯" },
   { to: "/watchlist", icon: Star, label: "自选" },
   { to: "/portfolio", icon: Wallet, label: "持仓" },
-  { to: "/sectors", icon: LayoutGrid, label: "板块研究", match: "/sectors" },
+  { to: "/sectors", icon: LayoutGrid, label: "行业研究", match: "/sectors" },
   { to: "/screening", icon: PieChart, label: "标的筛选", match: "/screening" },
   { to: "/bonds", icon: Landmark, label: "债市" },
   { to: "/gold", icon: Coins, label: "黄金" },
@@ -41,6 +52,9 @@ export function Layout() {
   const nav = useNavigate();
   const user = loadUser();
   const [collapsed, setCollapsed] = useState(() => storageGet("vr-sidebar") === "collapsed");
+  const [allocationOpen, setAllocationOpen] = useState(() =>
+    pathname.startsWith("/allocation") || pathname === "/macro" || pathname === "/liquidity",
+  );
   const [stockCode, setStockCode] = useState("");
   const [stockSuggestions, setStockSuggestions] = useState<SearchResult[]>([]);
   const [showStockSuggestions, setShowStockSuggestions] = useState(false);
@@ -140,7 +154,69 @@ export function Layout() {
 
         {/* Nav */}
         <nav className={cn("flex-1 space-y-1 overflow-auto", collapsed ? "p-1.5" : "p-2.5")}>
-          {NAV.map(({ to, icon: Icon, label, match }) => {
+          {NAV.map((item) => {
+            if ("children" in item && item.children) {
+              const { to, icon: Icon, label, children } = item;
+              const active = pathname.startsWith(to);
+              return (
+                <div key={to}>
+                  <div
+                    className={cn(
+                      "flex items-center rounded-lg text-sm transition-colors",
+                      active
+                        ? "bg-primary/15 font-medium text-primary shadow-glow"
+                        : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+                    )}
+                  >
+                    <Link
+                      to={to}
+                      title={collapsed ? label : undefined}
+                      className={cn(
+                        "flex flex-1 items-center",
+                        collapsed ? "justify-center p-2.5" : "gap-2.5 px-3 py-2.5",
+                      )}
+                    >
+                      <Icon className="h-4 w-4 shrink-0" />
+                      {!collapsed && label}
+                    </Link>
+                    {!collapsed && (
+                      <button
+                        onClick={() => setAllocationOpen((open) => !open)}
+                        className="mr-1.5 rounded p-1.5 opacity-70 transition-opacity hover:opacity-100"
+                        title={allocationOpen ? "收起子板块" : "展开子板块"}
+                      >
+                        <ChevronDown
+                          className={cn(
+                            "h-3.5 w-3.5 transition-transform duration-200",
+                            allocationOpen && "rotate-180",
+                          )}
+                        />
+                      </button>
+                    )}
+                  </div>
+                  {!collapsed && allocationOpen && (
+                    <div className="mt-0.5 space-y-0.5 pl-4">
+                      {children.map(({ to: childTo, icon: ChildIcon, label: childLabel }) => (
+                        <Link
+                          key={childTo}
+                          to={childTo}
+                          className={cn(
+                            "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors",
+                            pathname === childTo
+                              ? "bg-primary/15 font-medium text-primary shadow-glow"
+                              : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+                          )}
+                        >
+                          <ChildIcon className="h-4 w-4 shrink-0" />
+                          {childLabel}
+                        </Link>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            const { to, icon: Icon, label, match } = item;
             const active = match ? pathname.startsWith(match) : pathname === to;
             return (
               <div key={to}>

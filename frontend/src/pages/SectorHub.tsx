@@ -32,15 +32,15 @@ export function SectorHub() {
   return (
     <div>
       <PageHeader
-        title="板块研究"
-        subtitle="板块评分 · 行业评分 · 板块分析"
+        title="行业研究"
+        subtitle="板块评分 · 行业评分 · 行业分析"
       />
 
       <div className="mb-4 grid max-w-lg grid-cols-3 gap-2 rounded-xl border border-border/50 bg-muted/20 p-1.5">
         {([
           ["plates", "板块评分"],
           ["industries", "行业评分"],
-          ["analysis", "板块分析"],
+          ["analysis", "行业分析"],
         ] as const).map(([id, label]) => (
           <button
             key={id}

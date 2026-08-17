@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { FundScreenPanel } from "@/components/funds/FundScreenPanel";
 import { StockScreenPanel } from "@/components/screening/StockScreenPanel";
@@ -19,10 +20,25 @@ const loadTab = (): ScreenTab => {
 };
 
 export function Screening() {
-  const [tab, setTab] = useState<ScreenTab>(loadTab);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlTab = searchParams.get("tab") === "stocks" ? "stocks" : null;
+  const urlQuery = searchParams.get("q");
+  // 带参跳转（如板块详情「带这批代码去筛选」）一次性消费，刷新不重复触发
+  const [tab, setTab] = useState<ScreenTab>(urlTab ?? loadTab);
+  const [prefill, setPrefill] = useState<string | null>(urlQuery);
+  const consumed = urlTab || urlQuery ? false : true;
+
+  if (!consumed) {
+    try {
+      searchParams.delete("tab");
+      searchParams.delete("q");
+      setSearchParams(searchParams, { replace: true });
+    } catch { /* ignore */ }
+  }
 
   const switchTab = (next: ScreenTab) => {
     setTab(next);
+    setPrefill(null);
     try {
       localStorage.setItem(TAB_KEY, next);
     } catch { /* ignore */ }
@@ -55,7 +71,7 @@ export function Screening() {
         ))}
       </div>
 
-      {tab === "funds" ? <FundScreenPanel /> : <StockScreenPanel />}
+      {tab === "funds" ? <FundScreenPanel /> : <StockScreenPanel prefill={prefill} />}
     </div>
   );
 }

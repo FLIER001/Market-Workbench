@@ -2,14 +2,14 @@
 
 # Market Workbench
 
-[![Version](https://img.shields.io/badge/version-1.6.0-1f6feb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.7.0-1f6feb)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)](https://react.dev/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
 面向 A 股研究、兼顾港美市场的本地自托管市场研究工作台。它把行情、财务、公告、资金面、宏观、板块和公开资讯放到一个界面；AI 连接由用户自行配置，产品不提供荐股或交易指令。
 
-> 本项目基于 [simonlin1212/Vibe-Research](https://github.com/simonlin1212/Vibe-Research) 二次开发，保留其公开数据与可插拔 AI 接入基础。当前版本主要增加宏观与资金面、黄金与基金、基金持仓与观察列表、行业及主题板块研究和评分、账号隔离的数据同步，以及数据来源和时效状态展示。
+> 本项目基于 [simonlin1212/Vibe-Research](https://github.com/simonlin1212/Vibe-Research) 二次开发，保留其公开数据与可插拔 AI 接入基础。当前版本主要增加宏观与资金面、黄金与基金、基金持仓与观察列表、行业研究与主题板块评分、账号隔离的数据同步，以及数据来源和时效状态展示。
 
 ![市场全景](docs/screenshots/daily-review.png)
 
@@ -31,9 +31,10 @@
 | 全球预期 | Polymarket 与 Kalshi 的公开概率数据、来源、刷新时间、历史走势与 AI 研判卡 |
 | 宏观面 | 宏观指标、模块评分与总分卡（回测权重）、数据来源与更新时间 |
 | 资金面 | 中美流动性综合得分、流动性信号与市场资金指标 |
+| 择时配置 | 自上而下决策链：宏观×流动性×市场确认合成择时分（5 档风险等级 + 风险预算倍率 + 现金底仓），输出股/债/商品/现金目标权重与调仓建议 |
 | 个股数据 | A 股、港股、美股行情；K 线、估值、财务、公告、研报与资金面 |
 | 自选 | 股票与 ETF 分组、实时行情与研究入口 |
-| 板块 | 产业链研究、申万行业与主题板块观察 |
+| 行业研究 | 产业链纵深（环节图谱/利润分布/瓶颈传导）、申万行业与主题板块评分 |
 | 黄金 | 黄金多维评分、现货行情、PAXG 国内金价折算与历史走势 |
 | 债市 | 收益率曲线与期限/信用利差、Shibor、LPR、中美利差、八状态框架与分品种评分 |
 | 油价 | 5 维 8 指标多维评分（EIA/CFTC/GPR）、期限结构与裂解价差代理 |

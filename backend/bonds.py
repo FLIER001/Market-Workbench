@@ -12,7 +12,10 @@
 
 from __future__ import annotations
 
+import json
 import math
+import os
+import time
 from datetime import datetime, timedelta, timezone
 
 import astock
@@ -20,6 +23,29 @@ import cache_runtime
 from bisect import bisect_left
 
 BEIJING = timezone(timedelta(hours=8))
+DATA_DIR = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
+
+
+def _snapshot_path(name: str) -> str:
+    return os.path.join(DATA_DIR, f"bonds_{name}.json")
+
+
+def _load_snapshot(name: str) -> dict | None:
+    try:
+        with open(_snapshot_path(name), encoding="utf-8") as handle:
+            value = json.load(handle)
+        return value if isinstance(value, dict) else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _save_snapshot(name: str, value: dict) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    path = _snapshot_path(name)
+    temp = path + ".tmp"
+    with open(temp, "w", encoding="utf-8") as handle:
+        json.dump(value, handle, ensure_ascii=False)
+    os.replace(temp, path)
 
 # 曲线关键期限（年 → DataFrame 列名）
 TENORS: list[tuple[str, str]] = [
@@ -432,19 +458,27 @@ def _slim_positioning(pos: dict) -> dict:
     }
 
 
-def get_overview(force: bool = False) -> dict:
+def _overview_payload(force: bool = False) -> dict:
     """债市页一次性聚合：曲线 / 资金 / 政策锚 / 指数 / 全球对照 / 计算层 / 量仓。
 
     每个子块独立失败降级（空 dict），不互相阻塞；序列裁到近 120 点控体积，
     完整 3 年序列由 /bonds/framework 与 /bonds/segments 端点按需提供。
     """
     curve = get_curve(force=force)
-    shibor = get_shibor()
-    policy = get_policy()
-    index = get_index()
-    globe = get_global()
-    calc = get_calc()
-    positioning = get_positioning()
+    shibor = get_shibor(force=force)
+    policy = get_policy(force=force)
+    index = get_index(force=force)
+    globe = get_global(force=force)
+    calc = get_calc(force=force)
+    positioning = get_positioning(force=force)
+    blocks = (curve, shibor, policy, index, globe, calc, positioning)
+    states = [block.get("cache_state") for block in blocks if isinstance(block, dict)]
+    cache_state = next((state for state in ("refreshing", "error", "stale") if state in states), "fresh")
+    errors = list(dict.fromkeys(
+        str(block.get("refresh_error")) for block in blocks
+        if isinstance(block, dict) and block.get("refresh_error")
+    ))
+    cached_at = [block.get("cached_at") for block in blocks if isinstance(block, dict) and block.get("cached_at")]
     return {
         "curve": _slim_curve(curve),
         "funding": _slim_funding(shibor),
@@ -455,7 +489,33 @@ def get_overview(force: bool = False) -> dict:
                    "spread": (globe.get("spread") or [])[-120:], "source": globe.get("source")} if globe else {},
         "calc": calc,
         "positioning": _slim_positioning(positioning),
+        "cache_state": cache_state,
+        "cached_at": min(cached_at) if cached_at else None,
+        "refresh_error": "；".join(errors) or None,
     }
+
+
+def get_overview(force: bool = False) -> dict:
+    def build() -> dict:
+        value = _overview_payload(force=force)
+        # Child caches refresh independently. Wait in this background build so the
+        # page snapshot is only replaced after they settle, never by an old aggregate.
+        deadline = time.time() + 60
+        while value.get("cache_state") == "refreshing" and time.time() < deadline:
+            time.sleep(1)
+            value = _overview_payload(force=False)
+        return value
+
+    return cache_runtime.get(
+        "bonds:overview", build,
+        valid=lambda value: value.get("cache_state") != "refreshing" and any(
+            value.get(key) for key in ("curve", "funding", "policy", "index", "global")
+        ),
+        ttl=3600,
+        warm=lambda: _load_snapshot("overview"),
+        save=lambda value: _save_snapshot("overview", value),
+        force=force,
+    )
 
 
 # ——— 宏观长序列补齐（供框架 3 年回算；与 market.get_macro 的短序列独立）———
@@ -1062,7 +1122,13 @@ def _framework_payload() -> dict:
 
 
 def get_framework(force: bool = False) -> dict:
-    return cache_runtime.get("bonds:framework", _framework_payload, valid=lambda v: bool(v.get("states")), ttl=3600, force=force)
+    return cache_runtime.get(
+        "bonds:framework", _framework_payload,
+        valid=lambda v: bool(v.get("states")), ttl=3600,
+        warm=lambda: _load_snapshot("framework"),
+        save=lambda value: _save_snapshot("framework", value),
+        force=force,
+    )
 
 
 # ——— 分品种评分层：短债 / 中短债 / 长债 / 超长债 / 信用债 / 杠杆套息 ——
@@ -1200,4 +1266,10 @@ def _segments_payload() -> dict:
 
 
 def get_segments(force: bool = False) -> dict:
-    return cache_runtime.get("bonds:segments", _segments_payload, valid=lambda v: bool(v.get("rows")), ttl=3600, force=force)
+    return cache_runtime.get(
+        "bonds:segments", _segments_payload,
+        valid=lambda v: bool(v.get("rows")), ttl=3600,
+        warm=lambda: _load_snapshot("segments"),
+        save=lambda value: _save_snapshot("segments", value),
+        force=force,
+    )

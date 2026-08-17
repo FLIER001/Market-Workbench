@@ -492,6 +492,134 @@ export interface PlateScoresData {
   };
 }
 
+// ---- 产业链纵深（静态链结构 + 动态财务中位数） ----
+export interface ChainCatalogItem {
+  key: string;
+  sector_key: string;
+  label: string;
+  length: "长链" | "短链";
+  node_count: number;
+  company_count: number;
+  bottleneck_count: number;
+}
+export interface ChainCatalogData {
+  version: string;
+  chains: ChainCatalogItem[];
+}
+export interface ChainCompany { code: string; name: string }
+export interface ChainNode {
+  id: string;
+  stage: "上游" | "中游" | "下游";
+  name: string;
+  description: string;
+  companies: ChainCompany[];
+}
+export type ChainLinkKind = "supply" | "cross";
+export interface ChainLink {
+  from: string;
+  to: string;
+  kind: ChainLinkKind;
+}
+export interface ChainBottleneck {
+  node_id: string;
+  type: string;
+  type_label: string;
+  severity: 1 | 2;
+  detail: string;
+  domestic_share: string;
+  signal: string;
+}
+export interface ChainTransmissionNote {
+  from: string;
+  to: string;
+  what: string;
+  mechanism: string;
+  status: "传导中" | "待验证";
+  updated_on: string;
+}
+export interface ChainTransmission {
+  direction: string;
+  notes: ChainTransmissionNote[];
+  watch_quotes: string[];
+}
+export interface ChainProfitRow {
+  code: string;
+  name: string;
+  node_id: string;
+  node_name: string;
+  stage: "上游" | "中游" | "下游";
+  period: string | null;
+  gross_margin: number | null;
+  net_margin: number | null;
+  roe: number | null;
+  revenue_yoy: number | null;
+  stale: boolean;
+}
+export interface ChainNodeStat {
+  node_id: string;
+  node_name: string;
+  stage: "上游" | "中游" | "下游";
+  company_count: number;
+  sample_count: number;
+  gross_margin: number | null;
+  net_margin: number | null;
+  roe: number | null;
+  revenue_yoy: number | null;
+}
+export interface ChainSettledNode {
+  node_id: string;
+  node_name: string;
+  stage: string;
+  gross_margin: number | null;
+  roe: number | null;
+  note: string;
+}
+export interface ChainReportRow {
+  title: string;
+  date: string;
+  org: string;
+  industry: string;
+  info_code: string;
+}
+export interface IndustryChainData {
+  schema_version: number;
+  generated_at: string;
+  chain_version: string;
+  structure: {
+    key: string;
+    sector_key: string;
+    label: string;
+    length: "长链" | "短链";
+    summary: string;
+    nodes: ChainNode[];
+    links: ChainLink[];
+    bottlenecks: ChainBottleneck[];
+    transmission: ChainTransmission;
+  };
+  profit: {
+    rows: ChainProfitRow[];
+    node_stats: ChainNodeStat[];
+    settled_node: ChainSettledNode | null;
+    periods: string[];
+    stale_count: number;
+    source: string;
+    error?: string;
+    stale?: boolean;
+    refresh_error?: string;
+  };
+  reports: {
+    count: number;
+    rows: ChainReportRow[];
+    source: string;
+    error?: string;
+    stale?: boolean;
+    refresh_error?: string;
+  };
+  cache_state?: "fresh" | "stale" | "refreshing" | "error";
+  cached_at?: string | null;
+  refresh_error?: string | null;
+}
+
 // 全球市场（美股 / 港股，移植自 global-stock-data · 东财域内源）
 export interface GlobalIndex {
   key: string; name: string; region: string;
@@ -1167,6 +1295,9 @@ export interface BondsOverviewData {
   global?: BondsGlobalData;
   calc?: BondsCalcData;
   positioning?: BondsPositioningData;
+  cache_state?: "fresh" | "stale" | "refreshing" | "error";
+  cached_at?: string | null;
+  refresh_error?: string | null;
 }
 
 // —— 债市研究框架：八状态仪表盘 ——
@@ -1198,6 +1329,117 @@ export interface BondsFrameworkData {
   refresh_error?: string | null;
 }
 
+// —— 择时 + 大类资产配置（资管层）——
+export interface TimingPart {
+  name: string;
+  weight: number;
+  score: number | null;
+  value?: string | null; // 当前读数文本（市场确认子项）
+  contribution: number | null;
+}
+export interface TimingGate {
+  rule: string;
+  desc: string;
+  capped_to?: string;
+  raised_to?: string;
+}
+export interface TimingBlock {
+  score: number | null;
+  regime: string;
+  regime_label: string;
+  risk_budget_multiplier: number;
+  cash_floor: number;
+  recommended_action: string;
+  recommended_action_label: string;
+  gates: TimingGate[];
+  invalidation: string[];
+  text: string;
+  parts: TimingPart[];
+  hist?: HistPoint[];
+  drivers?: { name: string; contribution: number }[];
+}
+export interface MarketConfirmBlock {
+  score: number | null;
+  parts: TimingPart[];
+  hist?: HistPoint[];
+  drivers?: { name: string; contribution: number }[];
+  desc: string;
+  risk_pressure_score?: number | null;
+  breadth_score?: number | null;
+  trend_score?: number | null;
+  crowding_score?: number | null;
+}
+export interface EvidenceBlock {
+  score: number | null;
+  state?: string | null;
+  date?: string;
+  parts?: TimingPart[] | null;
+  hist?: HistPoint[];
+  source?: string;
+}
+export interface AssetScoreBlock {
+  score: number | null;
+  parts: TimingPart[];
+  drivers: { name: string; contribution: number }[];
+}
+export interface AllocationRow {
+  asset: string;
+  name: string;
+  anchor: number;
+  target: number;
+  last: number | null;
+  vs_last: number | null;
+  vs_base: number;
+  suggestion: string;
+  support: string[];
+  constraint: string[];
+  meaning: string;
+}
+export interface AllocationBlock {
+  regime: string;
+  regime_label: string;
+  anchor: Record<string, number>;
+  base_weights: Record<string, number>;
+  target_weights: Record<string, number>;
+  last_weights: Record<string, number> | null;
+  last_as_of?: string | null;
+  regime_changed: boolean;
+  rebalance_trigger: boolean;
+  rows: AllocationRow[];
+  resolved: boolean;
+  resolve_note: string;
+  asset_scores: Record<string, AssetScoreBlock>;
+  correlation: {
+    window: string;
+    stock_bond_corr_60d: number | null;
+    stock_bond_corr_120d: number | null;
+    stock_cmd_corr_60d: number | null;
+    stock_cmd_basis?: string;
+    vols?: Record<string, { vol_20d_ann: number; pct_1y: number | null }>;
+  };
+  cash_yield_note: string;
+}
+export interface AllocationData {
+  schema_version: number;
+  model_version: string;
+  as_of: string;
+  timing: TimingBlock;
+  evidence: {
+    macro: EvidenceBlock;
+    liquidity: EvidenceBlock;
+    market_confirm: MarketConfirmBlock;
+  };
+  allocation: AllocationBlock;
+  text: string;
+  method: string;
+  notes: string[];
+  updated: string;
+  cache_state?: string;
+  cached_at?: string | null;
+  data_as_of?: string | null;
+  refresh_error?: string | null;
+}
+
 export const api = {
   health: () => get<{ ok: boolean }>("/health"),
   indices: () => get<IndexQuote[]>("/indices"),
@@ -1206,6 +1448,7 @@ export const api = {
   macro: (refresh = false) => get<MacroData>(`/market/macro${refresh ? "?refresh=true" : ""}`),
   bondsCurve: (refresh = false) => get<BondsCurveData>(`/bonds/curve${refresh ? "?refresh=true" : ""}`),
   bondsOverview: (refresh = false) => get<BondsOverviewData>(`/bonds/overview${refresh ? "?refresh=true" : ""}`),
+  allocation: (refresh = false) => get<AllocationData>(`/allocation${refresh ? "?refresh=true" : ""}`),
   bondsFramework: (refresh = false) => get<BondsFrameworkData>(`/bonds/framework${refresh ? "?refresh=true" : ""}`),
   bondsCalc: (refresh = false) => get<BondsCalcData>(`/bonds/calc${refresh ? "?refresh=true" : ""}`),
   bondsPositioning: (refresh = false) => get<BondsPositioningData>(`/bonds/positioning${refresh ? "?refresh=true" : ""}`),
@@ -1279,6 +1522,9 @@ export const api = {
   plateScoresCache: () => get<PlateScoresData | null>("/plate-scores/cache"),
   plateScores: (refresh = false) =>
     get<PlateScoresData>(`/plate-scores${refresh ? "?refresh=true" : ""}`),
+  industryChains: () => get<ChainCatalogData>("/industry-chains"),
+  industryChain: (key: string, refresh = false) =>
+    get<IndustryChainData>(`/industry-chain/${encodeURIComponent(key)}${refresh ? "?refresh=true" : ""}`),
   search: (q: string) => get<SearchResult[]>(`/search?q=${encodeURIComponent(q)}`),
   myReports: () => get<MyReport[]>("/myreports"),
   uploadReport: (name: string, contentB64: string) =>

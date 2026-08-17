@@ -362,9 +362,20 @@ function CalcPanel({ calc }: { calc?: BondsCalcData }) {
 }
 
 export function Bonds() {
-  const { data, loading, revalidate } = useSWR<BondsOverviewData>("bonds-overview", (fresh) => api.bondsOverview(fresh), []);
-  const { data: fw } = useSWR<BondsFrameworkData>("bonds-framework", (fresh) => api.bondsFramework(fresh), []);
-  const { data: seg } = useSWR<BondsSegmentsData>("bonds-segments", (fresh) => api.bondsSegments(fresh), []);
+  const { data, loading, revalidating, revalidate } = useSWR<BondsOverviewData>(
+    "bonds-overview", (fresh) => api.bondsOverview(fresh), [], undefined, { persist: true },
+  );
+  const { data: fw, revalidating: fwRefreshing, revalidate: revalidateFw } = useSWR<BondsFrameworkData>(
+    "bonds-framework", (fresh) => api.bondsFramework(fresh), [], undefined, { persist: true },
+  );
+  const { data: seg, revalidating: segRefreshing, revalidate: revalidateSeg } = useSWR<BondsSegmentsData>(
+    "bonds-segments", (fresh) => api.bondsSegments(fresh), [], undefined, { persist: true },
+  );
+  const refreshing = revalidating || fwRefreshing || segRefreshing;
+  const refresh = async () => {
+    await revalidate(true);
+    await Promise.all([revalidateFw(true), revalidateSeg(true)]);
+  };
 
   const curve = data?.curve;
   const funding = data?.funding;
@@ -436,11 +447,11 @@ export function Bonds() {
             suggestions={["当前收益率曲线形态说明什么", "资金利率与政策锚的偏离怎么理解", "信用利差近期变化说明什么"]}
           />
           <button
-            onClick={() => revalidate(true)}
-            disabled={loading}
+            onClick={() => void refresh()}
+            disabled={loading || refreshing}
             className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary disabled:opacity-50"
           >
-            <RefreshCw className={loading ? "h-4 w-4 animate-spin" : "h-4 w-4"} /> 刷新
+            <RefreshCw className={loading || refreshing ? "h-4 w-4 animate-spin" : "h-4 w-4"} /> 刷新
           </button>
         </div>
       } />

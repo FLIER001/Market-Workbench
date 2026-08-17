@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   ArrowLeft,
@@ -8,6 +8,7 @@ import {
   ExternalLink,
   Landmark,
   Loader2,
+  Network,
   Radio,
   TrendingDown,
   TrendingUp,
@@ -16,6 +17,8 @@ import {
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
+import { ChainGraph } from "@/components/sectors/ChainGraph";
+import { resolveRefreshing } from "@/hooks/useSWR";
 import sectorsData from "@/data/sectors.json";
 import {
   sectorEvents,
@@ -23,7 +26,13 @@ import {
   type SectorEvent,
   type SectorWatchpoint,
 } from "@/data/sectorResearch";
-import { api, type RadarData, type RadarItem } from "@/lib/api";
+import {
+  api,
+  type ChainNodeStat,
+  type IndustryChainData,
+  type RadarData,
+  type RadarItem,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 interface RelevantNews extends RadarItem {
@@ -52,6 +61,356 @@ const eventTone = (direction: SectorEvent["direction"]) =>
     : direction === "negative"
       ? "border-success/25 bg-success/5"
       : "border-border/60 bg-muted/20";
+
+const fmtPct = (value: number | null | undefined) =>
+  value === null || value === undefined ? "—" : `${value.toFixed(1)}%`;
+
+const fmtPctSigned = (value: number | null | undefined) =>
+  value === null || value === undefined ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
+
+const severityLabel = ["", "中度制约", "强制约"];
+
+function ChainDepthSection({ chain }: { chain: IndustryChainData }) {
+  const { structure, profit, reports } = chain;
+  const [focusNode, setFocusNode] = useState<string | null>(null);
+  const profitTableRef = useRef<HTMLDivElement>(null);
+
+  const nodeById = useMemo(
+    () => new Map(structure.nodes.map((node) => [node.id, node])),
+    [structure.nodes],
+  );
+  const statById = useMemo(
+    () => new Map((profit.node_stats || []).map((stat) => [stat.node_id, stat])),
+    [profit.node_stats],
+  );
+  const bottleneckByNode = useMemo(() => {
+    const map = new Map<string, number>();
+    structure.bottlenecks.forEach((b) => map.set(b.node_id, (map.get(b.node_id) ?? 0) + 1));
+    return map;
+  }, [structure.bottlenecks]);
+  const linksOf = useMemo(() => {
+    const map = new Map<string, { from: string; to: string; kind: string }[]>();
+    structure.links.forEach((link) => {
+      for (const id of [link.from, link.to]) {
+        map.set(id, [...(map.get(id) ?? []), link]);
+      }
+    });
+    return map;
+  }, [structure.links]);
+
+  const selectNode = (nodeId: string) => {
+    setFocusNode((prev) => (prev === nodeId ? null : nodeId));
+    profitTableRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const settled = profit.settled_node;
+  const focusedNode = focusNode ? nodeById.get(focusNode) : null;
+  const focusedStat = focusNode ? statById.get(focusNode) : undefined;
+
+  return (
+    <section className="mb-6">
+      <div className="mb-3">
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold">
+          <Network className="h-4 w-4 text-primary" /> 产业链图谱
+        </h3>
+        <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+          {structure.length}｜{structure.summary}
+        </p>
+      </div>
+
+      {/* 关系图：上下/平行/交叉关系 + 选中环节联动 */}
+      <GlassCard className="mb-3">
+        <ChainGraph chain={chain} focusNode={focusNode} onSelect={selectNode} />
+      </GlassCard>
+
+      {/* 选中环节卡：环节说明 + 上下游关系 + 公司 + 去筛选 */}
+      {focusedNode && (
+        <GlassCard glow className="mb-3">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", stageTone(focusedNode.stage))}>
+              {focusedNode.stage}
+            </span>
+            <h4 className="font-semibold">{focusedNode.name}</h4>
+            {bottleneckByNode.get(focusedNode.id) && (
+              <span className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] text-warning">
+                含 {bottleneckByNode.get(focusedNode.id)} 项瓶颈
+              </span>
+            )}
+          </div>
+          <p className="text-xs leading-relaxed text-muted-foreground">{focusedNode.description}</p>
+          {(linksOf.get(focusedNode.id) ?? []).length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px]">
+              <span className="text-muted-foreground">关系</span>
+              {(linksOf.get(focusedNode.id) ?? []).map((link) => {
+                const isFrom = link.from === focusedNode.id;
+                const other = nodeById.get(isFrom ? link.to : link.from);
+                return (
+                  <button
+                    key={`${link.from}-${link.to}-${link.kind}`}
+                    onClick={() => selectNode(isFrom ? link.to : link.from)}
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 transition-colors hover:border-primary/50",
+                      link.kind === "cross"
+                        ? "border-dashed border-border/60 bg-muted/30 text-muted-foreground"
+                        : "border-border/60 bg-muted/30 text-foreground",
+                    )}
+                  >
+                    {isFrom ? <ChevronRight className="h-2.5 w-2.5" /> : <ArrowLeft className="h-2.5 w-2.5" />}
+                    {isFrom ? "供给" : "来自"}
+                    {other?.name ?? (isFrom ? link.to : link.from)}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <div className="mt-3 flex flex-wrap gap-2">
+            {focusedNode.companies.map((company) => (
+              <Link
+                key={company.code}
+                to={`/stock-data?code=${company.code}`}
+                className="group inline-flex items-center gap-2 rounded-lg border border-border/60 bg-background/30 px-3 py-2 transition-colors hover:border-primary/50 hover:bg-primary/10"
+              >
+                <span className="text-sm font-medium">{company.name}</span>
+                <span className="font-mono text-[10px] text-muted-foreground">{company.code}</span>
+                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
+              </Link>
+            ))}
+            <Link
+              to={`/screening?tab=stocks&q=${encodeURIComponent(
+                `帮我核验这些公司（${focusedNode.name}环节）：${focusedNode.companies.map((c) => c.code).join("、")}（估值分位 + 资金流向 + 解禁）`,
+              )}`}
+              className="inline-flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-sm text-primary transition-colors hover:bg-primary/20"
+            >
+              带这批代码去筛选 <ChevronRight className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+          {focusedStat && (
+            <p className="mt-2 font-mono text-[10px] text-muted-foreground">
+              环节中位：毛利率 {fmtPct(focusedStat.gross_margin)} · 净利率 {fmtPct(focusedStat.net_margin)} · ROE {fmtPct(focusedStat.roe)} · 营收同比 {fmtPctSigned(focusedStat.revenue_yoy)}
+            </p>
+          )}
+        </GlassCard>
+      )}
+      {focusNode === null && (
+        <p className="mb-3 text-center text-[11px] text-muted-foreground">
+          点击图谱中的环节卡查看上下游关系、代表公司与环节中位数（{structure.nodes.length} 个环节 · {new Set(structure.nodes.flatMap((n) => n.companies.map((c) => c.code))).size} 家公司）。
+        </p>
+      )}
+
+      {/* 利润分布 */}
+      <div ref={profitTableRef} className="mb-3">
+        <GlassCard>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h4 className="text-sm font-semibold">利润分布</h4>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                {profit.source}；报告期 {profit.periods?.join(" / ") || "—"}
+              </p>
+            </div>
+            {settled && (
+              <div className="rounded-lg border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs text-primary">
+                利润沉淀环节：<span className="font-semibold">{settled.node_name}</span>
+                （毛利率中位 {fmtPct(settled.gross_margin)} · ROE {fmtPct(settled.roe)}）
+              </div>
+            )}
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b border-border/60 text-[10px] text-muted-foreground">
+                  <th className="py-2 pr-3 font-medium">公司</th>
+                  <th className="py-2 pr-3 font-medium">环节</th>
+                  <th className="py-2 pr-3 text-right font-medium">毛利率</th>
+                  <th className="py-2 pr-3 text-right font-medium">净利率</th>
+                  <th className="py-2 pr-3 text-right font-medium">ROE</th>
+                  <th className="py-2 pr-3 text-right font-medium">营收同比</th>
+                </tr>
+              </thead>
+              <tbody>
+                {structure.nodes.map((node) => {
+                  const stat: ChainNodeStat | undefined = statById.get(node.id);
+                  const rows = (profit.rows || []).filter((row) => row.node_id === node.id);
+                  const highlighted = focusNode === node.id;
+                  return (
+                    <Fragment key={node.id}>
+                      <tr className={cn("border-b border-border/40", highlighted && "bg-primary/5")}>
+                        <td colSpan={2} className="py-2 pr-3">
+                          <span className={cn("mr-1.5 rounded-full border px-1.5 py-0.5 text-[9px]", stageTone(node.stage))}>
+                            {node.stage}
+                          </span>
+                          <span className={cn("font-semibold", highlighted && "text-primary")}>{node.name}</span>
+                        </td>
+                        <td className="py-2 pr-3 text-right font-mono">{fmtPct(stat?.gross_margin)}</td>
+                        <td className="py-2 pr-3 text-right font-mono">{fmtPct(stat?.net_margin)}</td>
+                        <td className="py-2 pr-3 text-right font-mono">{fmtPct(stat?.roe)}</td>
+                        <td className="py-2 pr-3 text-right font-mono">{fmtPctSigned(stat?.revenue_yoy)}</td>
+                      </tr>
+                      {rows.map((row) => (
+                        <tr
+                          key={row.code}
+                          className={cn(
+                            "border-b border-border/20 text-muted-foreground",
+                            highlighted && "bg-primary/5",
+                          )}
+                        >
+                          <td className="py-1.5 pr-3">
+                            <Link
+                              to={`/stock-data?code=${row.code}`}
+                              className="hover:text-primary"
+                            >
+                              {row.name} <span className="font-mono text-[10px]">{row.code}</span>
+                            </Link>
+                            {row.stale && <span className="ml-1 text-[9px] text-warning">旧值</span>}
+                          </td>
+                          <td className="py-1.5 pr-3 text-[10px]">{row.node_name}</td>
+                          <td className="py-1.5 pr-3 text-right font-mono">{fmtPct(row.gross_margin)}</td>
+                          <td className="py-1.5 pr-3 text-right font-mono">{fmtPct(row.net_margin)}</td>
+                          <td className="py-1.5 pr-3 text-right font-mono">{fmtPct(row.roe)}</td>
+                          <td className="py-1.5 pr-3 text-right font-mono">{fmtPctSigned(row.revenue_yoy)}</td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {profit.stale_count > 0 && (
+            <p className="mt-2 text-[10px] text-warning">
+              {profit.stale_count} 家公司当日抓取失败，展示的是上次成功值。
+            </p>
+          )}
+        </GlassCard>
+      </div>
+
+      {/* 短板与制约 + 景气传导 双栏 */}
+      <div className="grid gap-3 lg:grid-cols-2">
+        <GlassCard>
+          <h4 className="mb-3 text-sm font-semibold">短板与制约</h4>
+          <p className="mb-2 text-[10px] text-muted-foreground">瓶颈环节往往是超额利润与行情主线的来源；点击环节名可定位图谱。</p>
+          <div className="space-y-2">
+            {structure.bottlenecks.map((item) => {
+              const node = nodeById.get(item.node_id);
+              const highlighted = focusNode === item.node_id;
+              return (
+                <div
+                  key={item.type_label}
+                  className={cn(
+                    "rounded-lg border p-3 transition-colors",
+                    highlighted ? "border-primary/50 bg-primary/5" : "border-border/40 bg-muted/20",
+                  )}
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium">{item.type_label}</span>
+                    {node && (
+                      <button
+                        onClick={() => selectNode(node.id)}
+                        className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary hover:bg-primary/20"
+                      >
+                        {node.name}
+                      </button>
+                    )}
+                    <span className="ml-auto flex items-center gap-1">
+                      {[1, 2].map((dot) => (
+                        <span
+                          key={dot}
+                          className={cn(
+                            "h-1.5 w-1.5 rounded-full",
+                            dot <= item.severity ? "bg-warning" : "bg-muted",
+                          )}
+                        />
+                      ))}
+                      <span className="text-[10px] text-muted-foreground">{severityLabel[item.severity]}</span>
+                    </span>
+                  </div>
+                  <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{item.detail}</p>
+                  <p className="mt-1 text-[10px] text-muted-foreground">现状：{item.domestic_share}</p>
+                  <p className="mt-1 text-[10px] text-primary/80">{item.signal}</p>
+                </div>
+              );
+            })}
+          </div>
+        </GlassCard>
+
+        <GlassCard>
+          <h4 className="mb-3 text-sm font-semibold">景气传导</h4>
+          <p className="mb-2 text-[10px] text-muted-foreground">价格与订单沿链条传导：上游涨价谁吸收、谁转嫁。点击环节名可定位图谱。</p>
+          <div className="space-y-2">
+            {structure.transmission.notes.map((note) => (
+              <div key={`${note.from}-${note.to}-${note.what}`} className="rounded-lg border border-border/40 bg-muted/20 p-3">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    onClick={() => selectNode(note.from)}
+                    className="rounded bg-muted/60 px-1.5 py-0.5 text-[10px] hover:bg-primary/15 hover:text-primary"
+                  >
+                    {nodeById.get(note.from)?.name || note.from}
+                  </button>
+                  <ChevronRight className="h-3 w-3 text-muted-foreground/60" />
+                  <button
+                    onClick={() => selectNode(note.to)}
+                    className="rounded bg-muted/60 px-1.5 py-0.5 text-[10px] hover:bg-primary/15 hover:text-primary"
+                  >
+                    {nodeById.get(note.to)?.name || note.to}
+                  </button>
+                  <span className="text-xs font-medium">{note.what}</span>
+                  <span
+                    className={cn(
+                      "ml-auto rounded-full border px-2 py-0.5 text-[10px]",
+                      note.status === "传导中"
+                        ? "border-danger/30 bg-danger/10 text-danger"
+                        : "border-warning/30 bg-warning/10 text-warning",
+                    )}
+                  >
+                    {note.status}
+                  </span>
+                </div>
+                <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{note.mechanism}</p>
+                <p className="mt-1 text-right text-[10px] text-muted-foreground/70">更新于 {note.updated_on}</p>
+              </div>
+            ))}
+            {structure.transmission.watch_quotes.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                <span className="text-[10px] text-muted-foreground">跟踪指标</span>
+                {structure.transmission.watch_quotes.map((quote) => (
+                  <span key={quote} className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary">
+                    {quote}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        </GlassCard>
+      </div>
+
+      {/* 行业研报线索 */}
+      {reports && reports.rows?.length > 0 && (
+        <GlassCard className="mt-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h4 className="text-sm font-semibold">行业研报线索</h4>
+            <p className="text-[10px] text-muted-foreground">{reports.source}</p>
+          </div>
+          <div className="divide-y divide-border/40">
+            {reports.rows.map((row) => (
+              <a
+                key={row.info_code || row.title}
+                href={row.info_code ? `https://pdf.dfcfw.com/pdf/H3_${row.info_code}_1.pdf` : undefined}
+                target="_blank"
+                rel="noreferrer"
+                className="group flex items-start justify-between gap-3 py-2 first:pt-0 last:pb-0"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm group-hover:text-primary">{row.title}</p>
+                  <p className="mt-0.5 text-[10px] text-muted-foreground">{row.org} · {row.industry}</p>
+                </div>
+                <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{row.date}</span>
+              </a>
+            ))}
+          </div>
+        </GlassCard>
+      )}
+    </section>
+  );
+}
 
 function WatchpointColumn({
   title,
@@ -93,9 +452,33 @@ export function SectorDetail() {
   const [radar, setRadar] = useState<RadarData | null>(null);
   const [radarLoading, setRadarLoading] = useState(false);
   const [radarError, setRadarError] = useState<string | null>(null);
+  const [chain, setChain] = useState<IndustryChainData | null>(null);
+  const [chainLoading, setChainLoading] = useState(false);
+  const [chainError, setChainError] = useState<string | null>(null);
 
   useEffect(() => {
     setActiveNode(0);
+  }, [key]);
+
+  useEffect(() => {
+    setChainError(null);
+    if (!key) return;
+    const cacheKey = `vr-industry-chain:${key}:v1`;
+    let cached: IndustryChainData | null = null;
+    try {
+      cached = JSON.parse(localStorage.getItem(cacheKey) || "null") as IndustryChainData | null;
+      if (cached?.schema_version !== 1 || !cached.structure?.nodes?.length) cached = null;
+    } catch { cached = null; }
+    setChain(cached);
+    setChainLoading(!cached);
+    api.industryChain(key)
+      .then((first) => resolveRefreshing(first, () => api.industryChain(key)))
+      .then((next) => {
+        setChain(next);
+        try { localStorage.setItem(cacheKey, JSON.stringify(next)); } catch { /* storage unavailable */ }
+      })
+      .catch(() => setChainError(cached ? "产业链更新失败，继续展示上次缓存" : "产业链数据读取失败"))
+      .finally(() => setChainLoading(false));
   }, [key]);
 
   useEffect(() => {
@@ -230,58 +613,82 @@ export function SectorDetail() {
           </div>
         </div>
 
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {research.nodes.map((node, index) => (
-            <button
-              key={node.name}
-              onClick={() => setActiveNode(index)}
-              className={cn(
-                "rounded-xl border p-3 text-left transition-colors",
-                index === activeNode
-                  ? "border-primary/50 bg-primary/10 shadow-glow"
-                  : "border-border/50 bg-muted/20 hover:border-primary/30 hover:bg-muted/40",
-              )}
-            >
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <span className="font-mono text-[10px] text-muted-foreground">{String(index + 1).padStart(2, "0")}</span>
-                <span className={cn("rounded-full border px-2 py-0.5 text-[9px] font-medium", stageTone(node.stage))}>
-                  {node.stage}
-                </span>
-              </div>
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-semibold leading-snug">{node.name}</span>
-                <ChevronRight className={cn("h-4 w-4", index === activeNode ? "text-primary" : "text-muted-foreground/50")} />
-              </div>
-              <p className="mt-1 text-[10px] text-muted-foreground">{node.companies.length} 家代表企业</p>
-            </button>
-          ))}
-        </div>
-
-        <GlassCard glow className="mt-3">
-          <div className="mb-3">
-            <div className="flex items-center gap-2">
-              <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", stageTone(selectedNode.stage))}>
-                {selectedNode.stage}
-              </span>
-              <h4 className="font-semibold">{selectedNode.name}</h4>
-            </div>
-            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{selectedNode.description}</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {selectedNode.companies.map((company) => (
-              <Link
-                key={company.code}
-                to={`/stock-data?code=${company.code}`}
-                className="group inline-flex items-center gap-2 rounded-lg border border-border/60 bg-background/30 px-3 py-2 transition-colors hover:border-primary/50 hover:bg-primary/10"
+        <GlassCard>
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            {research.nodes.map((node, index) => (
+              <button
+                key={node.name}
+                onClick={() => setActiveNode(index)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors",
+                  index === activeNode
+                    ? "border-primary/50 bg-primary/10 text-primary"
+                    : "border-border/50 bg-muted/20 text-foreground hover:border-primary/30 hover:bg-muted/40",
+                )}
               >
-                <span className="text-sm font-medium">{company.name}</span>
-                <span className="font-mono text-[10px] text-muted-foreground">{company.code}</span>
-                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
-              </Link>
+                <span className={cn("h-1.5 w-1.5 rounded-full", node.stage === "上游" ? "bg-sky-500" : node.stage === "中游" ? "bg-violet-500" : "bg-amber-500")} />
+                {node.name}
+              </button>
             ))}
           </div>
+
+          <GlassCard glow>
+            <div className="mb-3">
+              <div className="flex items-center gap-2">
+                <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", stageTone(selectedNode.stage))}>
+                  {selectedNode.stage}
+                </span>
+                <h4 className="font-semibold">{selectedNode.name}</h4>
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{selectedNode.description}</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {selectedNode.companies.map((company) => (
+                <Link
+                  key={company.code}
+                  to={`/stock-data?code=${company.code}`}
+                  className="group inline-flex items-center gap-2 rounded-lg border border-border/60 bg-background/30 px-3 py-2 transition-colors hover:border-primary/50 hover:bg-primary/10"
+                >
+                  <span className="text-sm font-medium">{company.name}</span>
+                  <span className="font-mono text-[10px] text-muted-foreground">{company.code}</span>
+                  <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
+                </Link>
+              ))}
+              <Link
+                to={`/screening?tab=stocks&q=${encodeURIComponent(
+                  `帮我核验这些公司（${selectedNode.name}环节）：${selectedNode.companies.map((c) => c.code).join("、")}（估值分位 + 资金流向 + 解禁）`,
+                )}`}
+                className="inline-flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-sm text-primary transition-colors hover:bg-primary/20"
+              >
+                带这批代码去筛选 <ChevronRight className="h-3.5 w-3.5" />
+              </Link>
+            </div>
+          </GlassCard>
         </GlassCard>
       </section>
+
+      {chainLoading && !chain && (
+        <section className="mb-6">
+          <GlassCard>
+            <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> 正在读取产业链图谱与利润分布
+            </div>
+          </GlassCard>
+        </section>
+      )}
+      {!chainLoading && chain && <ChainDepthSection chain={chain} />}
+      {chain && (chainError || chain.cache_state === "error" || chain.profit.refresh_error || chain.reports.refresh_error) && (
+        <p className="mb-3 text-[10px] text-warning">
+          {chainError || chain.refresh_error || chain.profit.refresh_error || chain.reports.refresh_error}；当前展示上次成功缓存。
+        </p>
+      )}
+      {!chainLoading && !chain && chainError && (
+        <section className="mb-6">
+          <GlassCard>
+            <p className="py-4 text-center text-sm text-warning">{chainError}</p>
+          </GlassCard>
+        </section>
+      )}
 
       <section className="mb-6">
         <div className="mb-3">

@@ -30,6 +30,8 @@ import gold_score
 import oil
 import sector_scores
 import sw_level2_scores
+import industry_chain
+import timing_alloc
 
 # ——— schema 简写：让 20+ 个工具定义保持一屏可读 ———
 
@@ -126,6 +128,13 @@ TOOLS: list[dict] = [
        {"keywords": {"type": "array", "items": {"type": "string"}, "description": "行业关键词，如 ['光模块','算力']"},
         "days": {"type": "integer", "description": "回溯天数，默认 90"}},
        example="卖方怎么看 AI 算力赛道 → query_industry_reports(keywords=['算力','光模块'])"),
+    _t("query_industry_chain",
+       "查产业链纵深全景：上中下游环节图谱、各环节代表公司毛利率/净利率/ROE 中位数（利润分布）、"
+       "瓶颈环节（产能缺口/技术卡点/进口依赖）、景气传导（谁吸收涨价谁转嫁）、行业研报线索。"
+       "链 key 见 ai-computing（AI 算力）、humanoid（人形机器人），后续逐步扩充。",
+       {"chain": {"type": "string", "description": "链 key，如 ai-computing / humanoid"}},
+       ["chain"],
+       "AI 算力链利润沉淀在哪个环节、瓶颈在哪 → query_industry_chain(chain='ai-computing')"),
 
     # —— 市场层 ——
     _t("query_market",
@@ -198,8 +207,12 @@ TOOLS: list[dict] = [
     _t("query_bonds_segments",
        "查债市分品种评分：短债(1-3Y)/中短债(3-5Y)/长债(5-10Y)/超长债(20Y+)/信用债(AAA)/杠杆套息 六个品种，"
        "按框架 §11.2 多期限权重先验对八状态加权得出 [-2,+2] 相对分，附前三大驱动、carry+roll 静态锚与各自失效条件。"
-       "问「该配短债还是长债、信用还是利率」用这个。",
+       "问「该配短端还是长端、信用还是利率」用这个。",
        example="现在短端和长端哪个更值得配、信用债评分如何 → query_bonds_segments()"),
+    _t("query_timing_allocation",
+       "查择时与大类资产配置：宏观×流动性×市场确认合成择时分（5 档风险等级 + 风险预算倍率 + 现金底仓），"
+       "再给出股票/债券/商品/现金目标权重（合计 100%）与调仓建议。问「现在仓位该开多大、股债商品现金怎么配」用这个。",
+       example="现在市场环境偏多还是偏空、股债商品现金各配多少 → query_timing_allocation()"),
 ]
 
 TOOL_NAMES = [t["function"]["name"] for t in TOOLS]
@@ -635,6 +648,55 @@ def _sector_scores(args: dict) -> dict:
     } or {"error": "行业评分暂不可用"}
 
 
+def _industry_chain(args: dict) -> dict:
+    """产业链纵深：环节图谱 + 环节中位数利润分布 + 瓶颈 + 传导 + 研报标题。"""
+    chain = str(args.get("chain") or "")
+    try:
+        d = industry_chain.get_chain(chain) or {}
+    except KeyError as e:
+        return {"error": str(e)}
+    structure = d.get("structure") or {}
+    profit = d.get("profit") or {}
+    node_by_id = {n.get("id"): n for n in structure.get("nodes", [])}
+    node_stats = [
+        {k: s.get(k) for k in ("node_name", "stage", "company_count", "gross_margin", "net_margin", "roe", "revenue_yoy")}
+        for s in (profit.get("node_stats") or [])
+    ]
+    bottlenecks = [
+        {k: b.get(k) for k in ("type_label", "severity", "detail", "signal")}
+        for b in (structure.get("bottlenecks") or [])
+    ]
+    transmission = structure.get("transmission") or {}
+    return {
+        "label": structure.get("label"), "length": structure.get("length"),
+        "summary": structure.get("summary"),
+        "nodes": [
+            {"stage": n.get("stage"), "name": n.get("name"),
+             "companies": [c.get("name") for c in n.get("companies", [])]}
+            for n in structure.get("nodes", [])
+        ],
+        "links": [
+            {"from": (node_by_id.get(l.get("from")) or {}).get("name") or l.get("from"),
+             "to": (node_by_id.get(l.get("to")) or {}).get("name") or l.get("to"),
+             "kind": l.get("kind")}
+            for l in structure.get("links", [])
+        ],
+        "profit_nodes": node_stats,
+        "settled_node": profit.get("settled_node"),
+        "bottlenecks": bottlenecks,
+        "transmission_notes": [
+            {"from": (node_by_id.get(t.get("from")) or {}).get("name") or t.get("from"),
+             "to": (node_by_id.get(t.get("to")) or {}).get("name") or t.get("to"),
+             "what": t.get("what"),
+             "mechanism": t.get("mechanism"), "status": t.get("status")}
+            for t in (transmission.get("notes") or [])
+        ],
+        "watch_quotes": transmission.get("watch_quotes"),
+        "reports": [r.get("title") for r in ((d.get("reports") or {}).get("rows") or [])[:6]],
+        "source": f"链结构 {d.get('chain_version')}；财务 {profit.get('source')}",
+    }
+
+
 def _gold_score(args: dict):
     """黄金评分：总分/信号 + 五维得分 + 正负贡献因子各取前 5。"""
     d = gold_score.get_gold_score() or {}
@@ -777,6 +839,49 @@ def _bonds_overview(args: dict):
     return out or {"error": "债市数据暂不可用"}
 
 
+def _timing_allocation(args: dict) -> dict:
+    """择时+大类配置：结论层（档位/倍率/权重/调仓）+ 三证据分，hist 只留尾部 8 点。"""
+    d = timing_alloc.get_timing_allocation() or {}
+    t = d.get("timing") or {}
+    a = d.get("allocation") or {}
+    if not t.get("regime"):
+        return {"error": "择时配置数据暂不可用"}
+
+    def _hist(points, n=8):
+        return [(p.get("date"), p.get("v")) for p in (points or []) if isinstance(p, dict)][-n:]
+
+    ev = d.get("evidence") or {}
+    out = {
+        "as_of": d.get("as_of"),
+        "text": d.get("text"),
+        "timing": {
+            "score": t.get("score"), "regime": t.get("regime_label"),
+            "risk_budget_multiplier": t.get("risk_budget_multiplier"),
+            "cash_floor": t.get("cash_floor"),
+            "action": t.get("recommended_action_label"),
+            "gates": [g.get("desc") for g in (t.get("gates") or [])],
+            "invalidation": t.get("invalidation"),
+            "parts": t.get("parts"), "hist_recent": _hist(t.get("hist")),
+        },
+        "evidence": {k: {"score": (v or {}).get("score"), "state": (v or {}).get("state")}
+                     for k, v in ev.items() if isinstance(v, dict)},
+        "allocation": {
+            "target_weights": a.get("target_weights"),
+            "base_weights": a.get("base_weights"),
+            "rows": [{k: r.get(k) for k in ("name", "anchor", "target", "vs_last", "vs_base", "suggestion",
+                                            "support", "constraint", "meaning")}
+                     for r in (a.get("rows") or []) if isinstance(r, dict)],
+            "rebalance_trigger": a.get("rebalance_trigger"),
+            "resolved": a.get("resolved"), "resolve_note": a.get("resolve_note"),
+            "asset_scores": {k: {"score": (v or {}).get("score"), "drivers": (v or {}).get("drivers")}
+                             for k, v in (a.get("asset_scores") or {}).items() if isinstance(v, dict)},
+            "stock_bond_corr_60d": (a.get("correlation") or {}).get("stock_bond_corr_60d"),
+            "cash_yield_note": a.get("cash_yield_note"),
+        },
+    }
+    return out
+
+
 _HANDLERS = {
     "query_quote": lambda a: astock.tencent_quote([str(c) for c in a.get("codes", [])]),
     "query_valuation": lambda a: astock.full_valuation(str(a["code"])),
@@ -803,6 +908,7 @@ _HANDLERS = {
     "query_industry_reports": lambda a: _pick(
         astock.eastmoney_industry_reports(keywords=a.get("keywords"), days=int(a.get("days") or 90), max_pages=1),
         ("title", "publishDate", "orgSName", "industryName"), 20),
+    "query_industry_chain": _industry_chain,
     "query_market": _market,
     "query_news_radar": _radar,
     "search_public_news": _public_news_search,
@@ -819,6 +925,7 @@ _HANDLERS = {
     "query_bonds_calc": lambda a: bonds.get_calc() or {"error": "债市计算层暂不可用"},
     "query_bonds_positioning": lambda a: bonds.get_positioning() or {"error": "国债期货量仓暂不可用"},
     "query_bonds_segments": _bonds_segments,
+    "query_timing_allocation": _timing_allocation,
 }
 
 

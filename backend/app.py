@@ -32,6 +32,7 @@ import fund_portfolio as fpf
 import newsradar
 import portfolio as pf
 import timing
+import timing_alloc
 import users
 import market
 import gold_score as gold_score_layer
@@ -41,6 +42,7 @@ import reflection as reflect_layer
 import plate_scores as plate_scores_layer
 import sector_scores as sector_scores_layer
 import sw_level2_scores as sw_level2_layer
+import industry_chain as industry_chain_layer
 import tools as tools_layer
 import cache_runtime
 import stock_cache
@@ -691,6 +693,30 @@ def plate_scores(refresh: bool = Query(False)):
 def plate_scores_cache():
     """板块评分最近一次成功缓存；供前端在后台刷新期间即时展示。"""
     return {"data": plate_scores_layer.get_cached_plate_scores()}
+
+
+@app.get("/api/industry-chains")
+def industry_chains():
+    """产业链目录（静态主数据）：哪些板块已梳理产业链、环节与公司数量。"""
+    try:
+        return {"data": industry_chain_layer.list_chains()}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"产业链目录异常：{e}") from e
+
+
+@app.get("/api/industry-chain/{key}")
+def industry_chain(key: str, refresh: bool = Query(False)):
+    """产业链纵深聚合：图谱结构 / 各环节代表公司利润分布 / 瓶颈 / 景气传导 / 行业研报。
+
+    链结构为人工维护快照（backend/data/industry_chains.json）；利润分布按
+    同花顺财务摘要批量抓取（每日缓存，TTL 12 小时）。各块独立降级。refresh=true 强制刷新。
+    """
+    try:
+        return {"data": industry_chain_layer.get_chain(key, force=refresh)}
+    except KeyError as e:
+        raise HTTPException(404, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"产业链聚合异常：{e}") from e
 
 
 @app.get("/api/market/emotion")
@@ -1448,3 +1474,12 @@ def oil_brent_hist(days: int = Query(400, ge=60, le=1000)):
         return {"data": oil_layer.brent_daily_history(days)}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"布伦特日K异常：{e}") from e
+
+
+@app.get("/api/allocation")
+def allocation(refresh: bool = False):
+    """择时 + 大类资产配置：市场环境研判（5 档风险等级）→ 股/债/商品/现金目标权重。缓存 1 小时。"""
+    try:
+        return {"data": timing_alloc.get_timing_allocation(force=refresh)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"择时配置异常：{e}") from e

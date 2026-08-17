@@ -3,6 +3,13 @@
 本项目的版本号唯一来源是 `frontend/package.json`；后端 HTTP API、`/api/health`、
 前端界面与 MCP `serverInfo` 全部从它读取（见 `backend/version.py`）。
 
+## v1.7.0 — 2026-08-17
+
+- 新增「择时配置」页：宏观 × 流动性 × 市场确认合成择时分，5 档风险等级 + 风险预算倍率 + 现金底仓，输出股/债/商品/现金目标权重与调仓建议；四条门控规则制动，资产分缺失回退锚点组合。
+- 行业研究新增「产业链纵深」：AI 算力与人形机器人两条示范链的环节图谱、各环节财务中位数（利润沉淀）与瓶颈/景气传导（`/api/industry-chains`）。
+- 导航改为分组两级结构；「板块研究」更名「行业研究」。
+- MCP 新增 `query_industry_chain` 与 `query_timing_allocation`。
+
 ## v1.6.0 — 2026-08-15
 
 - 新增「油价」页：5 维 8 指标多维评分（EIA 库存/产量/炼厂投入、CFTC 净多头、地缘风险 GPR、美元指数、布伦特动量），含 Brent-WTI、SC 基差与裂解价差代理的结构层数据；EIA bulk zip 为主源，DEMO_KEY 限流自动退避。

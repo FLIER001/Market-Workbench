@@ -1,0 +1,380 @@
+{
+  "version": "2026-08-16.manual.2",
+  "chains": {
+    "ai-computing": {
+      "key": "ai-computing",
+      "sector_key": "ai-computing",
+      "label": "AI 算力",
+      "length": "长链",
+      "summary": "设备材料—芯片与存储—封装互连—整机—机房的长链条：算力需求从云端资本开支传导到芯片，再经封装、光互连、整机集成与供电液冷逐级放大，链条越长，环节间博弈与景气传导越值得结构性拆解。",
+      "nodes": [
+        {
+          "id": "equip",
+          "stage": "上游",
+          "name": "半导体设备与材料",
+          "description": "先进制程、封装和高速互连所需设备材料决定算力硬件的供给弹性。",
+          "companies": [
+            { "code": "688012", "name": "中微公司" },
+            { "code": "688019", "name": "安集科技" }
+          ]
+        },
+        {
+          "id": "chip",
+          "stage": "上游",
+          "name": "AI 芯片",
+          "description": "训练和推理芯片决定算力供给上限，重点观察国产生态、软件栈与客户验证。",
+          "companies": [
+            { "code": "688256", "name": "寒武纪" },
+            { "code": "688041", "name": "海光信息" }
+          ]
+        },
+        {
+          "id": "memory",
+          "stage": "上游",
+          "name": "先进存储",
+          "description": "HBM、DDR 与高速存储为模型训练和推理提供带宽与容量。",
+          "companies": [
+            { "code": "000021", "name": "深科技" },
+            { "code": "688525", "name": "佰维存储" }
+          ]
+        },
+        {
+          "id": "packaging",
+          "stage": "中游",
+          "name": "封装与 PCB",
+          "description": "先进封装、高多层 PCB 连接芯片、存储和交换网络，是扩容时的同步瓶颈。",
+          "companies": [
+            { "code": "002156", "name": "通富微电" },
+            { "code": "600584", "name": "长电科技" },
+            { "code": "002463", "name": "沪电股份" },
+            { "code": "300476", "name": "胜宏科技" }
+          ]
+        },
+        {
+          "id": "server",
+          "stage": "中游",
+          "name": "服务器与交换机",
+          "description": "整机、交换机和集群集成把芯片转化为可交付算力。",
+          "companies": [
+            { "code": "000977", "name": "浪潮信息" },
+            { "code": "000938", "name": "紫光股份" }
+          ]
+        },
+        {
+          "id": "optics",
+          "stage": "中游",
+          "name": "高速光互连",
+          "description": "光模块与光器件承担集群内外高带宽连接，速率代际和良率决定价值量。",
+          "companies": [
+            { "code": "300308", "name": "中际旭创" },
+            { "code": "300502", "name": "新易盛" },
+            { "code": "002281", "name": "光迅科技" }
+          ]
+        },
+        {
+          "id": "powercool",
+          "stage": "中游",
+          "name": "供电与液冷",
+          "description": "高功率机柜把电力、配电和液冷推向更高价值量与更严格可靠性要求。",
+          "companies": [
+            { "code": "002837", "name": "英维克" },
+            { "code": "300499", "name": "高澜股份" }
+          ]
+        },
+        {
+          "id": "dc",
+          "stage": "下游",
+          "name": "数据中心与云服务",
+          "description": "机房建设、云调度和客户上架率决定算力的最终利用率与回报。",
+          "companies": [
+            { "code": "603019", "name": "中科曙光" },
+            { "code": "603881", "name": "数据港" }
+          ]
+        }
+      ],
+      "links": [
+        { "from": "equip", "to": "chip", "kind": "supply" },
+        { "from": "equip", "to": "memory", "kind": "supply" },
+        { "from": "chip", "to": "memory", "kind": "cross" },
+        { "from": "chip", "to": "packaging", "kind": "supply" },
+        { "from": "memory", "to": "packaging", "kind": "supply" },
+        { "from": "packaging", "to": "server", "kind": "supply" },
+        { "from": "optics", "to": "server", "kind": "supply" },
+        { "from": "powercool", "to": "server", "kind": "cross" },
+        { "from": "powercool", "to": "dc", "kind": "supply" },
+        { "from": "server", "to": "dc", "kind": "supply" }
+      ],
+      "bottlenecks": [
+        {
+          "node_id": "equip",
+          "type": "进口依赖",
+          "type_label": "先进制程设备进口受限",
+          "severity": 2,
+          "detail": "高端光刻、沉积与量测设备对国产产线仍是硬约束，扩产节奏部分取决于设备到货。",
+          "domestic_share": "高端制程设备国产化率低",
+          "signal": "跟踪国产设备验证进度与晶圆厂设备招标"
+        },
+        {
+          "node_id": "chip",
+          "type": "技术卡点",
+          "type_label": "先进制程与软件栈",
+          "severity": 2,
+          "detail": "高端训练芯片制程与海外有代差，CUDA 生态迁移成本高，国产软件栈与客户验证是放量前提。",
+          "domestic_share": "高端训练芯片国产化率低",
+          "signal": "跟踪国产芯片大规模集群稳定运行与客户迁移案例"
+        },
+        {
+          "node_id": "memory",
+          "type": "进口依赖",
+          "type_label": "HBM 产能与供应",
+          "severity": 2,
+          "detail": "HBM 产能被海外原厂长协锁定，国内尚处送样验证阶段，单颗容量与堆叠代际落后。",
+          "domestic_share": "国产 HBM 未规模量产",
+          "signal": "跟踪国产 HBM 送样验证与封测配套订单"
+        },
+        {
+          "node_id": "packaging",
+          "type": "产能缺口",
+          "type_label": "先进封装 CoWoS 类产能",
+          "severity": 2,
+          "detail": "2.5D/3D 封装产能扩产周期长，海外大厂产能优先保障自身链条，国内封测厂承接外溢订单。",
+          "domestic_share": "大陆先进封装占全球份额仍低",
+          "signal": "跟踪封测厂资本开支与海外大厂产能外溢订单"
+        },
+        {
+          "node_id": "powercool",
+          "type": "产能缺口",
+          "type_label": "高功率机柜供电与液冷",
+          "severity": 1,
+          "detail": "单机柜功率密度跃升使供电与液冷从配套变为瓶颈，交付能力与可靠性验证决定扩容节奏。",
+          "domestic_share": "液冷渗透率仍处早期",
+          "signal": "跟踪智算中心液冷招标比例与交付周期"
+        }
+      ],
+      "transmission": {
+        "direction": "up_to_down",
+        "notes": [
+          {
+            "from": "chip",
+            "to": "equip",
+            "what": "扩产资本开支",
+            "mechanism": "芯片与存储扩产把订单传导给设备厂，设备收入滞后资本开支 1—2 个季度，订单能见度随长协落地提升。",
+            "status": "传导中",
+            "updated_on": "2026-08"
+          },
+          {
+            "from": "chip",
+            "to": "memory",
+            "what": "HBM 用量随芯片代际翻倍",
+            "mechanism": "新一代 AI 芯片对 HBM 容量与带宽要求翻倍，存储用量随芯片放量同步放大，涨价由芯片厂与云厂商共同吸收。",
+            "status": "传导中",
+            "updated_on": "2026-08"
+          },
+          {
+            "from": "chip",
+            "to": "optics",
+            "what": "算力集群扩容订单",
+            "mechanism": "芯片放量直接拉动 800G/1.6T 光模块需求，速率代际升级由芯片带宽需求定义，光模块厂受益于量价齐升，涨价成本主要由云厂商资本开支吸收。",
+            "status": "传导中",
+            "updated_on": "2026-08"
+          },
+          {
+            "from": "chip",
+            "to": "packaging",
+            "what": "先进封装产能预订",
+            "mechanism": "高性能芯片依赖 2.5D/3D 封装，封装产能成为芯片出货上限，代差产能稀缺时封测厂议价权上升。",
+            "status": "传导中",
+            "updated_on": "2026-08"
+          },
+          {
+            "from": "server",
+            "to": "dc",
+            "what": "整机交付与上架率",
+            "mechanism": "服务器交付到机房上架决定算力收入确认节奏；上架率不足时云厂商延迟提货，订单向上游回摆。",
+            "status": "待验证",
+            "updated_on": "2026-08"
+          },
+          {
+            "from": "powercool",
+            "to": "dc",
+            "what": "机柜功率密度升级",
+            "mechanism": "单芯片功耗上升推高整机柜功率，风冷触顶后液冷成为必选项，需求传导确定性高但验证周期长。",
+            "status": "待验证",
+            "updated_on": "2026-08"
+          }
+        ],
+        "watch_quotes": ["800G/1.6T 光模块价格与交期", "CoWoS 类封装产能利用率", "HBM 单颗容量与价格", "服务器整机交期", "智算中心液冷招标比例", "云厂商资本开支指引"]
+      },
+      "report_keywords": ["算力", "光模块", "先进封装", "液冷", "服务器"]
+    },
+    "humanoid": {
+      "key": "humanoid",
+      "sector_key": "humanoid",
+      "label": "人形机器人",
+      "length": "短链",
+      "summary": "材料零部件—本体—场景的短链条：环节少、传导快，核心变量是量产良率与真实场景经济性，谁能先把可靠性与成本做达标，谁就锁定环节议价权。",
+      "nodes": [
+        {
+          "id": "materials",
+          "stage": "上游",
+          "name": "关键材料与基础件",
+          "description": "轴承、磁材、轻量化材料和编码器位于零部件制造前端，决定成本底座与供应稳定性。",
+          "companies": [
+            { "code": "600366", "name": "宁波韵升" },
+            { "code": "603667", "name": "五洲新春" }
+          ]
+        },
+        {
+          "id": "transmission",
+          "stage": "上游",
+          "name": "精密传动",
+          "description": "减速器与丝杠把电机输出转化为关节和直线运动，是成本、寿命和量产良率的关键。",
+          "companies": [
+            { "code": "688017", "name": "绿的谐波" },
+            { "code": "002472", "name": "双环传动" },
+            { "code": "603009", "name": "北特科技" },
+            { "code": "300580", "name": "贝斯特" }
+          ]
+        },
+        {
+          "id": "motor",
+          "stage": "上游",
+          "name": "电机与驱动",
+          "description": "无框力矩电机、空心杯电机及伺服驱动决定功率密度和控制精度。",
+          "companies": [
+            { "code": "603728", "name": "鸣志电器" },
+            { "code": "300124", "name": "汇川技术" }
+          ]
+        },
+        {
+          "id": "dexterity",
+          "stage": "中游",
+          "name": "灵巧手与传感",
+          "description": "末端执行器、六维力与触觉传感决定精细操作能力和人机协作安全。",
+          "companies": [
+            { "code": "300115", "name": "长盈精密" },
+            { "code": "603662", "name": "柯力传感" }
+          ]
+        },
+        {
+          "id": "control",
+          "stage": "中游",
+          "name": "控制器与具身模型",
+          "description": "运动控制器、实时系统和具身模型把感知、规划与执行闭环起来。",
+          "companies": [
+            { "code": "300124", "name": "汇川技术" },
+            { "code": "688111", "name": "金山办公" }
+          ]
+        },
+        {
+          "id": "integrator",
+          "stage": "下游",
+          "name": "本体与系统集成",
+          "description": "整机厂负责结构、运动控制、模型和场景工程的系统级协同。",
+          "companies": [
+            { "code": "300024", "name": "机器人" },
+            { "code": "002747", "name": "埃斯顿" }
+          ]
+        },
+        {
+          "id": "scenario",
+          "stage": "下游",
+          "name": "场景部署与运维",
+          "description": "汽车、3C、物流等客户的集成、培训和运维决定机器人能否从样机变成生产资料。",
+          "companies": [
+            { "code": "601689", "name": "拓普集团" },
+            { "code": "002008", "name": "大族激光" }
+          ]
+        }
+      ],
+      "links": [
+        { "from": "materials", "to": "transmission", "kind": "supply" },
+        { "from": "materials", "to": "motor", "kind": "supply" },
+        { "from": "transmission", "to": "integrator", "kind": "supply" },
+        { "from": "motor", "to": "integrator", "kind": "supply" },
+        { "from": "dexterity", "to": "integrator", "kind": "supply" },
+        { "from": "control", "to": "integrator", "kind": "supply" },
+        { "from": "control", "to": "dexterity", "kind": "cross" },
+        { "from": "integrator", "to": "scenario", "kind": "supply" }
+      ],
+      "bottlenecks": [
+        {
+          "node_id": "transmission",
+          "type": "技术卡点",
+          "type_label": "丝杠与减速器量产良率",
+          "severity": 2,
+          "detail": "行星滚柱丝杠加工精度与寿命一致性是量产最大卡点，磨削设备与工艺积累决定扩产速度。",
+          "domestic_share": "高端丝杠设备进口依赖",
+          "signal": "跟踪丝杠送样验证通过率与磨削设备到货"
+        },
+        {
+          "node_id": "motor",
+          "type": "进口依赖",
+          "type_label": "空心杯电机与高端磁材",
+          "severity": 1,
+          "detail": "高端空心杯电机绕线工艺与部分磁材仍依赖进口，国产替代在验证但规模效应未起。",
+          "domestic_share": "高端空心杯电机部分进口",
+          "signal": "跟踪国产空心杯电机在整机厂的定点进展"
+        },
+        {
+          "node_id": "dexterity",
+          "type": "技术卡点",
+          "type_label": "触觉传感与灵巧手",
+          "severity": 2,
+          "detail": "触觉传感方案未收敛，精细操作依赖传感-控制闭环，良率与成本距规模商用有差距。",
+          "domestic_share": "高灵敏度触觉材料部分进口",
+          "signal": "跟踪灵巧手寿命测试数据与客户试用报告"
+        },
+        {
+          "node_id": "integrator",
+          "type": "产能缺口",
+          "type_label": "整机量产爬坡",
+          "severity": 1,
+          "detail": "从样机到批量交付需要供应链协同与场景工程能力，产能爬坡与部署经济性是兑现前提。",
+          "domestic_share": "整机国产化程度高但规模小",
+          "signal": "跟踪整机厂订单由样机转持续采购的公告"
+        },
+        {
+          "node_id": "scenario",
+          "type": "产能缺口",
+          "type_label": "场景经济性验证",
+          "severity": 1,
+          "detail": "实景实训与按效用付费仍在探索，作业成功率与投资回收期没有公开可核验的标杆案例前，规模部署难落地。",
+          "domestic_share": "国内场景开放领先但付费模式未定型",
+          "signal": "跟踪省级实训台账与作业经济性报告"
+        }
+      ],
+      "transmission": {
+        "direction": "up_to_down",
+        "notes": [
+          {
+            "from": "integrator",
+            "to": "transmission",
+            "what": "整机定点与备货订单",
+            "mechanism": "整机厂定点直接决定零部件厂排产，订单量与定价权随定点落地向上游传导；量产后零部件降价压力由规模效应消化。",
+            "status": "传导中",
+            "updated_on": "2026-08"
+          },
+          {
+            "from": "integrator",
+            "to": "dexterity",
+            "what": "灵巧手方案选型",
+            "mechanism": "整机厂灵巧手路线选型（腱绳/连杆/微直驱）决定传感与结构件供应商的订单弹性，方案未收敛前订单呈项目制波动。",
+            "status": "待验证",
+            "updated_on": "2026-08"
+          },
+          {
+            "from": "integrator",
+            "to": "scenario",
+            "what": "样机转持续采购",
+            "mechanism": "整机批量交付后，场景方按作业效用付费的采购从试用转为常态化，需求信号沿场景台账回流整机排产。",
+            "status": "待验证",
+            "updated_on": "2026-08"
+          }
+        ],
+        "watch_quotes": ["谐波减速器与丝杠价格", "整机厂月度排产", "场景作业成功率与经济性报告"]
+      },
+      "report_keywords": ["人形机器人", "减速器", "丝杠", "灵巧手"]
+    }
+  }
+}

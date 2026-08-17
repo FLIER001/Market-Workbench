@@ -2,7 +2,7 @@
 
 # Market Workbench
 
-[![Version](https://img.shields.io/badge/version-1.6.0-1f6feb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.7.0-1f6feb)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)](https://react.dev/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
@@ -31,9 +31,10 @@ A locally hosted research workspace for China A-shares, with Hong Kong and US ma
 | Global expectations | Public probability data from Polymarket and Kalshi, with source, refresh time, historical trend and AI insight cards |
 | Macro | Macro indicators, module scores and a backtested composite score, with source and freshness state |
 | Liquidity | CN/US liquidity composite scores, liquidity signals and market-flow indicators |
+| Timing & Allocation | Top-down decision chain: macro × liquidity × market-confirm timing score (5 risk levels, risk-budget multiplier, cash floor) mapped to equity/bond/commodity/cash target weights with rebalancing advice |
 | Securities | A-share, HK and US quotes; charts, valuation, financials, filings, reports and fund flows |
 | Watchlists | Grouped stock and ETF watchlists, live quotes and research entry points |
-| Sectors | Industry-chain research, Shenwan industry and thematic-board views |
+| Industry research | Industry-chain depth (stage maps, profit distribution, bottleneck transmission), Shenwan industry and thematic-board scores |
 | Gold | Multi-factor scoring, spot prices, PAXG-to-CNY conversion and price history |
 | Bonds | Yield curve, term/credit spreads, Shibor, LPR, CN-US spread, eight-state framework and segment scores |
 | Oil | 5-dimension 8-indicator scoring (EIA/CFTC/GPR), term structure and crack-spread proxy |
