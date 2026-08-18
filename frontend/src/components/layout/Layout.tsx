@@ -3,7 +3,7 @@ import { Link, Outlet, useLocation } from "react-router-dom";
 import {
   Activity, Radar, LayoutGrid, Wallet, Settings, Search,
   Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github, Globe,
-  Star, FileText, Droplets, Loader2, PieChart, Coins, Gauge, Landmark, Flame, Scale,
+  Star, FileText, Droplets, Loader2, PieChart, Coins, Gauge, Landmark, Flame, Scale, FlaskConical,
   ChevronDown, type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -40,6 +40,7 @@ const NAV: NavNode[] = [
   { to: "/portfolio", icon: Wallet, label: "持仓" },
   { to: "/sectors", icon: LayoutGrid, label: "行业研究", match: "/sectors" },
   { to: "/screening", icon: PieChart, label: "标的筛选", match: "/screening" },
+  { to: "/factors", icon: FlaskConical, label: "因子研究", match: "/factors" },
   { to: "/bonds", icon: Landmark, label: "债市" },
   { to: "/gold", icon: Coins, label: "黄金" },
   { to: "/oil", icon: Flame, label: "油价" },
@@ -52,9 +53,7 @@ export function Layout() {
   const nav = useNavigate();
   const user = loadUser();
   const [collapsed, setCollapsed] = useState(() => storageGet("vr-sidebar") === "collapsed");
-  const [allocationOpen, setAllocationOpen] = useState(() =>
-    pathname.startsWith("/allocation") || pathname === "/macro" || pathname === "/liquidity",
-  );
+  const [allocationOpen, setAllocationOpen] = useState(false);
   const [stockCode, setStockCode] = useState("");
   const [stockSuggestions, setStockSuggestions] = useState<SearchResult[]>([]);
   const [showStockSuggestions, setShowStockSuggestions] = useState(false);

@@ -42,23 +42,61 @@ export function ChainGraph({
     () => (["上游", "中游", "下游"] as const).filter((s) => structure.nodes.some((n) => n.stage === s)),
     [structure.nodes],
   );
+  // 层内再分层：同 stage 里供给本 stage 其他环节的排后（偏右），
+  // 源头环节排前（偏左），让「关键材料 → 精密传动/电机」这类层级递进在层内也可见。
+  const stageOrder = useMemo(() => {
+    const order: Record<string, number> = {};
+    const suppliesOwnStage = new Set(
+      structure.links
+        .filter((l) => l.kind === "supply")
+        .filter((l) => {
+          const from = structure.nodes.find((n) => n.id === l.from);
+          const to = structure.nodes.find((n) => n.id === l.to);
+          return from != null && to != null && from.stage === to.stage;
+        })
+        .map((l) => l.from),
+    );
+    structure.nodes.forEach((n) => { order[n.id] = suppliesOwnStage.has(n.id) ? 0 : 1; });
+    return order;
+  }, [structure.nodes, structure.links]);
+  const stageCols = useMemo(() => {
+    const cols: Record<string, number> = {};
+    stages.forEach((stage) => {
+      cols[stage] = new Set(
+        structure.nodes.filter((n) => n.stage === stage).map((n) => stageOrder[n.id]),
+      ).size;
+    });
+    return cols;
+  }, [structure.nodes, stages, stageOrder]);
   const stageX = useMemo(() => {
     const xs: Record<string, number> = {};
-    stages.forEach((s, i) => { xs[s] = 140 + i * 260; });
+    let cursor = 140;
+    stages.forEach((s) => {
+      xs[s] = cursor;
+      cursor += 180 + Math.max(0, (stageCols[s] ?? 1) - 1) * 150;
+    });
     return xs;
-  }, [stages]);
+  }, [stages, stageCols]);
 
   const option = useMemo(() => {
     void themeTick;
-    const stageCount: Record<string, number> = {};
+    const laneCount: Record<string, Record<number, number>> = {};
+    const laneTotal: Record<string, Record<number, number>> = {};
+    structure.nodes.forEach((node) => {
+      const lane = stageOrder[node.id] ?? 0;
+      laneTotal[node.stage] = laneTotal[node.stage] ?? {};
+      laneTotal[node.stage][lane] = (laneTotal[node.stage][lane] ?? 0) + 1;
+    });
     const nodePos: Record<string, { x: number; y: number }> = {};
     structure.nodes.forEach((node) => {
-      const idx = stageCount[node.stage] ?? 0;
-      stageCount[node.stage] = idx + 1;
-      const total = structure.nodes.filter((n) => n.stage === node.stage).length;
-      const span = 130 + total * 55;
+      const lane = stageOrder[node.id] ?? 0;
+      laneCount[node.stage] = laneCount[node.stage] ?? {};
+      const idx = laneCount[node.stage][lane] ?? 0;
+      laneCount[node.stage][lane] = idx + 1;
+      const total = laneTotal[node.stage][lane];
+      const span = 130 + Math.max(total, 1) * 55;
       nodePos[node.id] = {
-        x: stageX[node.stage],
+        x: stageX[node.stage] + lane * 150,
         y: span / 2 - (total - 1 - idx) * 55 + 20,
       };
     });
@@ -117,7 +155,7 @@ export function ChainGraph({
         },
       ],
     };
-  }, [structure, stageX, focusNode, themeTick]);
+  }, [structure, stageX, stageOrder, focusNode, themeTick]);
 
   useEffect(() => {
     if (!boxRef.current) return;

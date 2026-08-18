@@ -1222,6 +1222,11 @@ def _segments_payload() -> dict:
                 den += w
             if den > 0:
                 hist.append({"date": d, "v": round(_clamp(num / den * 1.6), 3)})
+        # hist 末点是各状态 hist 的日期并集驱动，未必含最新一期（月度指标滞后）；
+        # 当期 score 由全部状态现值算出，覆盖/追加为末点，保证趋势图落在当日读数上。
+        if hist:
+            latest_date = str(fw.get("date") or hist[-1]["date"])
+            hist[-1] = {"date": latest_date, "v": round(score, 2)}
         row: dict = {
             "segment": seg,
             "score": round(score, 2),

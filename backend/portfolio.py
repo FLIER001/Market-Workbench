@@ -96,8 +96,24 @@ def _save(d: dict, user_id: int | None = None) -> None:
     os.replace(tmp, path)
 
 
-def add_holding(code: str, shares: float, cost: float, user_id: int | None = None) -> dict:
-    """加一笔持仓；同代码则按加权平均成本合并（加仓）。"""
+def _clean_bought_date(date: str | None) -> str | None:
+    """买入日期规整为 YYYY-MM-DD；不合法返回 None（等价于未填写）。"""
+    date = (date or "").strip()
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return date
+
+
+def add_holding(code: str, shares: float, cost: float, bought_date: str | None = None,
+                user_id: int | None = None) -> dict:
+    """加一笔持仓；同代码则按加权平均成本合并（加仓）。
+
+    bought_date 记录最早一笔的买入日期，用于本年盈亏分段：
+    年前买入按年初价作基准、年内买入按成本价作基准。未填（旧账本）按年前买入处理。
+    """
+    bd = _clean_bought_date(bought_date)
     with _LOCK:
         d = _load(user_id)
         for h in d["holdings"]:
@@ -106,9 +122,16 @@ def add_holding(code: str, shares: float, cost: float, user_id: int | None = Non
                 # 4 位小数：ETF/基金成本常见 3-4 位（issue #13），2-3 位会让市值/盈亏对不上账
                 h["cost"] = round((h["shares"] * h["cost"] + shares * cost) / total, 4) if total else cost
                 h["shares"] = total
+                # 合并只取双方都有日期时的更早者；旧记录无日期则保持无日期（按年前买入计）
+                old_bd = h.get("bought_date")
+                if bd and old_bd and bd < old_bd:
+                    h["bought_date"] = bd
                 break
         else:
-            d["holdings"].append({"code": code, "shares": shares, "cost": cost})
+            entry = {"code": code, "shares": shares, "cost": cost}
+            if bd:
+                entry["bought_date"] = bd
+            d["holdings"].append(entry)
         _save(d, user_id)
     _invalidate(user_id)
     return get_portfolio(user_id=user_id)
@@ -201,6 +224,7 @@ def get_portfolio(fresh: bool = False, user_id: int | None = None, refresh_bases
             rows.append({
                 "code": h["code"], "name": q.get("name", h["code"]),
                 "price": price, "shares": h["shares"], "cost": h["cost"],
+                "bought_date": h.get("bought_date"),
                 "market_value": round(mv, 2), "pnl": round(pnl, 2),
                 "pnl_pct": round(pnl / cv * 100, 2) if cv else 0.0,
                 "day_pnl": round(day_pnl, 2),
@@ -211,20 +235,23 @@ def get_portfolio(fresh: bool = False, user_id: int | None = None, refresh_bases
             tday += day_pnl
             tday_base += day_base
     total_pnl = tmv - tcost
-    # 本年盈亏（YTD）：按本年度第一个交易日的收盘价（前复权日 K 首条）与现价差 × 股数
+    # 本年盈亏（YTD）分段口径：年前买入的份额按「本年度首个交易日收盘价 → 现价」计，
+    # 年内买入的份额按「成本价 → 现价」计（没持有过的涨幅不该算进来）；
+    # 再并入本年度已清仓的实现盈亏。买入日期取最早一笔（加仓合并的近似）。
     year_now = datetime.now(BEIJING).year
     ytd_pnl = 0.0
     ytd_base = 0.0
     year_open_by_code: dict[str, float | None] = {}
     if hs:
-        if refresh_bases:
+        # 年前买入（含未填日期的旧记录）：需要年初基准价
+        needs_year_open = [
+            h for h in hs
+            if (h.get("bought_date") or "0000")[:4] < str(year_now)
+        ]
+        if refresh_bases and needs_year_open:
             # 重算路径（后台预热 / 点进页面补刷）：拉 K 线重算 YTD 并落账本，
             # GET 缓存路径直接用落账本的年初基准重放，毫秒级返回。
-            for h in hs:
-                q = quotes.get(h["code"], {})
-                price = q.get("price", 0.0)
-                if not price:
-                    continue
+            for h in needs_year_open:
                 try:
                     klines = astock.tencent_kline(h["code"], period="day", count=260)
                 except Exception:
@@ -234,9 +261,6 @@ def get_portfolio(fresh: bool = False, user_id: int | None = None, refresh_bases
                     None,
                 )
                 year_open_by_code[h["code"]] = year_open
-                if year_open:
-                    ytd_pnl += (price - year_open) * h["shares"]
-                    ytd_base += year_open * h["shares"]
             with _LOCK:
                 d2 = _load(user_id)
                 if year_now != d2.get("ytd_year"):
@@ -247,18 +271,33 @@ def get_portfolio(fresh: bool = False, user_id: int | None = None, refresh_bases
                 )
                 d2["ytd_refresh_date"] = datetime.now(BEIJING).date().isoformat()
                 _save(d2, user_id)
-        else:
+        elif not refresh_bases and needs_year_open:
             # 普通 GET（响应缓存恰好未命中，如服务重启后首次）：沿用账本里的年初基准，
             # 不为单只股票的 YTD 逐只拉 260 根 K 线（持仓稍多就拖垮首屏）。
             stored = d.get("ytd_open") if d.get("ytd_year") == year_now else None
-            if stored:
-                for h in hs:
-                    q = quotes.get(h["code"], {})
-                    price = q.get("price", 0.0)
-                    year_open = stored.get(h["code"])
-                    if price and year_open:
-                        ytd_pnl += (price - year_open) * h["shares"]
-                        ytd_base += year_open * h["shares"]
+            for h in needs_year_open:
+                year_open_by_code[h["code"]] = (stored or {}).get(h["code"])
+        for h in hs:
+            q = quotes.get(h["code"], {})
+            price = q.get("price", 0.0)
+            if not price:
+                continue
+            if (h.get("bought_date") or "0000")[:4] < str(year_now):
+                year_open = year_open_by_code.get(h["code"])
+                if year_open:
+                    ytd_pnl += (price - year_open) * h["shares"]
+                    ytd_base += year_open * h["shares"]
+            else:
+                # 年内买入（或日期异常）：按成本计，买入即起点
+                ytd_pnl += (price - h["cost"]) * h["shares"]
+                ytd_base += h["cost"] * h["shares"]
+    if closed:
+        # 本年已清仓的实现盈亏并入本年盈亏；年前买入的清仓记录只有成本价，
+        # 其实现盈亏含年前涨幅部分，按账本粒度无法拆分，整笔计入（近似）。
+        for c in closed:
+            if str(c.get("date", ""))[:4] == str(year_now):
+                ytd_pnl += c.get("pnl", 0.0)
+                ytd_base += c.get("cost", 0.0) * c.get("shares", 0.0)
     if closed:
         # 清仓后至今涨跌幅 = 现价 / 清仓价 - 1；现价取不到时留 None，前端显示占位
         closed = [
@@ -314,7 +353,16 @@ def _refresh_snapshot(user_id: int | None = None) -> None:
     """
     current = datetime.now(BEIJING)
     d = _load(user_id)
-    refresh_bases = current.hour * 60 + current.minute >= 15 * 60 + 10 and d.get("ytd_refresh_date") != current.date().isoformat()
+    year_now = current.year
+    stored = d.get("ytd_open") if d.get("ytd_year") == year_now else None
+    # 年前买入的持仓缺年初基准（新录入/换年）→ 立即补拉，不等收盘后窗口
+    missing_base = any(
+        (h.get("bought_date") or "0000")[:4] < str(year_now) and h["code"] not in (stored or {})
+        for h in d.get("holdings", [])
+    )
+    refresh_bases = missing_base or (
+        current.hour * 60 + current.minute >= 15 * 60 + 10 and d.get("ytd_refresh_date") != current.date().isoformat()
+    )
     get_portfolio(fresh=True, user_id=user_id, refresh_bases=refresh_bases)
     with _LOCK:
         d = _load(user_id)

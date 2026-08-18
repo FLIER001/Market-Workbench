@@ -614,8 +614,22 @@ def _attach_change_pct(holdings: list[dict]) -> list[dict]:
     return out
 
 
+def _holdings_quarter_key(quarter: str) -> tuple[int, int]:
+    """'2026年2季度' -> (2026, 2)。解析失败返回 (0, 0) 排最后。"""
+    m = re.search(r"(\d{4})年[一二三四1234]季度", quarter or "")
+    if not m:
+        return (0, 0)
+    q = m.group(0)
+    return (int(m.group(1)), {"一": 1, "二": 2, "三": 3, "四": 4}.get(q[-3], int(q[-3]) if q[-3].isdigit() else 0))
+
+
 def fund_profile(code: str) -> dict:
-    """基金档案：基本信息 + 最新十大重仓 + 业绩指标。"""
+    """基金档案：基本信息 + 最新十大重仓 + 业绩指标。
+
+    持仓走东财 F10 直连（与盘中估值同一数据源），date="" 让东财返回「最新
+    可用年份」的全部季度，再按季度键取最大一期——季报新披露后第一次调用
+    即切到新一季，不依赖调用年份猜测。缓存 24h。
+    """
     code = (code or "").strip()
     meta = fund_meta(code) or {"code": code, "name": code, "type": ""}
     out = {**meta}
@@ -623,7 +637,7 @@ def fund_profile(code: str) -> dict:
     def _holdings():
         import akshare as ak
 
-        df = ak.fund_portfolio_hold_em(symbol=code, date=str(__import__("datetime").datetime.now().year))
+        df = ak.fund_portfolio_hold_em(symbol=code, date="")
         rows = []
         for _, r in df.iterrows():
             rows.append({
@@ -636,9 +650,9 @@ def fund_profile(code: str) -> dict:
 
     try:
         hs = _cached(f"fund_hold_{code}", 24 * 3600, _holdings)
-        # 只保留最近一个季度
+        # 只保留最近一个季度（季度键排序，避免依赖东财返回行序）
         if hs:
-            latest_q = hs[0]["quarter"]
+            latest_q = max((h["quarter"] for h in hs), key=_holdings_quarter_key)
             holdings = [h for h in hs if h["quarter"] == latest_q][:10]
             out["holdings"] = _attach_change_pct(holdings)
             out["holdings_quarter"] = latest_q

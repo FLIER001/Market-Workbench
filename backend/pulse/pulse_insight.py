@@ -29,6 +29,13 @@ def _configured() -> bool:
     return bool(_BASE_URL and _API_KEY and _MODEL)
 
 
+def chat_json(prompt: str) -> dict[str, Any]:
+    """Public re-export of the shared LLM call (async). Other pages (e.g. 择时
+    配置) reuse the same endpoint discovery: env override first, then the
+    user's saved 「接入 AI」config."""
+    return _chat_json(prompt)
+
+
 def _user_llm() -> dict[str, str] | None:
     """The first user's saved 「接入 AI」config (API providers only; CLI providers
     don't fit the background-rebuild call model). First user wins — this app
@@ -170,7 +177,7 @@ async def _chat_json(prompt: str) -> dict[str, Any]:
             reasoning = message.get("reasoning_content") or ""
             if reasoning:
                 keys = re.findall(r'"(\w+)":', prompt.rsplit("只返回 JSON", 1)[-1])
-                key_pat = "|".join(re.escape(k) for k in keys) if keys else "impact|events|status"
+                key_pat = "|".join(re.escape(k) for k in keys) if keys else "impact|events|status|insight"
                 for match in re.finditer(r"\{[^{}]*\}", reasoning):
                     if re.search(f'"({key_pat})":', match.group(0)):
                         texts.append(match.group(0))
@@ -227,3 +234,29 @@ async def status_insight() -> str:
     )
     status = parsed.get("status")
     return status.strip() if isinstance(status, str) and status.strip() else _status_fallback(anchor)
+
+
+async def overall_insight(status: str, module_insights: list[dict[str, Any]]) -> str:
+    """综合研判卡（现状条上方）：综合国内国际现状 + 四个板块边际结论，给出
+    利好/利空哪些大类资产的总研判。module_insights 为各核心模块已生成的卡。"""
+    if not _endpoint():
+        return ""
+    module_lines = "\n".join(
+        f"- {m.get('module')}：{m.get('impact', '')}".rstrip("：")
+        for m in module_insights
+        if isinstance(m, dict) and (m.get("impact") or m.get("events"))
+    )
+    if not status and not module_lines:
+        return ""
+    parsed = await _chat_json(
+        "你是宏观策略分析师。以下是当前市场信息：\n\n"
+        f"国内国际现状：\n{status or '（缺）'}\n\n"
+        f"各预测市场板块的边际研判：\n{module_lines or '（缺）'}\n\n"
+        "请综合以上现状与各板块边际信息，输出 3 句、150 字以内的中文综合研判：当前形势的主线是什么，"
+        "对大类资产（A股/美股/黄金/原油/美元/债券等）明确利好哪些、利空哪些（方向结论必须在句中直接给出）。"
+        "信息密度要高、措辞凝练，直接说结论，不写「综合来看」「需要注意」这类套话，"
+        "观点必须鲜明，禁止两面下注式表述。"
+        '只返回 JSON：{"overall": "..."}，不要解释或代码块标记。'
+    )
+    overall = parsed.get("overall")
+    return overall.strip() if isinstance(overall, str) and overall.strip() else ""

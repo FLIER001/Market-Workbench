@@ -13,22 +13,24 @@ interface Props {
   className?: string;
   valueSuffix?: string;
   showLatest?: boolean;
+  zeroLine?: boolean;       // 在 v=0 处画一条水平虚线（评分类序列用）
 }
 
 // 纯 SVG sparkline：没有 canvas，自然不会被 .glass 的 backdrop-filter 擦除/闪烁。
 // 定位点 + 十字参考线 + tooltip 用绝对定位 HTML 元素精确映射。
-export function Sparkline({ data, height = 44, color = "--primary", area = true, className, valueSuffix = "", showLatest = false }: Props) {
+export function Sparkline({ data, height = 44, color = "--primary", area = true, className, valueSuffix = "", showLatest = false, zeroLine = false }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
 
   // 构建 SVG path（viewBox 坐标系 0..w × 0..h）
-  const { pathD, areaD, points } = useMemo(() => {
-    if (data.length < 2) return { pathD: "", areaD: "", points: [] };
+  const { pathD, areaD, points, zeroY } = useMemo(() => {
+    if (data.length < 2) return { pathD: "", areaD: "", points: [], zeroY: null as number | null };
     const w = 1000; // viewBox 宽（拉伸用，stroke 不受影响因为 vector-effect）
     const h = 100;
     const values = data.map((d) => d.v);
     let min = Math.min(...values);
     let max = Math.max(...values);
+    if (zeroLine) { min = Math.min(min, 0); max = Math.max(max, 0); }
     if (max - min < 1e-9) { min -= 0.5; max += 0.5; }
     const padY = (max - min) * 0.06;
     min -= padY; max += padY;
@@ -40,8 +42,9 @@ export function Sparkline({ data, height = 44, color = "--primary", area = true,
 
     const d = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(2)},${p.y.toFixed(2)}`).join(" ");
     const a = `${d} L${w},${h} L0,${h} Z`;
-    return { pathD: d, areaD: a, points: pts };
-  }, [data]);
+    const zy = zeroLine && min < 0 && max > 0 ? h - ((0 - min) / (max - min)) * h : null;
+    return { pathD: d, areaD: a, points: pts, zeroY: zy };
+  }, [data, zeroLine]);
 
   if (data.length < 2) return null;
 
@@ -72,6 +75,11 @@ export function Sparkline({ data, height = 44, color = "--primary", area = true,
         preserveAspectRatio="none"
       >
         {area && <path d={areaD} fill={`hsl(${stroke} / 0.12)`} />}
+        {zeroY != null && (
+          <line x1={0} y1={zeroY} x2={1000} y2={zeroY}
+            stroke="hsl(var(--muted-foreground))" strokeWidth="1" strokeDasharray="4 4"
+            opacity="0.45" vectorEffect="non-scaling-stroke" />
+        )}
         <path d={pathD} fill="none" stroke={`hsl(${stroke})`} strokeWidth="1.4" vectorEffect="non-scaling-stroke" />
         {showLatest && points.length > 0 && (
           <circle cx={points[points.length - 1].x} cy={points[points.length - 1].y} r="3.5"

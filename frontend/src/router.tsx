@@ -12,6 +12,7 @@ import { Allocation } from "@/pages/Allocation";
 import { Gold } from "@/pages/Gold";
 import { Oil } from "@/pages/Oil";
 import { Bonds } from "@/pages/Bonds";
+import { Factors } from "@/pages/Factors";
 import { Pulse } from "@/pages/Pulse";
 import { Watchlist } from "@/pages/Watchlist";
 import { Screening } from "@/pages/Screening";
@@ -37,6 +38,7 @@ export const router = createBrowserRouter([
       { path: "/sector-scores", element: <Navigate to="/sectors" replace /> },
       { path: "/portfolio", element: <Portfolio /> },
       { path: "/screening", element: <Screening /> },
+      { path: "/factors", element: <Factors /> },
       { path: "/funds", element: <Navigate to="/screening" replace /> },
       { path: "/stock-data", element: <StockData /> },
       { path: "/macro", element: <Macro /> },

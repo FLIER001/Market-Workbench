@@ -4,6 +4,7 @@
 """
 import pytest
 import time
+from datetime import datetime
 from fastapi.testclient import TestClient
 
 import app as app_module
@@ -388,3 +389,65 @@ def test_run_cli_stream_timeout(monkeypatch):
         for line in cli_runtime.run_cli_stream("fake", "s", "u"):
             chunks.append(line)
     assert chunks and chunks[0].strip() == "x"  # 挂起前的输出已正常流出
+
+
+# ── 本年盈亏（YTD）分段口径：买入日期决定基准价 ────────────────────
+
+@pytest.fixture()
+def ytd_env(tmp_path, monkeypatch):
+    """离线 YTD 环境：行情/K 线打桩，账本指向临时目录。"""
+    monkeypatch.setattr(pf, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(pf, "PF_FILE", str(tmp_path / "portfolio.json"))
+    pf._invalidate()
+    year = datetime.now(pf.BEIJING).year
+    monkeypatch.setattr(astock, "tencent_quote",
+                        lambda codes: {c: {"name": f"股{c}", "price": 12.0, "last_close": 11.0} for c in codes})
+    # 年初基准价 10.0（本年度首个交易日收盘）
+    kline = [{"date": f"{year}-01-02", "close": 10.0}, {"date": f"{year}-06-01", "close": 11.0}]
+    monkeypatch.setattr(astock, "tencent_kline", lambda code, period="day", count=260: kline)
+    return tmp_path
+
+
+def test_ytd_year_buy_uses_cost_as_base(ytd_env):
+    """年内买入：按成本→现价计，不掺年初到买入之间的涨跌。"""
+    pf.add_holding("600519", 100, 9.0, f"{datetime.now(pf.BEIJING).year}-03-01")
+    data = pf.get_portfolio(fresh=True)
+    assert data["ytd_pnl"] == pytest.approx((12.0 - 9.0) * 100)
+    assert data["ytd_pnl_pct"] == pytest.approx((12.0 - 9.0) / 9.0 * 100, abs=0.01)
+
+
+def test_ytd_last_year_buy_uses_year_open(ytd_env):
+    """年前买入：按年初价→现价计（含年内分红除权由前复权口径近似）。"""
+    pf.add_holding("600519", 100, 8.0, "2024-06-01")
+    data = pf.get_portfolio(fresh=True, refresh_bases=True)
+    assert data["ytd_pnl"] == pytest.approx((12.0 - 10.0) * 100)
+    # 年初基准已落账本：后续普通 GET 不拉 K 线也能重放出同样结果
+    data2 = pf.get_portfolio(fresh=True)
+    assert data2["ytd_pnl"] == pytest.approx((12.0 - 10.0) * 100)
+
+
+def test_ytd_legacy_no_date_treated_as_last_year(ytd_env):
+    """旧账本无日期：按年前持有计（兼容不强制补录）。"""
+    pf._save({"holdings": [{"code": "600519", "shares": 100, "cost": 8.0}], "closed": []})
+    data = pf.get_portfolio(fresh=True, refresh_bases=True)
+    assert data["ytd_pnl"] == pytest.approx((12.0 - 10.0) * 100)
+
+
+def test_ytd_includes_this_year_closed_pnl(ytd_env):
+    """本年已清仓的实现盈亏并入本年盈亏；往年清仓不计。"""
+    year = datetime.now(pf.BEIJING).year
+    pf._save({"holdings": [], "closed": [
+        {"code": "600519", "date": f"{year}-02-01", "price": 11.0, "shares": 100, "cost": 9.0, "pnl": 200.0},
+        {"code": "000001", "date": f"{year - 1}-12-01", "price": 11.0, "shares": 100, "cost": 9.0, "pnl": 150.0},
+    ]})
+    data = pf.get_portfolio(fresh=True)
+    assert data["ytd_pnl"] == pytest.approx(200.0)
+
+
+def test_ytd_mixed_segments_sum(ytd_env):
+    """年内 + 年前混合持仓：分段求和。"""
+    year = datetime.now(pf.BEIJING).year
+    pf.add_holding("600519", 100, 9.0, f"{year}-03-01")   # 成本 9 → 12：+300
+    pf.add_holding("000001", 200, 8.0, "2024-01-10")       # 年初 10 → 12：+400
+    data = pf.get_portfolio(fresh=True, refresh_bases=True)
+    assert data["ytd_pnl"] == pytest.approx(300.0 + 400.0)

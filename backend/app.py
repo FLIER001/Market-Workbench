@@ -311,6 +311,8 @@ class HoldingIn(BaseModel):
     code: str
     shares: float
     cost: float
+    # 可省：买入日期（YYYY-MM-DD）。年后买的按成本计本年盈亏，年前买的按年初价计
+    bought_date: Optional[str] = None
 
 
 @app.get("/api/portfolio")
@@ -333,7 +335,13 @@ def portfolio_add(h: HoldingIn, request: Request):
     if h.shares <= 0:
         raise HTTPException(400, "数量必须大于 0")
     # 成本价不限正负：融券 / 返息 / 摊薄后为负成本等情形按结果计算，用户想怎么输就怎么输。
-    return {"data": pf.add_holding(code, h.shares, h.cost, _portfolio_user_id(request))}
+    bd = (h.bought_date or "").strip()
+    if bd:
+        try:
+            datetime.strptime(bd, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(400, "买入日期格式应为 YYYY-MM-DD") from None
+    return {"data": pf.add_holding(code, h.shares, h.cost, bd or None, _portfolio_user_id(request))}
 
 
 @app.delete("/api/portfolio/holding")
@@ -519,6 +527,8 @@ class FundHoldingIn(BaseModel):
     code: str
     shares: float
     cost: float
+    # 可省：买入日期（YYYY-MM-DD）。年后买的按成本计本年盈亏，年前买的按年初净值计
+    bought_date: Optional[str] = None
 
 
 @app.get("/api/fund-portfolio")
@@ -540,7 +550,13 @@ def fund_portfolio_add(h: FundHoldingIn, request: Request):
         raise HTTPException(400, "基金代码必须是 6 位数字")
     if h.shares <= 0:
         raise HTTPException(400, "份额必须大于 0")
-    return {"data": fpf.add_holding(code, h.shares, h.cost, _portfolio_user_id(request))}
+    bd = (h.bought_date or "").strip()
+    if bd:
+        try:
+            datetime.strptime(bd, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(400, "买入日期格式应为 YYYY-MM-DD") from None
+    return {"data": fpf.add_holding(code, h.shares, h.cost, bd or None, _portfolio_user_id(request))}
 
 
 @app.delete("/api/fund-portfolio/holding")
@@ -1483,3 +1499,168 @@ def allocation(refresh: bool = False):
         return {"data": timing_alloc.get_timing_allocation(force=refresh)}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"择时配置异常：{e}") from e
+
+
+@app.get("/api/allocation/insight")
+async def allocation_insight(refresh: bool = Query(False)):
+    """AI 通俗解读当前择时分（宏观/流动性/市场确认三角度）。refresh=true 重新生成并写回快照。"""
+    try:
+        return {"data": await timing_alloc.get_ai_insight(force=refresh) or ""}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"择时 AI 解读异常：{e}") from e
+
+
+# ---------------------------------------------------------------------------
+# 因子实验室：数据构建 / 单因子检验 / 探索性组合回测
+# ---------------------------------------------------------------------------
+
+@app.get("/api/factor/lab")
+def factor_lab():
+    """因子实验室元信息：可用因子（分组）、数据状态（日线+PIT 财务）、偏差标签。"""
+    import factor_data
+    import factor_pit
+    import factors
+
+    status = factor_data.lab_status()
+    status["fundamentals"] = factor_pit.pit_status()
+    return {"data": {
+        "factors": [{"id": k, "name": v} for k, v in factors.FACTOR_META.items()],
+        "fin_factors": [{"id": k, "name": v} for k, v in factors.FIN_FACTOR_META.items()],
+        **status,
+    }}
+
+
+def _run_full_build():
+    """日线 → PIT 财务 两阶段顺序构建（共享一个后台线程）。"""
+    import factor_data
+    import factor_pit
+
+    try:
+        factor_data.build_dataset()
+    except Exception:  # noqa: BLE001 — 日线失败也继续试财务（可能已有旧日线）
+        pass
+    try:
+        factor_pit.build_fundamentals()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@app.post("/api/factor/build")
+def factor_build():
+    """触发后台数据构建：日线（约 20-40 分钟）→ PIT 财务 2006-今（约 10-20 分钟）。"""
+    import threading
+
+    import factor_data
+    import factor_pit
+
+    if factor_data.build_state()["building"] or factor_pit.pit_state()["building"]:
+        return {"data": {"building": True, "started": False}}
+    threading.Thread(target=_run_full_build, daemon=True).start()
+    return {"data": {"building": True, "started": True}}
+
+
+@app.get("/api/factor/data-status")
+def factor_data_status():
+    """构建进度 / 最近一次构建摘要（日线 + 财务两段）。"""
+    import factor_data
+    import factor_pit
+
+    data = factor_data.lab_status()
+    data["fundamentals"] = factor_pit.pit_status()
+    return {"data": data}
+
+
+_factor_eval_cache: dict[str, tuple] = {}
+
+
+@app.get("/api/factor/evaluate")
+def factor_evaluate(factor: str, start: str | None = None, end: str | None = None):
+    """单因子检验（Alphalens 口径）：IC/RankIC、五分组、换手、分年。计算较重，按参数+数据版本缓存。"""
+    import factor_data
+    import factors
+
+    try:
+        version = factor_data.data_version()
+        key = f"{factor}|{start}|{end}|{version}"
+        if key not in _factor_eval_cache:
+            _factor_eval_cache[key] = factors.evaluate(factor, start, end)
+        return {"data": _factor_eval_cache[key]}
+    except FileNotFoundError as e:
+        raise HTTPException(400, str(e)) from e
+    except (ValueError, KeyError) as e:
+        raise HTTPException(400, f"因子检验参数异常：{e}") from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"因子检验异常：{e}") from e
+
+
+_factor_bt_cache: dict[str, tuple] = {}
+
+
+@app.get("/api/factor/backtest")
+def factor_backtest_endpoint(factor: str, start: str | None = None, end: str | None = None,
+                             top_n: int = Query(50, ge=1, le=500), top_pct: float | None = Query(None, gt=0, le=1),
+                             freq: str = "monthly", cost: float = Query(1.0, ge=0, le=3)):
+    """探索性组合回测：只多等权 TopN、周/月调仓、T+1 成交，含 0/1/2/3x 成本压力。"""
+    import factor_backtest
+    import factor_data
+
+    try:
+        version = factor_data.data_version()
+        key = f"{factor}|{start}|{end}|{top_n}|{top_pct}|{freq}|{cost}|{version}"
+        if key not in _factor_bt_cache:
+            _factor_bt_cache[key] = factor_backtest.run_backtest(
+                factor, start, end, top_n=top_n, top_pct=top_pct, freq=freq, cost=cost)
+        return {"data": _factor_bt_cache[key]}
+    except FileNotFoundError as e:
+        raise HTTPException(400, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, f"回测参数异常：{e}") from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"回测异常：{e}") from e
+
+
+# —— 因子构建（公式引擎）：字段文档 / 静态校验 / 自定义因子 CRUD ——
+
+class FactorSaveReq(BaseModel):
+    id: str
+    name: str
+    expr: str
+
+
+@app.get("/api/factor/fields")
+def factor_fields():
+    """因子公式引擎的字段与算子文档 + 已保存的自定义因子列表。"""
+    import factor_expr
+
+    return {"data": {**factor_expr.fields_doc(), "custom": factor_expr.list_custom()}}
+
+
+@app.post("/api/factor/validate")
+def factor_validate(req: FactorSaveReq):
+    """静态校验公式（解析 + 参数检查）；expr 可以先不保存。"""
+    import factor_expr
+
+    try:
+        factor_expr.compile_expr(req.expr)
+        return {"data": {"ok": True}}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.post("/api/factor/custom")
+def factor_custom_save(req: FactorSaveReq):
+    """保存自定义因子（id 唯一，重复即覆盖）。之后用 factor='custom:<id>' 检验/回测。"""
+    import factor_expr
+
+    try:
+        return {"data": factor_expr.save_custom(req.id, req.name, req.expr)}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.delete("/api/factor/custom/{fid}")
+def factor_custom_delete(fid: str):
+    import factor_expr
+
+    factor_expr.delete_custom(fid)
+    return {"data": {"deleted": fid}}

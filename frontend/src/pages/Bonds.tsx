@@ -245,7 +245,7 @@ function SegmentPanel({ seg }: { seg?: BondsSegmentsData }) {
               </div>
               {r.hist && r.hist.length > 1 && (
                 <div className="mt-2">
-                  <Sparkline data={r.hist} height={44} valueSuffix="" />
+                  <Sparkline data={r.hist} height={44} valueSuffix="" zeroLine showLatest />
                 </div>
               )}
               {r.carry_roll_bp_3m != null && (

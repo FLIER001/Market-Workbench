@@ -3,7 +3,7 @@ import { RefreshCw, Scale, TrendingUp, Droplets, Zap, AlertTriangle, ChevronDown
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Sparkline } from "@/components/ui/Sparkline";
-import { api, type AllocationData, type TimingPart, type HistPoint } from "@/lib/api";
+import { api, type AllocationData, type AllocationInsight, type TimingPart, type HistPoint } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useSWR } from "@/hooks/useSWR";
 
@@ -113,6 +113,9 @@ function EvidenceCard({ title, icon: Icon, score, state, date, parts, hist, sour
 
 export function Allocation() {
   const [err, setErr] = useState(false);
+  // AI 三段解读（宏观/流动性/市场确认）：后端存快照，这里只做局部替换 + 手动重生成
+  const [aiInsight, setAiInsight] = useState<AllocationInsight | null>(null);
+  const [insightLoading, setInsightLoading] = useState(false);
   const { data, loading, revalidating, revalidate } = useSWR<AllocationData>(
     "allocation:v1",
     async (fresh) => {
@@ -122,6 +125,27 @@ export function Allocation() {
     }, [], () => setErr(true), { persist: true },
   );
   const load = () => { setErr(false); void revalidate(true); };
+
+  // 数据就绪后拉一次 AI 解读（非 force：后端有缓存就直接返回，秒开；没缓存才调 LLM）
+  useEffect(() => {
+    if (!data?.timing) return;
+    let cancelled = false;
+    setInsightLoading(true);
+    api.allocationInsight()
+      .then((d) => { if (!cancelled && d) setAiInsight(d); })
+      .catch(() => { /* 解读不可用时回落模板结论句 */ })
+      .finally(() => { if (!cancelled) setInsightLoading(false); });
+    return () => { cancelled = true; };
+  }, [data?.timing?.score, data?.timing?.regime, data?.as_of]);
+
+  // 手动重生成：只重调 LLM，不动择时数据
+  const refreshInsight = () => {
+    setInsightLoading(true);
+    api.allocationInsight(true)
+      .then((d) => { if (d) setAiInsight(d); })
+      .catch(() => { /* 失败保留已有解读 */ })
+      .finally(() => setInsightLoading(false));
+  };
   useEffect(() => {
     const tick = () => { if (!document.hidden) void revalidate(); };
     const timer = window.setInterval(tick, 30 * 60_000);
@@ -204,7 +228,27 @@ export function Allocation() {
                     {a.regime_changed && <span className="ml-1 rounded bg-warning/15 px-1 text-[10px] text-warning">风险等级跨档</span>}
                   </span>
                 </div>
-                <p className="mt-3 rounded-lg bg-muted/20 p-2.5 text-sm leading-relaxed text-foreground/85">{t.text}</p>
+                <div className="mt-3 flex items-center gap-1.5">
+                  <span className="text-xs font-semibold text-primary/90">AI 解读</span>
+                  <button
+                    onClick={refreshInsight}
+                    disabled={insightLoading}
+                    className="ml-auto rounded p-1 text-muted-foreground transition-colors hover:text-primary disabled:opacity-60"
+                    title="重新生成 AI 解读">
+                    <RefreshCw className={cn("h-3 w-3", insightLoading && "animate-spin")} />
+                  </button>
+                </div>
+                {aiInsight ? (
+                  <div className="mt-1.5 space-y-1 rounded-lg bg-muted/20 p-2.5 text-sm leading-relaxed text-foreground/85">
+                    <p><span className="font-medium text-primary/90">宏观</span>　{aiInsight.macro}</p>
+                    <p><span className="font-medium text-primary/90">流动性</span>　{aiInsight.liquidity}</p>
+                    <p><span className="font-medium text-primary/90">市场确认</span>　{aiInsight.market_confirm}</p>
+                  </div>
+                ) : (
+                  <p className="mt-1.5 rounded-lg bg-muted/20 p-2.5 text-sm leading-relaxed text-foreground/85">
+                    {insightLoading ? "AI 正在生成解读…" : t.text}
+                  </p>
+                )}
                 {t.gates.length > 0 && (
                   <div className="mt-2 space-y-1">
                     {t.gates.map((g) => (

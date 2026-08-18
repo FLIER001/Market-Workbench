@@ -302,9 +302,11 @@ def _market_confirm(macro: dict, macro_date: str, curve: dict, pos: dict,
         lev = float(liq_leverage["value"])
     r_parts = [
         ("指数波动率", vol_pct if vol_pct is not None else None,
-         f"{vols[-1]['v']:.1f}%" if vols else "—", _ranks_from_values(vols)),
+         (f"{vols[-1]['v']:.1f}%年化（分位{vol_pct:.0f}%）" if vols and vol_pct is not None
+          else f"{vols[-1]['v']:.1f}%年化" if vols else "—"), _ranks_from_values(vols)),
         ("信用利差", credit_pct if credit_pct is not None else None,
-         f"{credit_pts[-1]['v']:.0f}bp" if credit_pts else "—", _ranks_from_values(credit_pts)),
+         (f"{credit_pts[-1]['v']:.0f}bp（分位{credit_pct:.0f}%）" if credit_pts and credit_pct is not None
+          else f"{credit_pts[-1]['v']:.0f}bp" if credit_pts else "—"), _ranks_from_values(credit_pts)),
         ("两融杠杆温度", lev, f"{lev:.0f}/100" if lev is not None else "—", []),
     ]
     rp_score, rp_parts, rp_hist = _combine(r_parts, {"指数波动率": 40.0, "信用利差": 35.0, "两融杠杆温度": 25.0}, 1.0)
@@ -345,7 +347,7 @@ def _market_confirm(macro: dict, macro_date: str, curve: dict, pos: dict,
         ("breadth", breadth_score,
          "；".join(f"{p['name']} {p['value']}" for p in breadth_parts if p["value"] not in (None, "—")), breadth_hist),
         ("risk_pressure", (100 - rp_score) if rp_score is not None else None,
-         "；".join(f"{p['name']}分位{p['value']}" for p in rp_parts if p["value"] not in (None, "—")), rp_hist),
+         "；".join(f"{p['name']} {p['value']}" for p in rp_parts if p["value"] not in (None, "—")), rp_hist),
         ("crowding", crowding_adj,
          f"拥挤度 {crowding_score:.0f}/100" + ("（饱和区扣分）" if crowding_score and crowding_score > 85 else ""),
          []),
@@ -820,6 +822,151 @@ def get_timing_allocation(force: bool = False) -> dict:
         save=_save_snapshot,
         force=force,
     )
+
+
+# ---------------------------------------------------------------------------
+# AI 解读：择时分的通俗解释（复用 pulse 的 LLM 配置发现；写回缓存快照）
+# ---------------------------------------------------------------------------
+
+_INSIGHT_MAX_CHARS = 120  # 每段字数上限（prompt 要求 ≤80，截断兜底）
+
+
+def _fmt_part_line(name: str, weight: float, p: dict) -> str:
+    score = p.get("score")
+    score_txt = f"{score:.0f}/100" if isinstance(score, (int, float)) else "缺失"
+    value = str(p.get("value") or "").strip()
+    if len(value) > 80:
+        value = value[:80] + "…"
+    return f"- {name}（权重{weight:.0f}%）：{score_txt}，{value or '无读数'}"
+
+
+async def _build_insight(force: bool = False) -> dict[str, str] | str:
+    """调 LLM 按宏观/流动性/市场确认三层各写一段总结性判断；失败返回空串。"""
+    payload = get_timing_allocation(force=force)
+    timing = payload.get("timing") or {}
+    if timing.get("score") is None:
+        return ""
+    from pulse.pulse_insight import chat_json
+
+    ev = payload.get("evidence") or {}
+    # 宏观/流动性 parts 的 value 字段是 None（读数在各自页面的模块里）——注入时补上
+    # score 与方向语义，否则 LLM 只见贡献不见读数，只能瞎猜状态
+    liq_raw = (market.get_liquidity() or {}).get("cn_composite") or {}
+
+    def _ev_lines(key: str, default_name: str) -> list[str]:
+        blk = ev.get(key) or {}
+        lines = []
+        if blk.get("score") is not None:
+            state = f"{blk.get('state') or ''}" if key != "market_confirm" else ""
+            state_txt = f"（{state}）" if state else ""
+            lines.append(f"{default_name}总分 {blk['score']:.0f}/100{state_txt}，"
+                         f"日期 {blk.get('date') or '—'}")
+        # 流动性：用原始 composite parts（score 已归一为越高越利多）；
+        # 债市状态是 favorable=low 反向指标，注入时直接标明真实方向（债强/债弱），
+        # 历史 LLM 误读都源于没给方向
+        src = (liq_raw.get("parts") if key == "liquidity" else None) or []
+        bond_idx = ((market.get_liquidity() or {}).get("cn_indices") or {}).get("bond") or {}
+        bond_pct = bond_idx.get("value") if isinstance(bond_idx.get("value"), (int, float)) else None
+        for p, raw in zip(blk.get("parts") or [], src):
+            if not (isinstance(p, dict) and p.get("contribution") is not None):
+                continue
+            if p.get("value"):
+                val = str(p["value"])
+            elif raw and isinstance(raw.get("score"), (int, float)):
+                val = f"{raw['score']:.0f}/100"
+            else:
+                val = "—"
+            note = ""
+            if p.get("name") == "债市状态" and bond_pct is not None:
+                direction = "债市偏强（债券价格上涨）" if bond_pct >= 50 else "债市偏弱（债券价格下跌）"
+                note = (f"［实际方向：{direction}；中债国债净价20日收益分位 {bond_pct:.0f}%。"
+                        "此指标计入流动性分时取反向（债强→小幅拖累），正文说债市必须与实际方向一致，"
+                        "禁止说反；对权益资金的含义不做推断（不写分流/未分流）］")
+            lines.append(f"  · {p.get('name')}：{val}（贡献 {p['contribution']:+.2f}）{note}")
+        return lines
+
+    # 宏观模块读数摘要（名字→方向→分），一段一行
+    macro_mods = {m.get("name"): m for m in (macro.get("modules") or [])
+                  if isinstance(m, dict)} if isinstance(macro := (market.get_macro() or {}), dict) else {}
+    macro_lines = []
+    for p in (ev.get("macro") or {}).get("parts") or []:
+        mod = macro_mods.get(p.get("name")) or {}
+        dr = {"inverse": "对收益反向（分高=利空，已取反计入）", "direct": ""}.get(p.get("direction"), "")
+        if isinstance(mod.get("desc"), str) and mod["desc"]:
+            dr = (dr + "：" + mod["desc"]) if dr else mod["desc"]
+        macro_lines.append(f"  · {p['name']}：分 {p.get('score')}，贡献 {p['contribution']:+.2f}"
+                           + (f"（{dr}）" if dr else ""))
+
+    gates = "; ".join(g.get("desc") or g.get("rule") for g in timing.get("gates") or [])
+    prompt = (
+        "你是资产管理公司的首席策略官，为择时结论写三段解读。\n"
+        f"模型当前：择时分 {timing['score']:.0f}、风险等级「{timing.get('regime_label')}」"
+        f"（合成 = 40%×宏观 + 35%×流动性 + 25%×市场确认）。\n\n"
+        "三层证据读数如下，仅供你推理——页面已展示全部分数与贡献，正文禁止复述：\n"
+        "【宏观（中期先验）】\n" + "\n".join(_ev_lines("macro", "宏观")) + "\n"
+        + "\n".join(macro_lines) + "\n"
+        "【流动性（资金面）】\n" + "\n".join(_ev_lines("liquidity", "流动性")) + "\n"
+        "【市场确认（价格与仓位验证）】\n" + "\n".join(_ev_lines("market_confirm", "市场确认")) + "\n"
+        "口径（方向语义，引用读数前必须按此换算，禁止照抄分位当方向）：\n"
+        "- 市场确认：趋势=中证全指与沪深300的1/3个月动量和均线位置；广度=上涨家数与20日新高占比；"
+        "风险压力子项的 score 已反向（高=压力小）；「波动率 26%年化（分位86%）」指波动水平绝对值中等、"
+        "但处近一年高位，读分位定方向、读水平值定幅度；信用利差同理。拥挤度=国债期货持仓与行业拥挤（过高扣分）。\n"
+        "- 流动性子项「score」已统一为越高越利多；注意三个易错方向：债市状态子项注入行已标注实际方向"
+        "（债强/债弱），说债市方向必须与标注一致、禁止说反；该子项对权益资金的含义不做推断（不写分流/未分流）；"
+        "两融杠杆温度低=杠杆资金未入场、拖累流动性分（分位 40-60 属中性，禁止说成「偏高」，>80 才是过热）；"
+        "银行间资金压力/政策基准的分数已反向（高=宽松）。\n"
+        "- 宏观模块「对收益反向」= 景气分低反而利多权益（复苏交易逻辑），其正贡献来自低分。\n"
+        "- 所有「分位」是历史百分位不是水平值：低分位=处于近一年低位。引用任何子项前先核对其 score "
+        "与贡献的方向是否支持你要下的判断，两者矛盾时以原始读数文本为准。\n"
+        + (f"门控（对档位的额外约束）：{gates}\n" if gates else "")
+        + "\n输出宏观/流动性/市场确认各一段，每段 1-2 句、80 字以内，是该维度的总结性观点与判断：\n"
+        "- 先给判断（这个维度当前什么状态、对风险偏好偏多还是偏空、强度如何），再给实质依据（谁在驱动、结构性弱点或背离在哪）\n"
+        "- 有洞见：写读数背后的含义和三层之间的逻辑关系（价格是否确认宏观、资金面与走势是否背离等），不罗列子项\n"
+        "- 实描、高信息密度：禁过渡语与评语气；分数/贡献/百分比一律不复述，最多引用一个能强化判断的关键数字\n"
+        "- 语言规范：陈述句 + 常用金融词汇（驱动/背离/拖累/收敛/扩张/确认/透支等）。禁比喻和套话，"
+        "包括但不限于「成色」「根基」「托底式弱顺风」「默许而非加持」「最扎实一环」「外强内弱」这类修辞化表述——"
+        "与其相对的判断必须直接写出因果（如「改善依赖外需，内需政策未发力」）\n"
+        "- 专业不说黑话；不预测未来、不给个股建议、不两面下注\n"
+        '只返回 JSON：{"macro": "...", "liquidity": "...", "market_confirm": "..."}，不要解释或代码块标记。'
+    )
+    parsed = await chat_json(prompt)
+    out = {k: str(parsed.get(k)).strip()[:_INSIGHT_MAX_CHARS]
+           for k in ("macro", "liquidity", "market_confirm")
+           if isinstance(parsed.get(k), str) and parsed.get(k).strip()}
+    return out if len(out) == 3 else ""
+
+
+async def get_ai_insight(force: bool = False) -> dict[str, str] | str:
+    """AI 解读（macro/liquidity/market_confirm 三段）：手动刷新（force）直接重建；
+    否则返回缓存快照里已存的解读。
+
+    数据重建后（ai_insight_at 早于 payload 的 updated）旧解读描述的已不是当前
+    读数，非 force 请求也会重生成一次。LLM 失败时保留旧解读，不让页面文字消失。"""
+    cached = cache_runtime.peek("timing:allocation") or {}
+    old = cached.get("ai_insight")
+    old = old if isinstance(old, dict) and all(old.get(k) for k in
+                                              ("macro", "liquidity", "market_confirm")) else ""
+    if not force and old:
+        updated = str(cached.get("updated") or "")
+        at = str(cached.get("ai_insight_at") or "")
+        if not updated or not at or at >= updated:
+            return old
+    fresh = await _build_insight(force=False)
+    if not fresh:
+        # 冷缓存时开头的 peek 拿到空 dict，_build_insight 内部 warm 磁盘快照后缓存里
+        # 可能已有旧解读——重读一次再兜底，避免 force 失败时把磁盘上的解读丢掉
+        warmed = cache_runtime.peek("timing:allocation") or {}
+        cand = warmed.get("ai_insight")
+        return cand if isinstance(cand, dict) and all(cand.get(k) for k in
+                                                     ("macro", "liquidity", "market_confirm")) else old
+    # 冷缓存时上面 peek 到的是空 dict，_build_insight 内部才把 payload 填进缓存——
+    # 重新 peek 拿到真实对象再写回（同一引用，内存缓存随改随生效）
+    snap = cache_runtime.peek("timing:allocation") or cached
+    if snap.get("timing", {}).get("regime"):
+        snap["ai_insight"] = fresh
+        snap["ai_insight_at"] = datetime.now(_BEIJING).strftime("%Y-%m-%d %H:%M")
+        _save_snapshot(snap)
+    return fresh
 
 
 def _load_snapshot() -> dict | None:

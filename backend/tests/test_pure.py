@@ -324,6 +324,18 @@ def test_fund_top_holdings_parse_mixed_markets():
     assert out[3] == (("177", "005930"), 7.10) # 韩股元组
 
 
+def test_fund_holdings_latest_quarter_selection():
+    """档案持仓按季度键取最新一期：不依赖东财返回行序、跨年不回退。"""
+    import fund
+    key = fund._holdings_quarter_key
+    assert key("2026年2季度股票投资明细") == (2026, 2)
+    assert key("2025年四季度股票投资明细") == (2025, 4)
+    rows = ["2026年1季度股票投资明细", "2026年2季度股票投资明细"]  # 东财实际行序：Q1 在前
+    assert max(rows, key=key) == "2026年2季度股票投资明细"
+    rows = ["2026年1季度股票投资明细", "2025年4季度股票投资明细"]  # 跨年：新年 Q1 仍是更新一期
+    assert max(rows, key=key) == "2026年1季度股票投资明细"
+
+
 def test_fund_global_index_proxy_covers_qdii():
     """港股/QDII 跟踪标的应命中海外代理表（纳斯达克/恒生/海外互联网/标普）。"""
     import fund
@@ -484,7 +496,7 @@ def test_parse_treasury_real_yield_and_h10_release_ttl():
     assert gold_score._h10_cache_ttl(datetime(2026, 8, 10, 16, 16, tzinfo=et)) == 60
 
 
-def test_gold_dimension_history_carries_slow_series_and_keeps_weekly_last():
+def test_gold_dimension_history_carries_slow_series_and_keeps_daily_points():
     import gold_score
 
     histories = {
@@ -494,11 +506,13 @@ def test_gold_dimension_history_carries_slow_series_and_keeps_weekly_last():
     rows = gold_score._dimension_score_history(
         [("fast", 0.6), ("slow", 0.4)], histories, {"fast": 0.6, "slow": 0.4})
 
-    assert rows == [
-        {"date": "2026-06", "v": 80.0},
-        {"date": "2026-07-03", "v": 56.0},
-        {"date": "2026-07-10", "v": 68.0},
-    ]
+    # 日频口径：月频观测日规范化为当月 1 日；观测日之间逐日前向填充
+    assert rows[0] == {"date": "2026-06-01", "v": 80.0}
+    assert {"date": "2026-07-01", "v": 44.0} in rows
+    assert {"date": "2026-07-03", "v": 56.0} in rows
+    assert {"date": "2026-07-10", "v": 68.0} in rows
+    assert {"date": "2026-07-02", "v": 44.0} in rows
+    assert len(rows) == 40  # 06-01..07-10 逐日
 
 
 def test_gold_current_score_is_appended_without_overwriting_latest_observation():

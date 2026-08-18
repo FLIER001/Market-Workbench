@@ -69,6 +69,7 @@ export function Portfolio() {
   const [code, setCode] = useState("");
   const [shares, setShares] = useState("");
   const [cost, setCost] = useState("");
+  const [boughtDate, setBoughtDate] = useState("");
   const sharesRef = useRef<HTMLInputElement>(null);
   const [, setAdding] = useState(false);
   // 清仓录入
@@ -168,8 +169,8 @@ export function Portfolio() {
     if (!(s > 0) || !Number.isFinite(cc)) { setErr("数量须大于 0，成本价请填数字（可为负）"); return; }
     setAdding(true); setErr(null);
     try {
-      setData(await api.addHolding(c, s, cc));
-      setCode(""); setShares(""); setCost("");
+      setData(await api.addHolding(c, s, cc, boughtDate || undefined));
+      setCode(""); setShares(""); setCost(""); setBoughtDate("");
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "添加失败");
     } finally {
@@ -177,9 +178,10 @@ export function Portfolio() {
     }
   };
 
-  // 下拉选中股票后：拉取最新行情填成本价，光标跳转到数量框
+  // 下拉选中股票后：拉取最新行情填成本价，买入日期默认当天（可改），光标跳转到数量框
   const pickStock = (c: string) => {
     setCode(c);
+    setBoughtDate(todayStr());
     api.quote(c).then((quotes) => {
       const q = quotes[c];
       if (q && q.price) setCost(fmtPx(q.price));
@@ -364,7 +366,8 @@ export function Portfolio() {
                    value={(data?.ytd_pnl != null ? (data.ytd_pnl > 0 ? "+" : "") + fmt(data.ytd_pnl) : "—")}
                    cls={data?.ytd_pnl != null ? pnlColor(data.ytd_pnl) : ""}
                    sub={data?.ytd_pnl_pct != null ? (data.ytd_pnl_pct > 0 ? "+" : "") + data.ytd_pnl_pct + "%" : undefined}
-                   subCls={data?.ytd_pnl != null ? pnlColor(data.ytd_pnl) : undefined} />
+                   subCls={data?.ytd_pnl != null ? pnlColor(data.ytd_pnl) : undefined}
+                   title="年前买入按年初价、年内买入按成本价计，含本年已清仓实现盈亏" />
         </div>
       )}
 
@@ -378,6 +381,8 @@ export function Portfolio() {
                  className="w-28 rounded-xl border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/60" />
           <input value={cost} onChange={(e) => setCost(e.target.value.replace(/[^\d.-]/g, "").replace(/(?!^)-/g, ""))} placeholder="成本价，可负"
                  className="w-28 rounded-xl border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/60" />
+          <input type="date" value={boughtDate} onChange={(e) => setBoughtDate(e.target.value)} title="买入日期：年内买入按成本计本年盈亏，留空按年前持有计"
+                 className="w-36 rounded-xl border border-border bg-black/20 px-3 py-2 text-sm text-muted-foreground outline-none focus:border-primary/60" />
           <button onClick={() => add()} className="rounded-xl bg-primary/80 px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:bg-primary">
             添加
           </button>
@@ -572,11 +577,11 @@ export function Portfolio() {
 }
 
 /** 汇总卡片：标题 + 主数值 + 可选百分比（场外基金同款样式）。 */
-function StatCard({ label, value, cls, sub, subCls }: {
-  label: string; value: string; cls?: string; sub?: string; subCls?: string;
+function StatCard({ label, value, cls, sub, subCls, title }: {
+  label: string; value: string; cls?: string; sub?: string; subCls?: string; title?: string;
 }) {
   return (
-    <GlassCard className="p-3">
+    <GlassCard className="p-3" title={title}>
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className={cn("mt-1 font-mono text-lg font-bold", cls)}>{value}</p>
       {sub && <p className={cn("mt-0.5 text-xs", subCls)}>{sub}</p>}
@@ -614,6 +619,7 @@ function SignalRows({ h, sig, open, onToggle, onRemove, onClose }: {
         <td className="px-2 py-2.5 font-mono">
           <span>{fmtPx(h.price)}</span>
           <span className="block text-xs text-muted-foreground">{fmtPx(h.cost)}</span>
+          {h.bought_date && <span className="block text-[10px] text-muted-foreground/60">{h.bought_date} 买入</span>}
         </td>
         <td className="px-2 py-2.5 font-mono text-muted-foreground">{fmt(h.shares)}</td>
         <td className="px-2 py-2.5 font-mono">{fmt(h.market_value)}</td>

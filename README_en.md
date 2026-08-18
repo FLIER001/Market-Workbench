@@ -2,7 +2,7 @@
 
 # Market Workbench
 
-[![Version](https://img.shields.io/badge/version-1.7.0-1f6feb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.8.0-1f6feb)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)](https://react.dev/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
@@ -12,6 +12,23 @@ A locally hosted research workspace for China A-shares, with Hong Kong and US ma
 > **Project lineage:** Market Workbench is a derivative work based on [simonlin1212/Vibe-Research](https://github.com/simonlin1212/Vibe-Research), retaining its public-data and pluggable-AI foundations. This version adds macro and liquidity views; gold and fund workflows; fund holdings and watchlists; industry and thematic-board research and scoring; account-scoped data sync; and visible source and freshness state.
 
 ![Market overview](docs/screenshots/daily-review.png)
+
+<details>
+<summary>More screenshots</summary>
+
+| Macro | Factor lab |
+|---|---|
+| ![Macro](docs/screenshots/macro.png) | ![Factor lab](docs/screenshots/factors.png) |
+
+| Bonds | Timing & Allocation |
+|---|---|
+| ![Bonds](docs/screenshots/bonds.png) | ![Timing & Allocation](docs/screenshots/allocation.png) |
+
+| Gold | Oil |
+|---|---|
+| ![Gold](docs/screenshots/gold.png) | ![Oil](docs/screenshots/oil.png) |
+
+</details>
 
 ## Contents
 
@@ -40,6 +57,7 @@ A locally hosted research workspace for China A-shares, with Hong Kong and US ma
 | Oil | 5-dimension 8-indicator scoring (EIA/CFTC/GPR), term structure and crack-spread proxy |
 | Portfolio | Equity and fund holdings, closed positions and return tracking |
 | Screening | Manager-First fund screening; natural-language stock screening (AI verifies conditions tool-by-tool, no built-in candidate pool) |
+| Factor lab | Price-volume factor evaluation (RankIC / quintile returns / turnover, Alphalens-style) and exploratory long-only backtests (exploratory-grade data caveats shown with results) |
 | News | Public-news aggregation and announcement tracking |
 | Research | Personal report archive, research notes and reflection review |
 | AI connection | OpenAI-compatible APIs and local CLIs; models and keys remain yours |

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   TrendingUp, TrendingDown, ExternalLink, RefreshCw,
-  ChevronDown, ChevronRight, Globe,
+  ChevronDown, ChevronRight, Globe, Sparkles,
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -78,12 +78,15 @@ export function Pulse() {
   // 单卡重生成：只重调该模块的 LLM 研判，局部替换，不动双源数据
   const [localInsights, setLocalInsights] = useState<Record<string, PulseInsight>>({});
   const [localStatus, setLocalStatus] = useState<string | null>(null);
+  const [localOverall, setLocalOverall] = useState<string | null>(null);
   const refreshInsight = (module: string) => {
     setInsightRefreshing(module);
     api.pulseInsight(module)
       .then((ins) => {
         if (ins && Array.isArray(ins.events) && ins.events.length > 0) {
           setLocalInsights((prev) => ({ ...prev, [module]: ins }));
+          // 后端同时重算了综合研判，顺手取回
+          api.pulseOverview(false).then((d) => setLocalOverall(d.overall ?? null)).catch(() => {});
         }
       })
       .catch(() => { /* 失败保留原卡片 */ })
@@ -92,7 +95,10 @@ export function Pulse() {
   const refreshStatus = () => {
     setInsightRefreshing("现状");
     api.pulseStatus()
-      .then((s) => { if (s) setLocalStatus(s); })
+      .then((s) => {
+        if (s) setLocalStatus(s);
+        api.pulseOverview(false).then((d) => setLocalOverall(d.overall ?? null)).catch(() => {});
+      })
       .catch(() => { /* 失败保留原卡片 */ })
       .finally(() => setInsightRefreshing(null));
   };
@@ -135,6 +141,16 @@ export function Pulse() {
       {err && (
         <div className="mb-4 rounded border border-danger/30 bg-danger/5 p-3 text-sm text-danger">{err}</div>
       )}
+
+      {(localOverall ?? data?.overall) ? (
+        <div className="mb-3 rounded-lg border border-primary/40 bg-primary/10 p-3.5">
+          <div className="mb-1 flex items-center gap-1.5">
+            <Sparkles className="h-3.5 w-3.5 text-primary" />
+            <span className="text-xs font-semibold">综合研判</span>
+          </div>
+          <p className="text-[12.5px] font-medium leading-relaxed">{localOverall ?? data?.overall}</p>
+        </div>
+      ) : null}
 
       {(localStatus ?? data?.status) ? (
         <div className="mb-3 rounded-lg border bg-card/60 p-3.5">

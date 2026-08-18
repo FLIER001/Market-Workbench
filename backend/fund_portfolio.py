@@ -25,6 +25,15 @@ FPF_FILE = os.path.join(CACHE_DIR, "fund_portfolio.json")
 BEIJING = timezone(timedelta(hours=8))
 _LOCK = threading.Lock()
 
+
+def _year_start_nav(code: str, year: int) -> float | None:
+    """本年度首个净值公布日的单位净值（历史定值，取一次落账本即可）。"""
+    try:
+        rows = fund.nav_history(code, limit=260).get("rows", [])
+    except Exception:
+        return None
+    return next((r["nav"] for r in rows if str(r.get("date", "")).startswith(str(year))), None)
+
 # 进程内「刷新好的基金持仓响应」缓存：后台预热 / 点进页面强制重算后写入，
 # GET /api/fund-portfolio 直接返回它，用户看到的就是上次刷新算好的收益。
 _RESP_CACHE: dict[str, dict] = {}
@@ -87,8 +96,24 @@ def _save(d: dict, user_id: int | None = None) -> None:
     os.replace(tmp, path)
 
 
-def add_holding(code: str, shares: float, cost: float, user_id: int | None = None) -> dict:
-    """加一笔基金持仓（份额 + 单位成本净值）；同代码按加权平均合并。"""
+def _clean_bought_date(date: str | None) -> str | None:
+    """买入日期规整为 YYYY-MM-DD；不合法返回 None（等价于未填写）。"""
+    date = (date or "").strip()
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return date
+
+
+def add_holding(code: str, shares: float, cost: float, bought_date: str | None = None,
+                user_id: int | None = None) -> dict:
+    """加一笔基金持仓（份额 + 单位成本净值）；同代码按加权平均合并。
+
+    bought_date 记录最早一笔的买入日期，用于本年盈亏分段：
+    年前买入按年初净值作基准、年内买入按成本净值作基准。未填（旧账本）按年前买入处理。
+    """
+    bd = _clean_bought_date(bought_date)
     with _LOCK:
         d = _load(user_id)
         for h in d["holdings"]:
@@ -96,9 +121,15 @@ def add_holding(code: str, shares: float, cost: float, user_id: int | None = Non
                 total = h["shares"] + shares
                 h["cost"] = round((h["shares"] * h["cost"] + shares * cost) / total, 4) if total else cost
                 h["shares"] = total
+                old_bd = h.get("bought_date")
+                if bd and old_bd and bd < old_bd:
+                    h["bought_date"] = bd
                 break
         else:
-            d["holdings"].append({"code": code, "shares": shares, "cost": cost})
+            entry = {"code": code, "shares": shares, "cost": cost}
+            if bd:
+                entry["bought_date"] = bd
+            d["holdings"].append(entry)
         _save(d, user_id)
     _invalidate(user_id)
     return get_portfolio(user_id=user_id)
@@ -231,6 +262,7 @@ def get_portfolio(bypass: bool = False, user_id: int | None = None) -> dict:
             "estimate_stale": bool(q.get("estimate_stale")),
             "estimate_proxy": q.get("estimate_proxy"),
             "shares": h["shares"], "cost": h["cost"],
+            "bought_date": h.get("bought_date"),
             "market_value": round(mv, 2), "pnl": round(pnl, 2),
             "pnl_pct": round(pnl / cv * 100, 2) if cv else 0.0,
             "day_pnl": round(day_pnl, 2) if day_pnl is not None else None,
@@ -245,6 +277,54 @@ def get_portfolio(bypass: bool = False, user_id: int | None = None) -> dict:
         tcost += cv
     total_pnl = tmv - tcost
     closed = d.get("closed", [])
+    # 本年盈亏（YTD）分段口径（同场内证券）：年前买入按年初净值 → 最新净值，
+    # 年内买入按成本净值 → 最新净值；并入本年已卖出的实现盈亏。
+    # 年初净值是历史定值，只在需要时拉一次并落账本（ytd_open），之后直接重放。
+    year_now = datetime.now(BEIJING).year
+    ytd_pnl = 0.0
+    ytd_base = 0.0
+    has_ytd = False
+    if hs:
+        stored = d.get("ytd_open") if d.get("ytd_year") == year_now else None
+        stored = dict(stored or {})
+        missing = [
+            h["code"] for h in hs
+            if (h.get("bought_date") or "0000")[:4] < str(year_now) and h["code"] not in stored
+        ]
+        if missing:
+            fetched = {}
+            for c in missing:
+                v = _year_start_nav(c, year_now)
+                if v:
+                    fetched[c] = v
+            stored.update(fetched)
+            with _LOCK:
+                d2 = _load(user_id)
+                if year_now != d2.get("ytd_year"):
+                    d2["ytd_year"] = year_now
+                    d2["ytd_open"] = {}
+                d2.setdefault("ytd_open", {}).update(fetched)
+                _save(d2, user_id)
+        for h in hs:
+            nav_now = (est.get(h["code"], {}) or {}).get("nav") or 0.0
+            if not nav_now:
+                continue
+            if (h.get("bought_date") or "0000")[:4] < str(year_now):
+                year_start = stored.get(h["code"])
+                if year_start:
+                    ytd_pnl += (nav_now - year_start) * h["shares"]
+                    ytd_base += year_start * h["shares"]
+                    has_ytd = True
+            else:
+                ytd_pnl += (nav_now - h["cost"]) * h["shares"]
+                ytd_base += h["cost"] * h["shares"]
+                has_ytd = True
+    if closed:
+        for c in closed:
+            if str(c.get("date", ""))[:4] == str(year_now):
+                ytd_pnl += c.get("pnl", 0.0)
+                ytd_base += c.get("cost", 0.0) * c.get("shares", 0.0)
+                has_ytd = True
     result = {
         "holdings": rows,
         "totals": {
@@ -259,6 +339,8 @@ def get_portfolio(bypass: bool = False, user_id: int | None = None) -> dict:
         },
         "closed": closed,
         "realized_pnl": round(sum(c.get("pnl", 0) for c in closed), 2),
+        "ytd_pnl": round(ytd_pnl, 2) if has_ytd else None,
+        "ytd_pnl_pct": round(ytd_pnl / ytd_base * 100, 2) if (has_ytd and ytd_base) else None,
         "updated": _now(),
         "last_refresh": d.get("last_refresh"),
         "estimate_as_of": max((str(h.get("estimate_time") or "") for h in rows), default=None),

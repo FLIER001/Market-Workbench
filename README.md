@@ -2,7 +2,7 @@
 
 # Market Workbench
 
-[![Version](https://img.shields.io/badge/version-1.7.0-1f6feb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.8.0-1f6feb)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)](https://react.dev/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
@@ -12,6 +12,23 @@
 > 本项目基于 [simonlin1212/Vibe-Research](https://github.com/simonlin1212/Vibe-Research) 二次开发，保留其公开数据与可插拔 AI 接入基础。当前版本主要增加宏观与资金面、黄金与基金、基金持仓与观察列表、行业研究与主题板块评分、账号隔离的数据同步，以及数据来源和时效状态展示。
 
 ![市场全景](docs/screenshots/daily-review.png)
+
+<details>
+<summary>更多页面截图</summary>
+
+| 宏观面 | 因子研究 |
+|---|---|
+| ![宏观面](docs/screenshots/macro.png) | ![因子研究](docs/screenshots/factors.png) |
+
+| 债市 | 择时配置 |
+|---|---|
+| ![债市](docs/screenshots/bonds.png) | ![择时配置](docs/screenshots/allocation.png) |
+
+| 黄金 | 油价 |
+|---|---|
+| ![黄金](docs/screenshots/gold.png) | ![油价](docs/screenshots/oil.png) |
+
+</details>
 
 ## 目录
 
@@ -40,6 +57,7 @@
 | 油价 | 5 维 8 指标多维评分（EIA/CFTC/GPR）、期限结构与裂解价差代理 |
 | 持仓 | 股票及基金持仓、已清仓记录与收益跟踪 |
 | 标的筛选 | Manager-First 基金筛选；自然语言个股筛选（AI 逐项核验，不内置候选池） |
+| 因子研究 | 价量因子检验（RankIC/五分组/换手，Alphalens 口径）、公式引擎自建因子（价量 25 字段 + PIT 财务字段，公告日对齐）与探索性组合回测（探索级数据边界随结果展示） |
 | 资讯 | 公开资讯聚合与公告跟踪 |
 | 研究 | 个人研报归档、研究笔记与反思审计 |
 | AI 接入 | OpenAI 兼容 API 与本机 CLI；模型和密钥由用户自行提供 |

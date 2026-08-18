@@ -38,6 +38,18 @@
     { "key": "ai-hardware", "label": "AI 硬件", "tagline": "端侧、AI 眼镜与消费终端", "hot": true, "verified": false, "nodes": [] },
     { "key": "energy-storage", "label": "储能", "tagline": "电化学储能与电网侧调峰", "hot": false, "verified": false, "nodes": [] },
     { "key": "data-element", "label": "数据要素", "tagline": "数据确权、交易与流通基建", "hot": false, "verified": false, "nodes": [] },
-    { "key": "gaming", "label": "游戏与内容", "tagline": "研发、发行、出海与内容生态", "hot": true, "verified": false, "nodes": [] }
+    { "key": "gaming", "label": "游戏与内容", "tagline": "研发、发行、出海与内容生态", "hot": true, "verified": false, "nodes": [] },
+    { "key": "photovoltaic", "label": "光伏", "tagline": "硅料到逆变器的反内卷主链", "hot": true, "verified": false, "nodes": [] },
+    { "key": "lithium-battery", "label": "锂电池", "tagline": "液态动力与储能电池的产业主链", "hot": true, "verified": false, "nodes": [] },
+    { "key": "securities-brokerage", "label": "券商", "tagline": "并购重组主线下的非银金融", "hot": true, "verified": false, "nodes": [] },
+    { "key": "nuclear-power", "label": "核电", "tagline": "核准常态化下的裂变核电设备链", "hot": false, "verified": false, "nodes": [] },
+    { "key": "shipbuilding", "label": "船舶制造", "tagline": "造船大周期：订单、船价与产能", "hot": true, "verified": false, "nodes": [] },
+    { "key": "offshore-wind", "label": "海上风电", "tagline": "海缆、塔筒到整机的深远海链条", "hot": false, "verified": false, "nodes": [] },
+    { "key": "ev-automakers", "label": "新能源整车", "tagline": "销量、价格战与出海的整车竞争", "hot": true, "verified": false, "nodes": [] },
+    { "key": "fluorochemicals", "label": "氟化工", "tagline": "制冷剂配额周期与含氟材料", "hot": false, "verified": false, "nodes": [] },
+    { "key": "machine-tools-automation", "label": "工业母机", "tagline": "数控系统与工业自动化的设备更新", "hot": false, "verified": false, "nodes": [] },
+    { "key": "medical-devices", "label": "医疗器械", "tagline": "影像、IVD 与设备更新国产替代", "hot": false, "verified": false, "nodes": [] },
+    { "key": "hog-cycle", "label": "生猪养殖", "tagline": "能繁母猪到猪价的经典周期", "hot": false, "verified": false, "nodes": [] },
+    { "key": "copper-aluminum", "label": "工业金属", "tagline": "铜铝的供给瓶颈与新兴需求", "hot": true, "verified": false, "nodes": [] }
   ]
 }

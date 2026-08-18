@@ -210,6 +210,7 @@ export interface PublicNewsSearchData {
 
 export interface Holding {
   code: string; name: string; price: number; shares: number; cost: number;
+  bought_date: string | null;  // 买入日期（最早一笔）；未填为 null，YTD 按年前买入计
   market_value: number; pnl: number; pnl_pct: number; day_pnl: number; day_pnl_pct: number;
 }
 export interface ClosedPosition {
@@ -520,6 +521,12 @@ export interface ChainLink {
   to: string;
   kind: ChainLinkKind;
 }
+export interface ChainEvidence {
+  fact: string;
+  source: string;
+  date: string;
+  url?: string;
+}
 export interface ChainBottleneck {
   node_id: string;
   type: string;
@@ -528,6 +535,7 @@ export interface ChainBottleneck {
   detail: string;
   domestic_share: string;
   signal: string;
+  evidence?: ChainEvidence[];
 }
 export interface ChainTransmissionNote {
   from: string;
@@ -536,6 +544,7 @@ export interface ChainTransmissionNote {
   mechanism: string;
   status: "传导中" | "待验证";
   updated_on: string;
+  evidence?: ChainEvidence[];
 }
 export interface ChainTransmission {
   direction: string;
@@ -929,6 +938,7 @@ export interface FundHolding {
   estimate_stale?: boolean;
   estimate_proxy?: string | null;
   shares: number; cost: number;
+  bought_date: string | null;  // 买入日期（最早一笔）；未填为 null，YTD 按年前买入计
   market_value: number; pnl: number; pnl_pct: number;
   day_pnl: number | null;
   today_return_amount: number | null; today_return_pct: number | null; today_return_date: string | null;
@@ -947,6 +957,7 @@ export interface FundPortfolioData {
   };
   closed: FundClosedPosition[];
   realized_pnl: number;
+  ytd_pnl: number | null; ytd_pnl_pct: number | null;  // 本年盈亏（分段口径，同场内证券）
   updated: string; last_refresh: string | null;
 }
 export interface LegacyPortfolioStatus {
@@ -1164,6 +1175,7 @@ export interface PulseOverview {
   module_order: string[];
   core_modules: string[];
   status?: string | null;
+  overall?: string | null;
   modules: PulseModule[];
   updating?: boolean;
   cache_state?: "fresh" | "stale" | "refreshing" | "error";
@@ -1419,6 +1431,11 @@ export interface AllocationBlock {
   };
   cash_yield_note: string;
 }
+export interface AllocationInsight {
+  macro: string;
+  liquidity: string;
+  market_confirm: string;
+}
 export interface AllocationData {
   schema_version: number;
   model_version: string;
@@ -1449,6 +1466,8 @@ export const api = {
   bondsCurve: (refresh = false) => get<BondsCurveData>(`/bonds/curve${refresh ? "?refresh=true" : ""}`),
   bondsOverview: (refresh = false) => get<BondsOverviewData>(`/bonds/overview${refresh ? "?refresh=true" : ""}`),
   allocation: (refresh = false) => get<AllocationData>(`/allocation${refresh ? "?refresh=true" : ""}`),
+  allocationInsight: (refresh = false) =>
+    get<AllocationInsight | null>(`/allocation/insight${refresh ? "?refresh=true" : ""}`).then((d) => d ?? null),
   bondsFramework: (refresh = false) => get<BondsFrameworkData>(`/bonds/framework${refresh ? "?refresh=true" : ""}`),
   bondsCalc: (refresh = false) => get<BondsCalcData>(`/bonds/calc${refresh ? "?refresh=true" : ""}`),
   bondsPositioning: (refresh = false) => get<BondsPositioningData>(`/bonds/positioning${refresh ? "?refresh=true" : ""}`),
@@ -1485,7 +1504,8 @@ export const api = {
   portfolioLegacyStatus: () => get<LegacyPortfolioStatus>("/portfolio/legacy-status"),
   importLegacyPortfolio: (kind: "securities" | "fund") =>
     request<PortfolioData | FundPortfolioData>(`/portfolio/import-legacy?kind=${kind}`, "POST"),
-  addHolding: (code: string, shares: number, cost: number) => request<PortfolioData>("/portfolio/holding", "POST", { code, shares, cost }),
+  addHolding: (code: string, shares: number, cost: number, boughtDate?: string) =>
+    request<PortfolioData>("/portfolio/holding", "POST", { code, shares, cost, ...(boughtDate ? { bought_date: boughtDate } : {}) }),
   removeHolding: (code: string) => request<PortfolioData>(`/portfolio/holding?code=${code}`, "DELETE"),
   refreshPortfolio: () => request<PortfolioData>("/portfolio/refresh", "POST"),
   portfolioTiming: () => get<{ signals: Record<string, TimingSignal> }>("/portfolio/timing"),
@@ -1554,12 +1574,123 @@ export const api = {
   },
   fundPfs: (refresh = false) => get<PFSData>(`/funds/pfs?limit=100${refresh ? "&refresh=true" : ""}`),
   fundPortfolio: (fresh = false) => get<FundPortfolioData>(`/fund-portfolio${fresh ? "?fresh=true" : ""}`),
-  addFundHolding: (code: string, shares: number, cost: number) =>
-    request<FundPortfolioData>("/fund-portfolio/holding", "POST", { code, shares, cost }),
+  addFundHolding: (code: string, shares: number, cost: number, boughtDate?: string) =>
+    request<FundPortfolioData>("/fund-portfolio/holding", "POST", { code, shares, cost, ...(boughtDate ? { bought_date: boughtDate } : {}) }),
   removeFundHolding: (code: string) =>
     request<FundPortfolioData>(`/fund-portfolio/holding?code=${code}`, "DELETE"),
   closeFundPosition: (code: string, date: string, nav: number, shares: number, cost?: number) =>
     request<FundPortfolioData>("/fund-portfolio/close", "POST", { code, date, nav, shares, ...(cost !== undefined ? { cost } : {}) }),
   removeFundClosed: (index: number) =>
     request<FundPortfolioData>(`/fund-portfolio/close?index=${index}`, "DELETE"),
+  // —— 因子实验室 ——
+  factorLab: () => get<FactorLabStatus>("/factor/lab"),
+  factorBuild: () => request<{ building: boolean; started: boolean }>("/factor/build", "POST"),
+  factorEvaluate: (factor: string, start?: string, end?: string) =>
+    get<FactorEvaluateData>(`/factor/evaluate?factor=${encodeURIComponent(factor)}${start ? `&start=${start}` : ""}${end ? `&end=${end}` : ""}`),
+  factorBacktest: (params: { factor: string; top_n?: number; freq?: string; cost?: number; start?: string; end?: string }) => {
+    const qs = new URLSearchParams({ factor: params.factor });
+    if (params.top_n) qs.set("top_n", String(params.top_n));
+    if (params.freq) qs.set("freq", params.freq);
+    if (params.cost !== undefined) qs.set("cost", String(params.cost));
+    if (params.start) qs.set("start", params.start);
+    if (params.end) qs.set("end", params.end);
+    return get<FactorBacktestData>(`/factor/backtest?${qs.toString()}`);
+  },
+  factorFields: () => get<FactorFieldsDoc>("/factor/fields"),
+  factorValidate: (id: string, name: string, expr: string) =>
+    request<{ ok: boolean }>("/factor/validate", "POST", { id, name, expr }),
+  factorCustomSave: (id: string, name: string, expr: string) =>
+    request<CustomFactor>("/factor/custom", "POST", { id, name, expr }),
+  factorCustomDelete: (id: string) =>
+    request<{ deleted: string }>(`/factor/custom/${encodeURIComponent(id)}`, "DELETE"),
 };
+
+// —— 因子实验室类型 ——
+export interface FactorCatalog {
+  built_at: string;
+  stocks: number;
+  rows: number;
+  date_min: string;
+  date_max: string;
+}
+
+export interface FundamentalsStatus {
+  has_data: boolean;
+  built: {
+    rows: number; stocks: number; report_dates: number;
+    notice_date_min: string; notice_date_max: string;
+  } | null;
+  periods_fetched: number;
+  building: boolean;
+  progress: { done: number; total: number; rows: number; started_at: string | null; done_at: string | null; error: string | null };
+  pit_note: string;
+  biases: string[];
+}
+
+export interface FactorLabStatus {
+  factors: { id: string; name: string }[];
+  fin_factors?: { id: string; name: string }[];
+  has_data: boolean;
+  catalog: FactorCatalog | null;
+  biases: string[];
+  building: boolean;
+  progress: { fetched: number; total: number; failed: number; started_at: string | null; done_at: string | null; error: string | null };
+  fundamentals?: FundamentalsStatus;
+}
+
+export interface FactorEvaluateData {
+  factor: string;
+  factor_name: string;
+  start: string;
+  end: string;
+  n_days: number;
+  avg_coverage: number;
+  ic: { ic_mean: number; rank_ic_mean: number; rank_ic_ir: number | null; rank_ic_positive_ratio: number; ic_std: number };
+  ic_series: { dates: string[]; values: number[] };
+  ic_decay: Record<string, { rank_ic_mean: number; rank_ic_ir: number | null }>;
+  quantile_returns: Record<string, number | null>;
+  quantile_turnover: Record<string, number | null>;
+  long_excess_bp: number;
+  long_short_bp: number;
+  rank_autocorr: number | null;
+  by_year: Record<string, { rank_ic_mean: number; rank_ic_ir: number | null; days: number }>;
+  biases: string[];
+  timing_note: string;
+}
+
+export interface FactorBacktestMetrics {
+  total_return: number;
+  ann_return: number;
+  ann_vol: number | null;
+  sharpe: number | null;
+  max_drawdown: number;
+  win_rate: number | null;
+  ann_turnover: number;
+  n_days: number;
+}
+
+export interface FactorBacktestData {
+  factor: string;
+  factor_name: string;
+  params: { start: string; end: string; top_n: number; top_pct: number | null; freq: string; cost_multiplier: number };
+  metrics: FactorBacktestMetrics;
+  cost_stress: Record<string, FactorBacktestMetrics>;
+  nav: { dates: string[]; strategy: number[]; benchmark: number[] };
+  yearly_returns: Record<string, number>;
+  biases: string[];
+  timing_note: string;
+}
+
+export interface CustomFactor {
+  id: string;
+  name: string;
+  expr: string;
+  created_at?: string;
+}
+
+export interface FactorFieldsDoc {
+  fields: { name: string; desc: string }[];
+  ops: { name: string; desc: string }[];
+  examples: { expr: string; desc: string }[];
+  custom: CustomFactor[];
+}

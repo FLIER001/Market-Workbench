@@ -408,6 +408,15 @@ def au0_daily_history(days: int = 400) -> dict:
                     points.append({"date": d, "v": round(close, 2)})
             if not points:
                 raise ValueError("AU0 日K为空")
+            # 新浪日K当日 bar 盘后才生成：盘中用 nf_AU0 实时价补当日点，保证走势含最新日期
+            try:
+                live = _parse_nf_au0(_fetch_sina_cn(""), _au0_prev_settlement())
+                today = datetime.now(BEIJING).strftime("%Y-%m-%d")
+                if live and live.get("date") == today and live.get("price") \
+                        and (not points or points[-1]["date"] < today):
+                    points.append({"date": today, "v": round(live["price"], 2)})
+            except Exception:  # noqa: BLE001 — 实时补点失败不影响历史序列
+                pass
             payload = {
                 "symbol": "AU0",
                 "points": points,
@@ -993,27 +1002,40 @@ def _crowding_cap(score: float, level_pct: float, rising: bool) -> float:
 
 def _dimension_score_history(parts: list[tuple[str, float]], score_histories: dict[str, list[tuple[str, float]]],
                              weights: dict[str, float]) -> list[dict]:
-    """不同频率指标按截至当日最近得分合成，近一年每周保留最后一点。"""
+    """不同频率指标按截至当日最近得分合成，近一年逐日输出（观测日间沿用最近合成值）。"""
     series = {key: rows for key, _ in parts if (rows := score_histories.get(key))}
     if not series:
         return []
     latest = max(rows[-1][0] for rows in series.values())
     latest_day = latest[:10] if len(latest) >= 10 else f"{latest}-01"
-    cutoff = (date.fromisoformat(latest_day) - timedelta(days=365)).isoformat()
-    event_dates = sorted({d for rows in series.values() for d, _ in rows if d >= cutoff})
-    weekly: dict[tuple[int, int], dict] = {}
+    event_dates = sorted({d for rows in series.values() for d, _ in rows})
+    keys = {key: [d for d, _ in rows] for key, rows in series.items()}
+    daily: dict[str, float] = {}
     for day in event_dates:
         got = []
         for key, rows in series.items():
-            i = bisect_right([d for d, _ in rows], day) - 1
+            i = bisect_right(keys[key], day) - 1
             if i >= 0 and weights.get(key, 0) > 0:
                 got.append((rows[i][1], weights[key]))
-        if not got:
-            continue
-        score = sum(value * weight for value, weight in got) / sum(weight for _, weight in got)
-        parsed = date.fromisoformat(day[:10] if len(day) >= 10 else f"{day}-01")
-        weekly[parsed.isocalendar()[:2]] = {"date": day, "v": round(score, 1)}
-    return list(weekly.values())
+        if got:
+            got_day = day if len(day) >= 10 else f"{day}-01"
+            daily[got_day] = sum(value * weight for value, weight in got) / sum(weight for _, weight in got)
+    if not daily:
+        return []
+    cutoff = (date.fromisoformat(latest_day) - timedelta(days=365)).isoformat()
+    out: list[dict] = []
+    first = min(daily)
+    cur = date.fromisoformat(max(first, cutoff))
+    end = date.fromisoformat(latest_day)
+    last: float | None = None
+    while cur <= end:
+        k = cur.isoformat()
+        if k in daily:
+            last = daily[k]
+        if last is not None:
+            out.append({"date": k, "v": round(last, 1)})
+        cur += timedelta(days=1)
+    return out
 
 
 def _append_current_score(hist: list[dict], current_date: str, score: float) -> None:

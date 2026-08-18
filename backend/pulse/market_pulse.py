@@ -25,7 +25,7 @@ from typing import Any
 from . import kalshi_signals
 from . import market_taxonomy
 from . import polymarket_signals
-from .pulse_insight import module_insight, status_insight
+from .pulse_insight import module_insight, overall_insight, status_insight
 
 logger = logging.getLogger(__name__)
 
@@ -159,25 +159,35 @@ async def _attach_insights(modules: list[dict[str, Any]]) -> None:
 
 async def refresh_insight(module_key: str) -> dict[str, Any] | None:
     """Regenerate one module's insight card from the pinned snapshot's current
-    markets (no source re-pull) and persist it. Returns the new insight or
-    None when the module is missing/has no markets."""
+    markets (no source re-pull) and persist it. The 综合研判 card depends on
+    module impacts, so it is rebuilt too. Returns the new insight or None when
+    the module is missing/has no markets."""
     snap = _load_snapshot()
     if not snap:
         return None
     for module in snap.get("modules", []):
         if module.get("key") == module_key:
             module["insight"] = await module_insight(module_key, module.get("markets", []))
+            snap["overall"] = await overall_insight(
+                snap.get("status", ""),
+                [m["insight"] for m in snap.get("modules", []) if m.get("core") and m.get("insight")],
+            )
             _save_snapshot(snap)
             return module["insight"]
     return None
 
 
 async def refresh_status() -> str:
-    """Regenerate the 现状 long-strip card and persist it into the snapshot."""
+    """Regenerate the 现状 long-strip card and the 综合研判 card (it depends on
+    the status text) and persist both into the snapshot."""
     snap = _load_snapshot()
     if not snap:
         return ""
     snap["status"] = await status_insight()
+    snap["overall"] = await overall_insight(
+        snap["status"],
+        [m["insight"] for m in snap.get("modules", []) if m.get("core") and m.get("insight")],
+    )
     _save_snapshot(snap)
     return snap["status"]
 
@@ -199,6 +209,9 @@ async def _build() -> dict[str, Any]:
     modules = _group_by_module(merged)
     await _attach_insights(modules)
     status = await status_insight()
+    overall = await overall_insight(
+        status, [m["insight"] for m in modules if m.get("core") and m.get("insight")]
+    )
     now = datetime.now().astimezone().isoformat(timespec="seconds")
     overview = {
         "as_of": now,
@@ -207,6 +220,7 @@ async def _build() -> dict[str, Any]:
         "module_order": market_taxonomy.MODULES,
         "core_modules": market_taxonomy.CORE_MODULES,
         "status": status,
+        "overall": overall,
         "modules": modules,
     }
     _save_snapshot(overview)

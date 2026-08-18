@@ -326,6 +326,22 @@ function ChainDepthSection({ chain }: { chain: IndustryChainData }) {
                   <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{item.detail}</p>
                   <p className="mt-1 text-[10px] text-muted-foreground">现状：{item.domestic_share}</p>
                   <p className="mt-1 text-[10px] text-primary/80">{item.signal}</p>
+                  {(item.evidence ?? []).length > 0 && (
+                    <div className="mt-2 space-y-1 border-t border-border/30 pt-2">
+                      {(item.evidence ?? []).map((ev, i) => (
+                        <a
+                          key={i}
+                          href={ev.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className={cn("block text-[10px] leading-relaxed text-muted-foreground", ev.url && "hover:text-primary")}
+                        >
+                          · {ev.fact}
+                          <span className="ml-1 text-muted-foreground/60">——{ev.source} {ev.date}</span>
+                        </a>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -365,6 +381,22 @@ function ChainDepthSection({ chain }: { chain: IndustryChainData }) {
                   </span>
                 </div>
                 <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{note.mechanism}</p>
+                {(note.evidence ?? []).length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {(note.evidence ?? []).map((ev, i) => (
+                      <a
+                        key={i}
+                        href={ev.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className={cn("block text-[10px] leading-relaxed text-muted-foreground", ev.url && "hover:text-primary")}
+                      >
+                        · {ev.fact}
+                        <span className="ml-1 text-muted-foreground/60">——{ev.source} {ev.date}</span>
+                      </a>
+                    ))}
+                  </div>
+                )}
                 <p className="mt-1 text-right text-[10px] text-muted-foreground/70">更新于 {note.updated_on}</p>
               </div>
             ))}
@@ -528,12 +560,28 @@ export function SectorDetail() {
           <ArrowLeft className="h-4 w-4" /> 板块
         </Link>
         <PageHeader title={sector.label} subtitle={sector.tagline} />
-        <GlassCard>
-          <div className="flex flex-col items-center gap-3 py-8 text-center">
-            <Wrench className="h-8 w-8 text-muted-foreground/50" />
-            <p className="text-sm text-muted-foreground">该板块的研究证据仍在补充中。</p>
-          </div>
-        </GlassCard>
+
+        {chainLoading && (
+          <GlassCard className="mb-6">
+            <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> 正在读取产业链图谱与利润分布
+            </div>
+          </GlassCard>
+        )}
+        {!chainLoading && chain && <ChainDepthSection chain={chain} />}
+        {!chainLoading && !chain && chainError && (
+          <GlassCard className="mb-6">
+            <p className="py-4 text-center text-sm text-warning">{chainError}</p>
+          </GlassCard>
+        )}
+        {!chainLoading && !chain && !chainError && (
+          <GlassCard>
+            <div className="flex flex-col items-center gap-3 py-8 text-center">
+              <Wrench className="h-8 w-8 text-muted-foreground/50" />
+              <p className="text-sm text-muted-foreground">该板块的研究证据仍在补充中。</p>
+            </div>
+          </GlassCard>
+        )}
       </div>
     );
   }

@@ -606,16 +606,32 @@ def _single_momentum(vals: list[float], n: int) -> float | None:
     return (window[-1] / window[0] - 1) / vol
 
 
-def _weekly_score_history(points: list[tuple[str, float]]) -> list[dict]:
-    """周频得分趋势：每周保留最后一点（前端近 1 年走势）。"""
-    weekly: dict[tuple[int, int], dict] = {}
+def _daily_score_history(points: list[tuple[str, float]]) -> list[dict]:
+    """近 1 年日频得分趋势：观测日之间用最近得分前向填充（周频指标呈阶梯）。"""
+    obs: dict[str, float] = {}
     for d, v in points:
+        day = d[:10]
         try:
-            iso = date.fromisoformat(d[:10]).isocalendar()[:2]
+            date.fromisoformat(day)
         except ValueError:
             continue
-        weekly[iso] = {"date": d, "v": round(v, 1)}
-    return list(weekly.values())[-52:]
+        obs[day] = v
+    if not obs:
+        return []
+    days = sorted(obs)
+    cutoff = (date.fromisoformat(days[-1]) - timedelta(days=365)).isoformat()
+    cur = date.fromisoformat(max(days[0], cutoff))
+    end = date.fromisoformat(days[-1])
+    out: list[dict] = []
+    last: float | None = None
+    while cur <= end:
+        k = cur.isoformat()
+        if k in obs:
+            last = obs[k]
+        if last is not None:
+            out.append({"date": k, "v": round(last, 1)})
+        cur += timedelta(days=1)
+    return out
 
 
 def _build() -> dict:
@@ -818,7 +834,7 @@ def _build() -> dict:
             continue
         w = sum(pw for _, pw in avail)
         score = round(sum(scored[k]["score"] * pw for k, pw in avail) / w, 1)
-        dim_hist = _weekly_score_history(
+        dim_hist = _daily_score_history(
             _merge_dim_score_signals(
                 [(scored[k].get("_hist_sig") or [(p["date"], p["v"]) for p in scored[k]["hist"]], pw)
                  for k, pw in avail]))
@@ -826,7 +842,7 @@ def _build() -> dict:
                       "effective_weight": round(w, 4), "hist": dim_hist}
 
     # 总分趋势（与总合同口径：各指标信号转分位后按有效权重合成）
-    total_hist = _weekly_score_history(
+    total_hist = _daily_score_history(
         _merge_dim_score_signals(
             [(scored[k].get("_hist_sig") or [(p["date"], p["v"]) for p in scored[k]["hist"]],
               scored[k].get("effective_weight", scored[k]["weight"]))

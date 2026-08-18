@@ -213,6 +213,30 @@ TOOLS: list[dict] = [
        "查择时与大类资产配置：宏观×流动性×市场确认合成择时分（5 档风险等级 + 风险预算倍率 + 现金底仓），"
        "再给出股票/债券/商品/现金目标权重（合计 100%）与调仓建议。问「现在仓位该开多大、股债商品现金怎么配」用这个。",
        example="现在市场环境偏多还是偏空、股债商品现金各配多少 → query_timing_allocation()"),
+    _t("factor_lab_status",
+       "查因子实验室状态：可用价量因子列表（动量/反转/波动/非流动性等）、日线数据是否已构建、"
+       "覆盖区间与数据偏差标签（探索级：幸存者偏差/前复权/无 point-in-time 状态）。"
+       "做因子研究前先看这个。",
+       example="因子实验室有哪些因子、数据构建好了没 → factor_lab_status()"),
+    _t("factor_evaluate",
+       "单因子检验（Alphalens 口径）：IC/RankIC/ICIR、五分组日均收益与单调性、分组换手、因子秩自相关、"
+       "分年 RankIC。因子值取 T 日收盘、配对 T+1 起前瞻收益。结果为研究证据，不构成投资建议。",
+       {"factor": {"type": "string", "description": "因子 id，如 mom60 / rev5 / vol20"},
+        "start": {"type": "string", "description": "起始日 YYYY-MM-DD，可选"},
+        "end": {"type": "string", "description": "结束日 YYYY-MM-DD，可选"}},
+       ["factor"],
+       "60 日动量因子近三年 IC 和分层收益怎么样 → factor_evaluate(factor='mom60')"),
+    _t("factor_backtest",
+       "探索性组合回测：只多等权 TopN、周/月调仓、T 收盘出信号 T+1 开盘成交，"
+       "含佣金/印花税/滑点成本与 0/1/2/3x 成本压力对照、净值 vs 全池等权基准、分年收益。"
+       "探索级数据（幸存者偏差等标签随结果返回），不构成投资建议。",
+       {"factor": {"type": "string", "description": "因子 id，如 mom60 / rev5"},
+        "top_n": {"type": "integer", "description": "持仓数，默认 50"},
+        "freq": {"type": "string", "description": "调仓频率 weekly/monthly，默认 monthly"},
+        "start": {"type": "string", "description": "起始日 YYYY-MM-DD，可选"},
+        "end": {"type": "string", "description": "结束日 YYYY-MM-DD，可选"}},
+       ["factor"],
+       "60 日动量 Top50 月调仓回测表现如何 → factor_backtest(factor='mom60', top_n=50, freq='monthly')"),
 ]
 
 TOOL_NAMES = [t["function"]["name"] for t in TOOLS]
@@ -663,7 +687,7 @@ def _industry_chain(args: dict) -> dict:
         for s in (profit.get("node_stats") or [])
     ]
     bottlenecks = [
-        {k: b.get(k) for k in ("type_label", "severity", "detail", "signal")}
+        {k: b.get(k) for k in ("type_label", "severity", "detail", "domestic_share", "signal", "evidence")}
         for b in (structure.get("bottlenecks") or [])
     ]
     transmission = structure.get("transmission") or {}
@@ -688,7 +712,8 @@ def _industry_chain(args: dict) -> dict:
             {"from": (node_by_id.get(t.get("from")) or {}).get("name") or t.get("from"),
              "to": (node_by_id.get(t.get("to")) or {}).get("name") or t.get("to"),
              "what": t.get("what"),
-             "mechanism": t.get("mechanism"), "status": t.get("status")}
+             "mechanism": t.get("mechanism"), "status": t.get("status"),
+             "evidence": (t.get("evidence") or [])[:2]}
             for t in (transmission.get("notes") or [])
         ],
         "watch_quotes": transmission.get("watch_quotes"),
@@ -926,7 +951,35 @@ _HANDLERS = {
     "query_bonds_positioning": lambda a: bonds.get_positioning() or {"error": "国债期货量仓暂不可用"},
     "query_bonds_segments": _bonds_segments,
     "query_timing_allocation": _timing_allocation,
+    "factor_lab_status": lambda a: _factor_lab_status(),
+    "factor_evaluate": lambda a: _factor_evaluate(str(a["factor"]), a.get("start"), a.get("end")),
+    "factor_backtest": lambda a: _factor_backtest(
+        str(a["factor"]), int(a.get("top_n", 50)), str(a.get("freq", "monthly")),
+        a.get("start"), a.get("end")),
 }
+
+
+def _factor_lab_status() -> dict:
+    import factor_data
+    import factors
+
+    return {
+        "factors": [{"id": k, "name": v} for k, v in factors.FACTOR_META.items()],
+        **factor_data.lab_status(),
+    }
+
+
+def _factor_evaluate(factor: str, start, end) -> dict:
+    import factors
+
+    return factors.evaluate(factor, start or None, end or None)
+
+
+def _factor_backtest(factor: str, top_n: int, freq: str, start, end) -> dict:
+    import factor_backtest
+
+    return factor_backtest.run_backtest(factor, start or None, end or None,
+                                        top_n=top_n, freq=freq)
 
 
 def exec_tool(name: str, args: dict):

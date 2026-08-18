@@ -23,6 +23,7 @@ export function FundPortfolioPanel({ refreshSignal }: { refreshSignal?: number }
   const [picked, setPicked] = useState<FundSearchResult | null>(null);
   const [shares, setShares] = useState("");
   const [cost, setCost] = useState("");
+  const [boughtDate, setBoughtDate] = useState("");
   const sharesRef = useRef<HTMLInputElement>(null);
   const [detail, setDetail] = useState<{ code: string; name: string } | null>(null);
   // 卖出录入
@@ -98,9 +99,10 @@ export function FundPortfolioPanel({ refreshSignal }: { refreshSignal?: number }
     </th>
   );
 
-  // 下拉选中基金后：拉取行情填成本净值，光标跳转到份额框
+  // 下拉选中基金后：拉取行情填成本净值，买入日期默认当天（可改），光标跳转到份额框
   const pickFund = (f: FundSearchResult) => {
     setPicked(f);
+    setBoughtDate(todayStr());
     api.fundQuote([f.code]).then((quotes) => {
       const q = quotes[f.code];
       if (q && q.nav) setCost(fmtPx(q.nav));
@@ -149,8 +151,8 @@ export function FundPortfolioPanel({ refreshSignal }: { refreshSignal?: number }
     if (!Number.isFinite(c) || c <= 0) { setErr("成本净值须大于 0"); return; }
     setErr(null);
     try {
-      setData(await api.addFundHolding(picked.code, s, c));
-      setPicked(null); setShares(""); setCost("");
+      setData(await api.addFundHolding(picked.code, s, c, boughtDate || undefined));
+      setPicked(null); setShares(""); setCost(""); setBoughtDate("");
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "添加失败");
     }
@@ -179,7 +181,7 @@ export function FundPortfolioPanel({ refreshSignal }: { refreshSignal?: number }
   return (
     <div className="space-y-4">
       {/* 汇总条 */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
         <Stat label="总市值" value={t ? fmt(t.market_value) : "—"} />
         <Stat label="浮动盈亏" value={t ? fmt(t.pnl) : "—"} cls={t ? pnlColor(t.pnl) : ""}
               sub={t ? `${t.pnl_pct > 0 ? "+" : ""}${t.pnl_pct}%` : undefined} />
@@ -191,6 +193,9 @@ export function FundPortfolioPanel({ refreshSignal }: { refreshSignal?: number }
         <Stat label="昨日收益" value={t?.yesterday_pnl != null ? fmt(t.yesterday_pnl) : "—"}
               cls={t?.yesterday_pnl != null ? pnlColor(t.yesterday_pnl) : ""}
               sub={t?.yesterday_pnl_pct != null ? fmtPct(t.yesterday_pnl_pct) : undefined} />
+        <Stat label="本年盈亏" value={data?.ytd_pnl != null ? (data.ytd_pnl > 0 ? "+" : "") + fmt(data.ytd_pnl) : "—"}
+              cls={data?.ytd_pnl != null ? pnlColor(data.ytd_pnl) : ""}
+              sub={data?.ytd_pnl_pct != null ? fmtPct(data.ytd_pnl_pct) : undefined} />
       </div>
 
       <GlassCard className="relative z-10">
@@ -206,6 +211,8 @@ export function FundPortfolioPanel({ refreshSignal }: { refreshSignal?: number }
                  className="w-28 rounded-xl border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/60" />
           <input value={cost} onChange={(e) => setCost(e.target.value)} placeholder="成本净值"
                  className="w-28 rounded-xl border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/60" />
+          <input type="date" value={boughtDate} onChange={(e) => setBoughtDate(e.target.value)} title="买入日期：年内买入按成本净值计本年盈亏，留空按年前持有计"
+                 className="w-36 rounded-xl border border-border bg-black/20 px-3 py-2 text-sm text-muted-foreground outline-none focus:border-primary/60" />
           <button onClick={add} className="rounded-xl bg-primary/80 px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:bg-primary">
             添加
           </button>
@@ -255,6 +262,7 @@ export function FundPortfolioPanel({ refreshSignal }: { refreshSignal?: number }
                   <td className="px-4 py-3 font-mono">
                     {fmtPx(h.nav)}
                     <div className="text-xs text-muted-foreground">成本 {fmtPx(h.cost)}</div>
+                    {h.bought_date && <div className="text-[10px] text-muted-foreground/60">{h.bought_date} 买入</div>}
                   </td>
                   <td className={cn("px-4 py-3 font-mono", h.estimate_pct != null ? pnlColor(h.estimate_pct) : "text-muted-foreground")}>
                     {h.estimate_pct != null ? `${h.estimate_pct > 0 ? "+" : ""}${h.estimate_pct}%` : "—"}
