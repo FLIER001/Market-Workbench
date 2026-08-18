@@ -79,8 +79,11 @@ def test_point_in_time_store_marks_backfill_and_live_snapshot(monkeypatch, tmp_p
     monkeypatch.setattr(fund_pfs, "DATA_DIR", str(tmp_path))
     monkeypatch.setattr(fund_pfs, "_DB_FILE", str(tmp_path / "pfs.sqlite"))
     rows = [{"code": "000001", "manager_aum": 10, "manager_fund_count": 2, "strategy": "主动股票", "manager": "测试经理"}]
+    # nav 日期取 3 天前：_stored_series 的 max_age_days=7 用「距今天数」判断新鲜度，
+    # 硬编码日期会在若干天后悄然让本测试变红。
+    nav_date = (date.today() - timedelta(days=3)).isoformat()
     details = {"000001": {
-        "nav": {"rows": [{"date": "2026-08-10", "nav": 1.2}]},
+        "nav": {"rows": [{"date": nav_date, "nav": 1.2}]},
         "scale": {"rows": [{"date": "2026-06-30", "net_assets": 10}]},
         "holders": {"rows": []},
     }}
