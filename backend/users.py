@@ -214,4 +214,58 @@ def merge_data(user_id: int, items: dict) -> dict:
     return get_data(user_id)
 
 
+EXPORT_FORMAT = "vibe-research-user-data"
+EXPORT_VERSION = 1
+
+
+def export_data(user_id: int, username: str) -> dict:
+    """导出该账号全部 user_data 为可下载 JSON（自选/备注/研究记录/AI 配置等）。
+
+    不含密码哈希、会话 token、持仓账本（账本走各自端点的独立导出）。"""
+    now = time.time()
+    return {
+        "format": EXPORT_FORMAT,
+        "version": EXPORT_VERSION,
+        "exported_at": now,
+        "exported_at_text": time.strftime("%Y-%m-%d %H:%M", time.localtime(now)),
+        "user": {"id": user_id, "username": username},
+        "data": get_data(user_id),
+    }
+
+
+def import_data(user_id: int, payload: dict, merge: bool = True) -> dict:
+    """导入 export_data 产物。merge=True 只补云端没有的 key（默认，安全）；
+    merge=False 整体替换——先清掉白名单 key 再写入，用于「以备份为准」恢复。
+
+    校验失败抛 ValueError（端点转 400）；密码/会话永不在导出文件里，无可导入项。"""
+    if not isinstance(payload, dict):
+        raise ValueError("导入内容必须是 JSON 对象")
+    if payload.get("format") != EXPORT_FORMAT:
+        raise ValueError("不是本产品的用户数据导出文件（format 不匹配）")
+    try:
+        file_version = int(payload.get("version") or 0)
+    except (TypeError, ValueError):
+        raise ValueError("文件版本号损坏") from None
+    if file_version > EXPORT_VERSION:
+        raise ValueError(f"文件版本 v{file_version} 高于当前支持的 v{EXPORT_VERSION}，请先升级程序")
+    data = payload.get("data")
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        raise ValueError("文件内 data 字段损坏")
+    incoming = {k: v for k, v in data.items() if k in ALLOWED_KEYS}
+    skipped = sorted(set(data) - set(incoming))
+    if merge:
+        existing = get_data(user_id)
+        applied = {k: v for k, v in incoming.items() if k not in existing}
+    else:
+        with _conn() as c:
+            for key in ALLOWED_KEYS:
+                c.execute("DELETE FROM user_data WHERE user_id=? AND key=?", (user_id, key))
+        applied = incoming
+    for k, v in applied.items():
+        set_data(user_id, k, v)
+    return {"ok": True, "applied": sorted(applied), "skipped_keys": skipped}
+
+
 init_db()

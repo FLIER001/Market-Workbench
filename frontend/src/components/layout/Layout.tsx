@@ -4,7 +4,7 @@ import {
   Activity, Radar, LayoutGrid, Wallet, Settings, Search,
   Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github, Globe,
   Star, FileText, Droplets, Loader2, PieChart, Coins, Gauge, Landmark, Flame, Scale, FlaskConical,
-  ChevronDown, type LucideIcon,
+  ChevronDown, HeartPulse, type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
@@ -38,13 +38,13 @@ const NAV: NavNode[] = [
   { to: "/intel", icon: Radar, label: "资讯" },
   { to: "/watchlist", icon: Star, label: "自选" },
   { to: "/portfolio", icon: Wallet, label: "持仓" },
+  { to: "/factors", icon: FlaskConical, label: "因子研究", match: "/factors" },
   { to: "/sectors", icon: LayoutGrid, label: "行业研究", match: "/sectors" },
   { to: "/screening", icon: PieChart, label: "标的筛选", match: "/screening" },
-  { to: "/factors", icon: FlaskConical, label: "因子研究", match: "/factors" },
   { to: "/bonds", icon: Landmark, label: "债市" },
   { to: "/gold", icon: Coins, label: "黄金" },
   { to: "/oil", icon: Flame, label: "油价" },
-  { to: "/research", icon: FileText, label: "研究", match: "/research" },
+  { to: "/research", icon: FileText, label: "笔记", match: "/research" },
 ];
 
 export function Layout() {
@@ -219,7 +219,7 @@ export function Layout() {
             const active = match ? pathname.startsWith(match) : pathname === to;
             return (
               <div key={to}>
-                {(to === "/watchlist" || to === "/sectors") && (
+                {(to === "/watchlist" || to === "/factors") && (
                   <div className="my-1.5 border-t border-border/50" aria-hidden="true" />
                 )}
                 <Link
@@ -267,6 +267,16 @@ export function Layout() {
               <button onClick={() => setCollapsed(false)} className="rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground" title="展开">
                 <ChevronsRight className="h-4 w-4" />
               </button>
+              <Link
+                to="/source-health"
+                className={cn(
+                  "rounded p-1.5 transition-colors",
+                  pathname === "/source-health" ? "bg-primary/15 text-primary shadow-glow" : "text-muted-foreground hover:text-foreground",
+                )}
+                title="数据源健康"
+              >
+                <HeartPulse className="h-4 w-4" />
+              </Link>
             </>
           ) : (
             <>
@@ -304,8 +314,18 @@ export function Layout() {
                   </button>
                 </div>
               </div>
-              <p className="text-[11px] leading-relaxed text-muted-foreground/60">
+              <p className="flex items-center justify-between text-[11px] leading-relaxed text-muted-foreground/60">
                 {APP_VERSION}
+                <Link
+                  to="/source-health"
+                  className={cn(
+                    "rounded p-0.5 transition-colors",
+                    pathname === "/source-health" ? "text-primary" : "hover:text-foreground",
+                  )}
+                  title="数据源健康"
+                >
+                  <HeartPulse className="h-3 w-3" />
+                </Link>
               </p>
             </>
           )}

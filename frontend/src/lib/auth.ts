@@ -82,4 +82,23 @@ export const auth = {
   setData: (key: string, value: unknown) => req<{ ok: boolean; version: number; updated_at: number }>("/auth/data/set", "POST", { key, value }),
   mergeData: (items: Record<string, unknown>) =>
     req<Record<string, unknown>>("/auth/data/merge", "POST", { items }),
+  exportData: () => req<UserDataExport>("/auth/export"),
+  importData: (payload: unknown, mode: "merge" | "replace", ledgersMode: "skip" | "merge" | "replace") =>
+    req<{ ok: boolean; applied: string[]; skipped_keys: string[]; ledgers_mode: string }>(
+      "/auth/import", "POST", { payload, mode, ledgers_mode: ledgersMode },
+    ),
 };
+
+// 用户数据导出文件（/api/auth/export 产物）
+export interface UserDataExport {
+  format: string;
+  version: number;
+  exported_at: number;
+  exported_at_text: string;
+  user: { username?: string };
+  data: Record<string, unknown>;
+  ledgers?: {
+    portfolio?: { holdings?: unknown[] };
+    fund_portfolio?: { holdings?: unknown[] };
+  };
+}

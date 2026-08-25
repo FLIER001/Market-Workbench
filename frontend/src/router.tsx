@@ -19,6 +19,7 @@ import { Screening } from "@/pages/Screening";
 import { ResearchHub } from "@/pages/ResearchHub";
 import { Settings } from "@/pages/Settings";
 import { Login } from "@/pages/Login";
+import { DataSourceHealth } from "@/pages/DataSourceHealth";
 import { RequireAuth } from "@/components/common/RequireAuth";
 
 export const router = createBrowserRouter([
@@ -53,6 +54,7 @@ export const router = createBrowserRouter([
       { path: "/my-reports", element: <Navigate to="/research" replace /> },
       { path: "/notes", element: <Navigate to="/research" replace /> },
       { path: "/settings", element: <Settings /> },
+      { path: "/source-health", element: <DataSourceHealth /> },
     ],
   },
 ]);

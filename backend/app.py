@@ -83,6 +83,11 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 #   （本地自托管不设=开放；公网部署务必设，否则别人能读你的持仓/调你的后端）。
 _API_KEY = os.environ.get("VR_API_KEY", "").strip()
 
+# 公开注册开关：默认关（账号由管理员用 backend/add_user.py 后台添加）。
+#   首次启动用户库为空时放行一次，方便新部署把主账号建出来；之后只能走后台添加。
+#   VR_ALLOW_REGISTRATION=1 可显式重新打开网页注册。
+_REGISTRATION = os.environ.get("VR_ALLOW_REGISTRATION", "").strip().lower() in ("1", "true", "yes", "on")
+
 
 @app.middleware("http")
 async def _require_api_key(request: Request, call_next):
@@ -143,6 +148,22 @@ def health():
     return {"ok": True, "service": "market-workbench-api", "version": __version__}
 
 
+@app.get("/api/source-health")
+def source_health(force: bool = Query(False), source: str | None = Query(None)):
+    """数据源健康检查：11 个上游探活（60s 节流）+ 各页面缓存/快照时间戳。
+
+    source=<key> 只重探单个上游（单源按钮），其余沿用上次结果。
+    """
+    import source_health
+
+    only = [s.strip() for s in source.split(",") if s.strip()] if source else None
+    try:
+        report = source_health.build_report(force=force, only=only)
+    except Exception as e:  # noqa: BLE001 — 探活层自身兜底，不该把页面打挂
+        raise HTTPException(502, f"健康检查异常：{e}") from e
+    return {"data": {**report, "version": __version__}}
+
+
 # ---------------- 用户体系：注册 / 登录 / 会话 / 每用户数据 ----------------
 
 class AuthReq(BaseModel):
@@ -159,9 +180,18 @@ class DataMergeReq(BaseModel):
     items: dict
 
 
+@app.get("/api/auth/config")
+def auth_config():
+    """登录页公开配置：注册是否开放（空用户库时恒真，保证新部署能建出主账号）。"""
+    open_reg = _REGISTRATION or users.user_count() == 0
+    return {"data": {"registration_open": open_reg}}
+
+
 @app.post("/api/auth/register")
 def auth_register(req: AuthReq):
-    """注册。第一个用户通常是本机主账号；注册后前端会引导把本地数据迁移上来。"""
+    """注册（默认关闭，账号由 add_user.py 后台添加；空库首个账号除外）。"""
+    if not (_REGISTRATION or users.user_count() == 0):
+        raise HTTPException(403, "注册已关闭，请联系管理员添加账号")
     try:
         user = users.register(req.username, req.password)
     except ValueError as e:
@@ -215,6 +245,91 @@ def auth_merge_data(req: DataMergeReq, request: Request):
     """首次登录后把浏览器本地数据整体迁移到账号下。"""
     user = _current_user(request)
     return {"data": users.merge_data(user["id"], req.items)}
+
+
+# ---------------- 用户数据导入 / 导出（备份迁移：换电脑、换部署、账号间搬家） ----------------
+
+class ImportReq(BaseModel):
+    payload: dict
+    mode: str = "merge"  # merge=只补缺失 key；replace=以备份为准整体替换
+    ledgers_mode: str = "skip"  # skip=不动账本；merge=并入当前账本；replace=覆盖账本
+
+
+@app.get("/api/auth/export")
+def auth_export(request: Request):
+    """导出当前账号的用户数据 + 两个持仓账本（不含密码哈希/会话/AI key）。
+
+    LLM 配置里的 apiKey 导出前抹掉——备份文件会离开本机，key 不该跟着走。"""
+    user = _current_user(request)
+    uid = int(user["id"])
+    export = users.export_data(uid, user["username"])
+    llm = export["data"].get("llm")
+    if isinstance(llm, dict):
+        export["data"]["llm"] = {**llm, "apiKey": ""}
+    export["user"] = {"username": user["username"]}  # 不带 user id（导入只认内容不认 id）
+    export["ledgers"] = {
+        "portfolio": pf._load(uid),
+        "fund_portfolio": fpf._load(uid),
+    }
+    return {"data": export}
+
+
+def _merge_ledgers(current: dict, incoming: dict) -> dict:
+    """账本合并：当前持仓优先，导入文件只补当前没有的代码；清仓记录按代码去重。"""
+    merged = dict(incoming)  # 以导入文件为底，保留其元数据字段
+    seen = {h.get("code") for h in current.get("holdings", [])}
+    merged["holdings"] = list(current.get("holdings", [])) + [
+        h for h in incoming.get("holdings", []) if h.get("code") not in seen
+    ]
+    closed_codes = {c.get("code") for c in current.get("closed", [])}
+    merged["closed"] = list(current.get("closed", [])) + [
+        c for c in incoming.get("closed", []) if c.get("code") not in closed_codes
+    ]
+    return merged
+
+
+def _sanitize_ledger(d: dict) -> dict:
+    """导入前剥掉备份里的派生元数据（年初基准/刷新时间戳/版本号）：
+    这些是导出当时算出来的，落在别的账号上未必对；清掉让下次刷新按本账号重建。
+    _save 会补上 version/ledger_updated_at。"""
+    cleaned = {k: v for k, v in d.items()
+               if k not in ("ytd_open", "ytd_year", "ytd_refresh_date",
+                            "last_refresh", "version", "ledger_updated_at")}
+    return cleaned
+
+
+@app.post("/api/auth/import")
+def auth_import(req: ImportReq, request: Request):
+    """导入 export 文件。user_data 按 merge/replace；账本按 skip/merge/replace。"""
+    user = _current_user(request)
+    uid = int(user["id"])
+    try:
+        result = users.import_data(uid, req.payload, merge=req.mode != "replace")
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+    ledgers = req.payload.get("ledgers") or {}
+    if req.ledgers_mode != "skip" and isinstance(ledgers, dict):
+        pf_in = ledgers.get("portfolio")
+        fpf_in = ledgers.get("fund_portfolio")
+        try:
+            if req.ledgers_mode == "merge":
+                if isinstance(pf_in, dict):
+                    pf.replace_ledger(_sanitize_ledger(_merge_ledgers(pf._load(uid), pf_in)), uid)
+                if isinstance(fpf_in, dict):
+                    fpf.replace_ledger(_sanitize_ledger(_merge_ledgers(fpf._load(uid), fpf_in)), uid)
+            elif req.ledgers_mode == "replace":
+                if isinstance(pf_in, dict):
+                    pf.replace_ledger(_sanitize_ledger(pf_in), uid)
+                if isinstance(fpf_in, dict):
+                    fpf.replace_ledger(_sanitize_ledger(fpf_in), uid)
+            else:
+                raise ValueError(f"未知账本导入模式: {req.ledgers_mode}")
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+
+    result["ledgers_mode"] = req.ledgers_mode
+    return {"data": result}
 
 
 class LLMConfig(BaseModel):
@@ -1252,12 +1367,12 @@ def investor_qa(code: str = Query(...)):
 def industry(top: int = Query(20, ge=5, le=50)):
     """全行业涨跌幅排名（东财行业板块，板块级、零个股名单）。缓存 5 分钟。"""
     key = ("industry", str(top))
-    hit = _DC_CACHE.get(key)
+    hit = _GLOBAL_MINUTE_CACHE.get(key)
     if hit and _time.time() - hit[0] < 300:
         return {"data": hit[1]}
     try:
         data = astock.industry_comparison(top_n=top)
-        _DC_CACHE[key] = (_time.time(), data)
+        _GLOBAL_MINUTE_CACHE[key] = (_time.time(), data)
         return {"data": data}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"行业排名异常：{e}") from e
@@ -1553,7 +1668,12 @@ def factor_build():
     import factor_data
     import factor_pit
 
-    if factor_data.build_state()["building"] or factor_pit.pit_state()["building"]:
+    # 检查+占位必须原子：否则并发双击会各起一个线程、双跑 20-40 分钟构建并双写数据文件
+    with factor_data._STATE_LOCK:
+        already = factor_data._STATE["building"] or factor_pit._STATE["building"]
+        if not already:
+            factor_data._STATE.update(building=True, pre_acquired=True)  # 占位；线程内 build_dataset 认这个标记
+    if already:
         return {"data": {"building": True, "started": False}}
     threading.Thread(target=_run_full_build, daemon=True).start()
     return {"data": {"building": True, "started": True}}
@@ -1573,17 +1693,41 @@ def factor_data_status():
 _factor_eval_cache: dict[str, tuple] = {}
 
 
+def _cache_put(cache: dict, key: str, value, limit: int = 8) -> None:
+    """结果缓存带条数上限（FIFO 淘汰），防长期运行无限膨胀。"""
+    cache[key] = value
+    while len(cache) > limit:
+        cache.pop(next(iter(cache)))
+
+
+def _factor_input_version() -> str:
+    """缓存键的数据版本：日线 catalog + 财务表 + 自定义因子公式的 mtime。
+
+    data_version() 只看日线 catalog——财务单独重建或 custom 因子改公式时它不变，
+    只用它做键会返回过期缓存。
+    """
+    import factor_data
+    import factor_expr
+    import factor_pit
+
+    parts = [factor_data.data_version()]
+    for path in (factor_pit._FUND_FILE, factor_expr._CUSTOM_FILE):
+        try:
+            parts.append(str(os.path.getmtime(path)))
+        except OSError:
+            parts.append("-")
+    return "|".join(parts)
+
+
 @app.get("/api/factor/evaluate")
 def factor_evaluate(factor: str, start: str | None = None, end: str | None = None):
     """单因子检验（Alphalens 口径）：IC/RankIC、五分组、换手、分年。计算较重，按参数+数据版本缓存。"""
-    import factor_data
     import factors
 
     try:
-        version = factor_data.data_version()
-        key = f"{factor}|{start}|{end}|{version}"
+        key = f"{factor}|{start}|{end}|{_factor_input_version()}"
         if key not in _factor_eval_cache:
-            _factor_eval_cache[key] = factors.evaluate(factor, start, end)
+            _cache_put(_factor_eval_cache, key, factors.evaluate(factor, start, end))
         return {"data": _factor_eval_cache[key]}
     except FileNotFoundError as e:
         raise HTTPException(400, str(e)) from e
@@ -1602,14 +1746,12 @@ def factor_backtest_endpoint(factor: str, start: str | None = None, end: str | N
                              freq: str = "monthly", cost: float = Query(1.0, ge=0, le=3)):
     """探索性组合回测：只多等权 TopN、周/月调仓、T+1 成交，含 0/1/2/3x 成本压力。"""
     import factor_backtest
-    import factor_data
 
     try:
-        version = factor_data.data_version()
-        key = f"{factor}|{start}|{end}|{top_n}|{top_pct}|{freq}|{cost}|{version}"
+        key = f"{factor}|{start}|{end}|{top_n}|{top_pct}|{freq}|{cost}|{_factor_input_version()}"
         if key not in _factor_bt_cache:
-            _factor_bt_cache[key] = factor_backtest.run_backtest(
-                factor, start, end, top_n=top_n, top_pct=top_pct, freq=freq, cost=cost)
+            _cache_put(_factor_bt_cache, key, factor_backtest.run_backtest(
+                factor, start, end, top_n=top_n, top_pct=top_pct, freq=freq, cost=cost))
         return {"data": _factor_bt_cache[key]}
     except FileNotFoundError as e:
         raise HTTPException(400, str(e)) from e

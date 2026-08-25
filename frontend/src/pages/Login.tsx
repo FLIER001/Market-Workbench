@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { LineChart, LogIn, UserPlus, Loader2 } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { auth, saveSession } from "@/lib/auth";
+import { api } from "@/lib/api";
 import { pendingLocalData, importLocalToAccount, pullBackendToLocal, clearLocalUserData } from "@/lib/userData";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -13,6 +14,7 @@ const inputCls =
 export function Login() {
   const nav = useNavigate();
   const [mode, setMode] = useState<"login" | "register">("login");
+  const [regOpen, setRegOpen] = useState(false); // 注册默认关闭；空库/显式开关时后端才放行
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -20,6 +22,11 @@ export function Login() {
   const [err, setErr] = useState("");
   const [pendingData, setPendingData] = useState<{ key: string; count: number; preview: string }[]>([]);
   const [loggedInName, setLoggedInName] = useState("");
+
+  useEffect(() => {
+    // 后端不可达时静默保持只登录（注册按钮不出现），不影响登录使用
+    api.authConfig().then((c) => setRegOpen(c.registration_open)).catch(() => {});
+  }, []);
 
   const submit = async () => {
     setErr("");
@@ -122,7 +129,8 @@ export function Login() {
             </div>
           ) : (
           <>
-          {/* 模式切换 */}
+          {/* 模式切换：注册关闭时只显示登录（后端 /api/auth/config 控制） */}
+          {regOpen ? (
           <div className="mb-5 grid grid-cols-2 gap-1 rounded-lg bg-black/20 p-1">
             {(["login", "register"] as const).map((m) => (
               <button
@@ -137,6 +145,9 @@ export function Login() {
               </button>
             ))}
           </div>
+          ) : (
+          <p className="mb-5 text-center text-xs text-muted-foreground">账号由管理员开通，如需账号请联系管理员</p>
+          )}
 
           <div className="space-y-3">
             <input
@@ -156,7 +167,7 @@ export function Login() {
               className={inputCls}
               onKeyDown={(e) => e.key === "Enter" && submit()}
             />
-            {mode === "register" && (
+            {mode === "register" && regOpen && (
               <input
                 type="password"
                 value={confirm}

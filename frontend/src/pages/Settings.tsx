@@ -1,11 +1,13 @@
-import { useState } from "react";
-import { KeyRound, Sparkles, ShieldCheck, Check, Trash2, Terminal } from "lucide-react";
+import { useRef, useState } from "react";
+import { KeyRound, Sparkles, ShieldCheck, Check, Trash2, Terminal, DatabaseBackup, Download, Upload } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { toast } from "sonner";
 import { loadLlm, saveLlm, clearLlm } from "@/lib/llm";
 import { loadAccessKey, saveAccessKey } from "@/lib/api";
 import { subscriptionModels, apiModels, PROVIDER_BASE, isCliProvider, aiModels, type ProviderId } from "@/lib/ai-models";
+import { auth, type UserDataExport } from "@/lib/auth";
+import { isLoggedIn, pullBackendToLocal } from "@/lib/userData";
 
 export function Settings() {
   const existing = loadLlm();
@@ -211,6 +213,169 @@ export function Settings() {
           </button>
         </div>
       </GlassCard>
+
+      <DataBackupCard />
     </div>
+  );
+}
+
+// 用户数据导入/导出：把账号里的自选/备注/研究记录/AI 配置/持仓账本打包成一个 JSON 备份文件。
+// 换电脑、换部署、换账号迁移都靠它。导出会抹掉 AI 的 API key（备份文件不该带着密钥离开本机）。
+function DataBackupCard() {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [file, setFile] = useState<{ name: string; payload: UserDataExport } | null>(null);
+  const [dataMode, setDataMode] = useState<"merge" | "replace">("merge");
+  const [ledgersMode, setLedgersMode] = useState<"skip" | "merge" | "replace">("merge");
+
+  const logged = isLoggedIn();
+
+  const doExport = async () => {
+    setBusy(true);
+    try {
+      const data = await auth.exportData();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `vibe-research-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success("备份文件已下载（不含 API key 与密码）");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "导出失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const pickFile = async (f: File | undefined) => {
+    if (!f) return;
+    if (f.size > 50 * 1024 * 1024) {
+      toast.error("备份文件超过 50MB，请确认选的是导出的 JSON 文件");
+      return;
+    }
+    try {
+      const parsed = JSON.parse(await f.text()) as UserDataExport;
+      if (parsed?.format !== "vibe-research-user-data") {
+        toast.error("不是本产品的备份文件");
+        return;
+      }
+      setFile({ name: f.name, payload: parsed });
+    } catch {
+      toast.error("文件不是合法的 JSON");
+    }
+  };
+
+  const doImport = async () => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const result = await auth.importData(file.payload, dataMode, ledgersMode);
+      const parts = [
+        result.applied.length > 0 ? `同步数据 ${result.applied.length} 项` : "",
+        ledgersMode !== "skip" ? `持仓账本（${ledgersMode === "merge" ? "并入" : "覆盖"}）` : "",
+      ].filter(Boolean);
+      toast.success(parts.length > 0 ? `导入完成：${parts.join("，")}` : "导入完成（备份里没有可变更的内容）");
+      setFile(null);
+      // 导入可能改了云端数据，重新拉一遍让本地缓存对齐
+      await pullBackendToLocal();
+      window.location.reload();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "导入失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const label = "mb-1.5 block text-xs font-medium text-muted-foreground";
+  const select = "w-full rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50";
+
+  return (
+    <GlassCard className="mt-4">
+      <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold">
+        <DatabaseBackup className="h-4 w-4 text-primary" /> 用户数据导入 / 导出
+      </h3>
+      <p className="mb-3 text-xs text-muted-foreground">
+        把账号里的自选股/ETF、分组、个股备注、研究记录、AI 接入配置和两个持仓账本（证券 + 场外基金）打包成一个 JSON 文件——
+        换电脑、重新部署、账号间搬家时用它恢复。导出<b className="text-foreground">不含</b> API key、密码和登录会话。
+      </p>
+
+      {!logged ? (
+        <p className="rounded-lg border border-border/50 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+          未登录：数据导出/导入按账号隔离，请先登录再使用。
+        </p>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="flex flex-col justify-between gap-2 rounded-lg border border-border/50 p-3">
+            <div>
+              <div className="flex items-center gap-1.5 text-sm font-medium"><Download className="h-4 w-4 text-primary" /> 导出备份</div>
+              <p className="mt-1 text-xs text-muted-foreground">下载当前账号的完整数据快照（JSON 文件）。</p>
+            </div>
+            <button onClick={doExport} disabled={busy}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">
+              <Download className="h-4 w-4" /> 导出
+            </button>
+          </div>
+
+          <div className="flex flex-col justify-between gap-2 rounded-lg border border-border/50 p-3">
+            <div>
+              <div className="flex items-center gap-1.5 text-sm font-medium"><Upload className="h-4 w-4 text-primary" /> 导入备份</div>
+              <p className="mt-1 text-xs text-muted-foreground">选择之前导出的备份文件，恢复到当前账号。</p>
+            </div>
+            <input ref={fileRef} type="file" accept="application/json,.json" className="hidden"
+              onChange={(e) => { pickFile(e.target.files?.[0]); e.target.value = ""; }} />
+            <button onClick={() => fileRef.current?.click()} disabled={busy}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted/40 disabled:opacity-50">
+              <Upload className="h-4 w-4" /> 选择文件
+            </button>
+          </div>
+
+          {file && (
+            <div className="space-y-3 rounded-lg border border-primary/30 bg-primary/5 p-3 sm:col-span-2">
+              <div className="text-xs">
+                已选择 <b className="text-foreground">{file.name}</b>
+                {file.payload.user?.username && <>（导出自账号 <b className="text-foreground">{file.payload.user.username}</b>）</>}
+                {file.payload.exported_at_text && <>，备份时间 {file.payload.exported_at_text}</>}
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className={label}>自选 / 备注 / 研究记录 / AI 配置</label>
+                  <select value={dataMode} onChange={(e) => setDataMode(e.target.value as "merge" | "replace")} className={select}>
+                    <option value="merge">合并 —— 只补当前账号没有的（推荐）</option>
+                    <option value="replace">替换 —— 以备份为准整体覆盖</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={label}>持仓账本（证券 + 场外基金）</label>
+                  <select value={ledgersMode} onChange={(e) => setLedgersMode(e.target.value as "skip" | "merge" | "replace")} className={select}>
+                    <option value="merge">合并 —— 当前持仓优先，只补没有的代码</option>
+                    <option value="replace">替换 —— 用备份的账本整体覆盖</option>
+                    <option value="skip">跳过 —— 本次不动持仓</option>
+                  </select>
+                </div>
+              </div>
+              {(dataMode === "replace" || ledgersMode === "replace") && (
+                <p className="rounded border border-danger/30 bg-danger/10 px-2.5 py-1.5 text-xs text-danger">
+                  「替换」会用备份内容覆盖当前账号数据（备份里没有的会被清掉），建议先导出一份当前数据再导入。
+                </p>
+              )}
+              <div className="flex items-center gap-2">
+                <button onClick={doImport} disabled={busy}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">
+                  <Upload className="h-4 w-4" /> {busy ? "导入中…" : "开始导入"}
+                </button>
+                <button onClick={() => setFile(null)} disabled={busy}
+                  className="rounded-lg px-3 py-2 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50">
+                  取消
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </GlassCard>
   );
 }

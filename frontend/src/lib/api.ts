@@ -912,7 +912,7 @@ export interface PFSCandidate {
   risk_penalty: number; final_score: number; tier: PFSTier; candidate_type: string;
   quality_components: Record<string, number>; potential_components: Record<string, number>;
   confidence_components: Record<string, number>;
-  risk_period: string; risk_metrics: PFSRiskMetrics; data_coverage: number;
+  risk_period: string | null; risk_metrics: PFSRiskMetrics; data_coverage: number;
   nav_metrics: PFSNavMetrics; scale_metrics: PFSScaleMetrics; holder_metrics: PFSHolderMetrics;
   gate_pass: boolean; gate_failures: string[]; review_reasons: string[]; risk_notes: string[];
   why_good: string[]; why_potential: string[]; breaks_thesis: string[]; detail_errors: string[];
@@ -1457,8 +1457,41 @@ export interface AllocationData {
   refresh_error?: string | null;
 }
 
+// 数据源健康检查：上游探活 + 各页面缓存/快照状态
+export interface SourceHealthUpstream {
+  key: string; name: string; pages: string;
+  status: "ok" | "fail";
+  error: string | null;
+  latency_ms: number;
+  probed_at?: string;
+}
+
+export interface SourceHealthDataset {
+  key: string; name: string; page: string;
+  cached_at: string | null;
+  cache_state: "fresh" | "refreshing" | "error";
+  refresh_error: string | null;
+  detail?: string;
+}
+
+export interface SourceHealthData {
+  checked_at: string;
+  version: string;
+  upstreams: SourceHealthUpstream[];
+  datasets: SourceHealthDataset[];
+  summary: {
+    upstream_total: number;
+    upstream_failed: string[];
+    dataset_error: string[];
+    all_ok: boolean;
+  };
+}
+
 export const api = {
   health: () => get<{ ok: boolean }>("/health"),
+  authConfig: () => get<{ registration_open: boolean }>("/auth/config"),
+  sourceHealth: (refresh = false, source?: string) =>
+    get<SourceHealthData>(`/source-health${refresh ? "?refresh=true" : ""}${source ? `${refresh ? "&" : "?"}source=${encodeURIComponent(source)}` : ""}`),
   indices: () => get<IndexQuote[]>("/indices"),
   marketOverview: () => get<MarketOverview>("/market/overview"),
   liquidity: (refresh = false) => get<LiquidityData>(`/market/liquidity${refresh ? "?refresh=true" : ""}`),
