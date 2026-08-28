@@ -50,7 +50,8 @@ function fmtPct(v: number | null | undefined): string {
 
 // —— 数据状态卡（构建进度 + 偏差提示）——
 function DataPanel({ lab, onBuild }: { lab: FactorLabStatus | undefined; onBuild: () => void }) {
-  const building = lab?.building;
+  // 日线或财务阶段任一在构建，按钮都应禁用（两阶段共享一个后台线程）
+  const building = !!lab?.building || !!lab?.fundamentals?.building;
   const pct = lab && lab.progress.total > 0
     ? Math.min(100, Math.round((lab.progress.fetched / lab.progress.total) * 100)) : 0;
   return (
@@ -86,7 +87,7 @@ function DataPanel({ lab, onBuild }: { lab: FactorLabStatus | undefined; onBuild
           </p>
         </div>
       )}
-      {lab?.fundamentals?.building && !building && (
+      {!lab?.building && lab?.fundamentals?.building && (
         <p className="mt-2 text-xs text-muted-foreground">
           阶段 2/2 财务：{lab.fundamentals.progress.done} / {lab.fundamentals.progress.total} 个报告期 ·
           已累计 {lab.fundamentals.progress.rows} 行
@@ -267,6 +268,10 @@ function BacktestPanel({ data }: { data: FactorBacktestData }) {
               ))}
             </tbody>
           </table>
+          <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
+            成本倍数 = 交易摩擦的放大系数。1x 基准成本：佣金 0.025% 双边 + 印花税 0.05% 卖出 + 过户费 0.001% + 滑点 0.1% 双边；
+            2x/3x 用于压力测试（估算成本偏差对收益的侵蚀）。选中成本倍数后表内各行 = 该倍数再乘 0/1/2/3 的对照。
+          </p>
           <h3 className="mb-2 mt-4 text-sm font-semibold">分年收益</h3>
           <div className="flex flex-wrap gap-2">
             {Object.entries(data.yearly_returns ?? {}).map(([y, r]) => (
@@ -608,15 +613,25 @@ export function Factors() {
     loadDoc();
   }, [loadLab, loadDoc]);
 
-  // 构建中每 10s 轮询进度
+  // 构建中每 10s 轮询进度（日线阶段 + 财务阶段任一在跑就轮询）
+  const anyBuilding = !!lab?.building || !!lab?.fundamentals?.building;
   useEffect(() => {
-    if (!lab?.building) return;
+    if (!anyBuilding) return;
     const t = window.setInterval(loadLab, 10_000);
     return () => window.clearInterval(t);
-  }, [lab?.building, loadLab]);
+  }, [anyBuilding, loadLab]);
 
   const build = () => {
-    api.factorBuild().then(() => loadLab()).catch((e) => setErr(String(e.message ?? e)));
+    api.factorBuild()
+      .then((r) => {
+        // 后台线程置位 building 有延迟，立即拉一次可能拿到 false 导致轮询不启动：
+        // started=true 时先无脑轮询 3 次兜底
+        loadLab();
+        if (r?.started) {
+          [1500, 3500, 6000].forEach((ms) => window.setTimeout(loadLab, ms));
+        }
+      })
+      .catch((e) => setErr(String(e.message ?? e)));
   };
 
   const runEvaluate = () => {

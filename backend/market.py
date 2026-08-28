@@ -2740,13 +2740,11 @@ def _macro_composite(modules: list[dict]) -> dict | None:
     if covered < 0.5 * total_w:
         return None
     score = round(num / total_w * 100.0, 1)
-    contribs = [abs(p["contribution"]) for p in parts if p["contribution"] is not None]
     return {
         "schema": _MACRO_COMPOSITE_SCHEMA,
         "score": score,
         "state": _composite_state(score),
         "coverage": round(covered / total_w * 100.0, 1),
-        # 主要驱动：贡献绝对值最大的两个模块
         "drivers": [p["name"] for p in
                     sorted((p for p in parts if p["contribution"] is not None),
                            key=lambda p: -abs(p["contribution"]))[:2]],

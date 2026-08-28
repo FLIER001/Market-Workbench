@@ -25,7 +25,12 @@ from typing import Any
 from . import kalshi_signals
 from . import market_taxonomy
 from . import polymarket_signals
-from .pulse_insight import module_insight, overall_insight, status_insight
+from .pulse_insight import (
+    merge_insight,
+    module_insight,
+    overall_insight,
+    status_insight,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +129,7 @@ async def _translate(markets: list[dict[str, Any]]) -> None:
 
 
 _rebuilding = False  # guards against piling up concurrent background rebuilds
+_overall_rebuilding = False  # guards the background 综合研判 recompute
 _refresh_error: str | None = None
 _last_attempt_at: str | None = None
 
@@ -157,39 +163,79 @@ async def _attach_insights(modules: list[dict[str, Any]]) -> None:
             module["insight"] = await module_insight(module["key"], module["markets"])
 
 
+# 单卡重生成接口的等待上限：思考型模型一轮推理可达 2 分钟+，但前端 fetch/浏览器
+# 代理链路在 ~2.5 分钟就开始断开。到点仍未完成就带着旧 impact 提前返回（明示
+# degraded），LLM 结果照常落盘，下一次自然可见。
+_REFRESH_INSIGHT_DEADLINE_S = 120.0
+
+
+async def _with_deadline(coro: Any, timeout_s: float) -> Any:
+    """await coro，但最多等 timeout_s；到点返回 None（不取消 coro，让它跑完落盘）。"""
+    try:
+        return await asyncio.wait_for(asyncio.shield(coro), timeout_s)
+    except asyncio.TimeoutError:
+        return None
+
+
 async def refresh_insight(module_key: str) -> dict[str, Any] | None:
-    """Regenerate one module's insight card from the pinned snapshot's current
-    markets (no source re-pull) and persist it. The 综合研判 card depends on
-    module impacts, so it is rebuilt too. Returns the new insight or None when
-    the module is missing/has no markets."""
+    """重生成单张模块卡（不动双源数据）。只等本模块这一次 LLM 调用（上限 120s，
+    超时带旧 impact 提前返回）；综合研判依赖全部模块卡，改成后台任务重算并落盘
+    —— 否则接口要串行等第二次 LLM，前端一半以上的等待时间花在用户没点的那张卡上。"""
     snap = _load_snapshot()
     if not snap:
         return None
     for module in snap.get("modules", []):
         if module.get("key") == module_key:
-            module["insight"] = await module_insight(module_key, module.get("markets", []))
-            snap["overall"] = await overall_insight(
-                snap.get("status", ""),
-                [m["insight"] for m in snap.get("modules", []) if m.get("core") and m.get("insight")],
+            module["insight"] = merge_insight(
+                module.get("insight"),
+                await _with_deadline(
+                    module_insight(module_key, module.get("markets", [])),
+                    _REFRESH_INSIGHT_DEADLINE_S,
+                ),
             )
             _save_snapshot(snap)
+            _spawn_overall_rebuild()
             return module["insight"]
     return None
 
 
 async def refresh_status() -> str:
-    """Regenerate the 现状 long-strip card and the 综合研判 card (it depends on
-    the status text) and persist both into the snapshot."""
+    """重生成现状长条卡。综合研判依赖现状文本，同上放后台重算。"""
     snap = _load_snapshot()
     if not snap:
         return ""
-    snap["status"] = await status_insight()
-    snap["overall"] = await overall_insight(
-        snap["status"],
-        [m["insight"] for m in snap.get("modules", []) if m.get("core") and m.get("insight")],
-    )
+    new_status = await _with_deadline(status_insight(), _REFRESH_INSIGHT_DEADLINE_S)
+    if new_status:
+        snap["status"] = new_status
     _save_snapshot(snap)
+    _spawn_overall_rebuild()
     return snap["status"]
+
+
+def _spawn_overall_rebuild() -> None:
+    """后台重算综合研判卡并落盘。竞争安全：从头加载快照，与接口返回路径互不
+    共享 dict；_overall_rebuilding 防止连点刷新时堆任务。"""
+    global _overall_rebuilding
+    if _overall_rebuilding:
+        return
+    _overall_rebuilding = True
+
+    async def _rebuild() -> None:
+        global _overall_rebuilding
+        try:
+            snap = _load_snapshot()
+            if snap:
+                snap["overall"] = await overall_insight(
+                    snap.get("status", ""),
+                    [m["insight"] for m in snap.get("modules", []) if m.get("core") and m.get("insight")],
+                )
+                _save_snapshot(snap)
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.warning("pulse overall rebuild failed: %s", exc)
+        finally:
+            _overall_rebuilding = False
+
+    asyncio.create_task(_rebuild())
 
 
 async def _build() -> dict[str, Any]:

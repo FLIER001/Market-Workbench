@@ -55,7 +55,7 @@ export async function downloadReport(id: string, name: string): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
-async function request<T>(path: string, method: "GET" | "POST" | "DELETE" = "GET", body?: unknown): Promise<T> {
+async function request<T>(path: string, method: "GET" | "POST" | "PUT" | "DELETE" = "GET", body?: unknown): Promise<T> {
   let resp: Response;
   const headers: Record<string, string> = { ...authHeaders() };
   const opts: RequestInit = { method };
@@ -947,6 +947,7 @@ export interface FundHolding {
 export interface FundClosedPosition {
   code: string; name: string; date: string; nav: number; shares: number; cost: number;
   pnl: number; pnl_pct: number;
+  post_close_pct: number | null;  // 卖出后至今涨跌幅；最新净值取不到为 null
 }
 export interface FundPortfolioData {
   holdings: FundHolding[];
@@ -1436,6 +1437,16 @@ export interface AllocationInsight {
   liquidity: string;
   market_confirm: string;
 }
+export interface GoldInsight {
+  opportunity_cost: string;
+  flows_positioning: string;
+  overall: string;
+}
+export interface OilInsight {
+  scarcity_demand: string;
+  pricing_premium: string;
+  overall: string;
+}
 export interface AllocationData {
   schema_version: number;
   model_version: string;
@@ -1506,11 +1517,15 @@ export const api = {
   bondsPositioning: (refresh = false) => get<BondsPositioningData>(`/bonds/positioning${refresh ? "?refresh=true" : ""}`),
   bondsSegments: (refresh = false) => get<BondsSegmentsData>(`/bonds/segments${refresh ? "?refresh=true" : ""}`),
   goldScore: (refresh = false) => get<GoldScoreData>(`/gold/score${refresh ? "?refresh=true" : ""}`),
+  goldInsight: (refresh = false) =>
+    get<GoldInsight | null>(`/gold/insight${refresh ? "?refresh=true" : ""}`).then((d) => d ?? null),
   au0Hist: (days = 400) => get<Au0HistData>(`/gold/au0-hist?days=${days}`),
   goldSpot: () => get<GoldSpotData>("/gold/spot"),
   cnGoldSpot: () => get<CnGoldSpotData>("/gold/cn-spot"),
   paxgSpot: () => get<PaxgSpotData>("/gold/paxg"),
   oilScore: (refresh = false) => get<OilScoreData>(`/oil/score${refresh ? "?refresh=true" : ""}`),
+  oilInsight: (refresh = false) =>
+    get<OilInsight | null>(`/oil/insight${refresh ? "?refresh=true" : ""}`).then((d) => d ?? null),
   oilSpot: () => get<OilSpotData>("/oil/spot"),
   brentHist: (days = 400) => get<BrentHistData>(`/oil/brent-hist?days=${days}`),
   pulseOverview: (refresh = false) => get<PulseOverview>(`/pulse/overview${refresh ? "?refresh=true" : ""}`),
@@ -1540,6 +1555,8 @@ export const api = {
   addHolding: (code: string, shares: number, cost: number, boughtDate?: string) =>
     request<PortfolioData>("/portfolio/holding", "POST", { code, shares, cost, ...(boughtDate ? { bought_date: boughtDate } : {}) }),
   removeHolding: (code: string) => request<PortfolioData>(`/portfolio/holding?code=${code}`, "DELETE"),
+  updateHolding: (code: string, shares: number, cost: number, boughtDate?: string) =>
+    request<PortfolioData>("/portfolio/holding", "PUT", { code, shares, cost, ...(boughtDate ? { bought_date: boughtDate } : {}) }),
   refreshPortfolio: () => request<PortfolioData>("/portfolio/refresh", "POST"),
   portfolioTiming: () => get<{ signals: Record<string, TimingSignal> }>("/portfolio/timing"),
   closePosition: (code: string, date: string, price: number, shares: number, cost?: number) =>
@@ -1611,6 +1628,8 @@ export const api = {
     request<FundPortfolioData>("/fund-portfolio/holding", "POST", { code, shares, cost, ...(boughtDate ? { bought_date: boughtDate } : {}) }),
   removeFundHolding: (code: string) =>
     request<FundPortfolioData>(`/fund-portfolio/holding?code=${code}`, "DELETE"),
+  updateFundHolding: (code: string, shares: number, cost: number, boughtDate?: string) =>
+    request<FundPortfolioData>("/fund-portfolio/holding", "PUT", { code, shares, cost, ...(boughtDate ? { bought_date: boughtDate } : {}) }),
   closeFundPosition: (code: string, date: string, nav: number, shares: number, cost?: number) =>
     request<FundPortfolioData>("/fund-portfolio/close", "POST", { code, date, nav, shares, ...(cost !== undefined ? { cost } : {}) }),
   removeFundClosed: (index: number) =>

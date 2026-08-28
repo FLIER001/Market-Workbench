@@ -66,6 +66,31 @@ def test_fund_portfolio_returns_amounts(monkeypatch, tmp_path):
     assert data["totals"]["yesterday_pnl_pct"] == 2.0
 
 
+def test_fund_update_holding_overrides(monkeypatch, tmp_path):
+    """修改基金持仓：直接覆盖份额/成本/日期（区别于添加的加权合并），不传日期保持原值。"""
+    monkeypatch.setattr(fpf, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(fpf, "FPF_FILE", str(tmp_path / "fund_portfolio.json"))
+    fpf._invalidate()
+    monkeypatch.setattr(fund, "realtime_estimates", lambda _codes, **_kw: {
+        "110022": {"name": "测试基金", "nav": 3.0, "nav_date": "2026-08-10"},
+    })
+    fpf.add_holding("110022", 1000, 2.5, "2026-03-01")
+    data = fpf.update_holding("110022", 2000, 2.8, "2026-01-05")
+    h = data["holdings"][0]
+    assert h["shares"] == 2000
+    assert h["cost"] == pytest.approx(2.8)
+    assert h["bought_date"] == "2026-01-05"
+    assert h["pnl"] == pytest.approx((3.0 - 2.8) * 2000)
+
+    # 不传日期 → 保持原值
+    data = fpf.update_holding("110022", 2000, 2.6)
+    assert data["holdings"][0]["bought_date"] == "2026-01-05"
+
+    # 不存在的持仓 → 明确报错
+    with pytest.raises(ValueError):
+        fpf.update_holding("000002", 100, 1.0)
+
+
 def test_fund_ytd_segmented_by_bought_date(monkeypatch, tmp_path):
     """本年盈亏分段：年内买入按成本净值、年前买入按年初净值，并入本年已卖出。"""
     import datetime as _dt

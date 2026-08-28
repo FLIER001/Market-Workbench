@@ -5,7 +5,7 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { MinuteChart } from "@/components/ui/MinuteChart";
 import { Sparkline } from "@/components/ui/Sparkline";
 import { AskAiButton } from "@/components/ui/AskAiButton";
-import { api, type GoldScoreData, type GoldIndicator, type HistPoint, type PaxgSpotData, type MinuteKline, type Au0HistData } from "@/lib/api";
+import { api, type GoldScoreData, type GoldIndicator, type HistPoint, type PaxgSpotData, type MinuteKline, type Au0HistData, type GoldInsight } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useSWR } from "@/hooks/useSWR";
 
@@ -60,7 +60,10 @@ function LiveGoldCard({ paxg }: { paxg: PaxgSpotData | null }) {
   const prevClose = paxg?.cny?.prev_close ?? toCny(paxg?.prev_close ?? null)
     ?? (minuteData && minuteData.prev_close ? toCny(minuteData.prev_close) : null);
   const change = paxg?.cny?.change ?? (prevClose != null && price != null ? price - prevClose : null);
-  const changePct = paxg?.change_pct ?? (prevClose && change != null ? (change / prevClose) * 100 : null);
+  // CNY 显示时涨跌幅按 CNY 口径算，避免 CNY 差额配 USD 百分比的口径混杂
+  const changePct = (prevClose != null && change != null && prevClose !== 0)
+    ? (change / prevClose) * 100
+    : paxg?.change_pct ?? null;
   const isUp = changePct != null && changePct > 0;
   const isDown = changePct != null && changePct < 0;
   const lastTime = minuteData && minuteData.points.length > 0 ? minuteData.points[minuteData.points.length - 1].time : null;
@@ -221,6 +224,9 @@ export function Gold() {
   const [err, setErr] = useState<string | null>(null);
   const [paxg, setPaxg] = useState<PaxgSpotData | null>(null);
   const [au0, setAu0] = useState<Au0HistData | null>(null);
+  // AI 三段解读（机会成本/资金仓位/综合形势）：后端存快照，这里只做局部替换 + 手动重生成
+  const [aiInsight, setAiInsight] = useState<GoldInsight | null>(null);
+  const [insightLoading, setInsightLoading] = useState(false);
 
   const { data: spot, loading, revalidating, revalidate } = useSWR<GoldScoreData>(
     "gold:v4",
@@ -268,6 +274,27 @@ export function Gold() {
     document.addEventListener("visibilitychange", onVisible);
     return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
   }, [revalidate]);
+
+  // 数据就绪后拉一次 AI 解读（非 force：后端有缓存就直接返回；没缓存才调 LLM）
+  useEffect(() => {
+    if (!spot?.gold_score) return;
+    let cancelled = false;
+    setInsightLoading(true);
+    api.goldInsight()
+      .then((d) => { if (!cancelled && d) setAiInsight(d); })
+      .catch(() => { /* 解读不可用时回落主要驱动列表 */ })
+      .finally(() => { if (!cancelled) setInsightLoading(false); });
+    return () => { cancelled = true; };
+  }, [spot?.date, spot?.gold_score]);
+
+  // 手动重生成：只重调 LLM，不动评分数据
+  const refreshInsight = () => {
+    setInsightLoading(true);
+    api.goldInsight(true)
+      .then((d) => { if (d) setAiInsight(d); })
+      .catch(() => { /* 失败保留已有解读 */ })
+      .finally(() => setInsightLoading(false));
+  };
 
   const total = spot?.gold_score ?? null;
   const totalHist = isHist(spot?.hist) ? spot.hist : [];
@@ -411,29 +438,52 @@ export function Gold() {
             </GlassCard>
 
             <GlassCard className="p-5">
-              <div className="mb-3 text-xs font-medium text-muted-foreground">主要驱动</div>
-              <div className="space-y-2.5">
-                <div className="flex items-start gap-2">
-                  <TrendingUp className="mt-0.5 h-4 w-4 shrink-0 text-danger" />
-                  <div className="text-sm">
-                    {spot.top_positive_drivers.length
-                      ? spot.top_positive_drivers.join("、")
-                      : <span className="text-muted-foreground">暂无明显利多驱动</span>}
-                  </div>
+              <div className="mb-3 flex items-center gap-2">
+                <span className="text-xs font-medium text-muted-foreground">AI 解读</span>
+                <button
+                  onClick={refreshInsight}
+                  disabled={insightLoading}
+                  className="ml-auto rounded p-1 text-muted-foreground transition-colors hover:text-primary disabled:opacity-60"
+                  title="重新生成 AI 解读">
+                  <RefreshCw className={cn("h-3 w-3", insightLoading && "animate-spin")} />
+                </button>
+              </div>
+              {aiInsight ? (
+                <div className="space-y-1.5 text-sm leading-relaxed text-foreground/85">
+                  <p><span className="font-medium text-primary/90">机会成本与美元</span>　{aiInsight.opportunity_cost}</p>
+                  <p><span className="font-medium text-primary/90">资金与仓位</span>　{aiInsight.flows_positioning}</p>
+                  <p><span className="font-medium text-primary/90">综合形势</span>　{aiInsight.overall}</p>
                 </div>
-                <div className="flex items-start gap-2">
-                  <TrendingDown className="mt-0.5 h-4 w-4 shrink-0 text-success" />
-                  <div className="text-sm">
-                    {spot.top_negative_drivers.length
-                      ? spot.top_negative_drivers.join("、")
-                      : <span className="text-muted-foreground">暂无明显利空驱动</span>}
-                  </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {insightLoading
+                    ? <p className="text-sm text-muted-foreground">AI 正在生成解读…</p>
+                    : (
+                      <>
+                        <div className="flex items-start gap-2">
+                          <TrendingUp className="mt-0.5 h-4 w-4 shrink-0 text-danger" />
+                          <div className="text-sm">
+                            {spot.top_positive_drivers.length
+                              ? spot.top_positive_drivers.join("、")
+                              : <span className="text-muted-foreground">暂无明显利多驱动</span>}
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <TrendingDown className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+                          <div className="text-sm">
+                            {spot.top_negative_drivers.length
+                              ? spot.top_negative_drivers.join("、")
+                              : <span className="text-muted-foreground">暂无明显利空驱动</span>}
+                          </div>
+                        </div>
+                      </>
+                    )}
                 </div>
-                <div className="flex items-start gap-2 border-t border-border/40 pt-2.5">
-                  <Minus className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                  <div className="text-[11px] text-muted-foreground">
-                    数据状态：{spot.data_quality} · 更新于 {spot.updated}
-                  </div>
+              )}
+              <div className="mt-2.5 flex items-start gap-2 border-t border-border/40 pt-2.5">
+                <Minus className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                <div className="text-[11px] text-muted-foreground">
+                  数据状态：{spot.data_quality} · 更新于 {spot.updated}
                 </div>
               </div>
             </GlassCard>

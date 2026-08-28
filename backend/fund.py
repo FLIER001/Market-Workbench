@@ -283,6 +283,38 @@ def _realtime_stock_pct(codes: list[str]) -> dict[str, float]:
     return _cached("rt_stock_" + ",".join(sorted(codes)), 20, _fetch)
 
 
+_QUARTER_TITLE = r"\d{4}年[一二三四1234]季度股票投资明细"
+
+
+def _parse_holdings_page(t: str) -> list[tuple[str, float]]:
+    """解析东财 F10 持仓页 HTML 为 [(标的, 占净值%)]。
+
+    页面按「{年}年{季}季度股票投资明细」标题分成多节。按季度键取最新一节再
+    解析前十行，不依赖东财返回的节序（曾实测 Q2 在前，但详情链路已因行序
+    栽过跟头，这里同样按期号取）。无季度标题（空页/改版）时退回全页解析。
+    """
+    sections: dict[tuple[int, int], str] = {}
+    parts = re.split(f"({_QUARTER_TITLE})", t)
+    for i in range(1, len(parts), 2):
+        sections[_holdings_quarter_key(parts[i])] = parts[i + 1]
+    body = sections[max(sections)] if sections else t
+
+    out = []
+    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", body, re.S):
+        # A股链接形如 //quote.eastmoney.com/unify/r/0.300613（0=深 1=沪）
+        m = re.search(r"unify/r/\d\.(\d{6})", row)
+        # 海外链接形如 unify/r/116.02419（港）/105.KLAC（美）/177.005930（韩）
+        g = re.search(r"unify/r/(1(?:0[567]|1[67])|177)\.([A-Z0-9]{1,12})", row)
+        pcts = re.findall(r"([\d.]+)%", row)
+        if not pcts:
+            continue
+        if m:
+            out.append((m.group(1), float(pcts[0])))
+        elif g:
+            out.append(((g.group(1), g.group(2)), float(pcts[0])))
+    return out[:10]
+
+
 def _top_holdings(code: str) -> list[tuple[str, float]]:
     """基金最新一期十大重仓股 [(标的, 占净值%)]，缓存 6h。债基/货基返回 []。
 
@@ -300,20 +332,7 @@ def _top_holdings(code: str) -> list[tuple[str, float]]:
             t = urllib.request.urlopen(req, timeout=10).read().decode("utf-8", "ignore")
         except Exception:
             return None  # 限流(514)/网络异常：不写缓存，下次重试（区别于"真无持仓"的 []）
-        out = []
-        for row in re.findall(r"<tr[^>]*>(.*?)</tr>", t, re.S):
-            # A股链接形如 //quote.eastmoney.com/unify/r/0.300613（0=深 1=沪）
-            m = re.search(r"unify/r/\d\.(\d{6})", row)
-            # 海外链接形如 unify/r/116.02419（港）/105.KLAC（美）/177.005930（韩）
-            g = re.search(r"unify/r/(1(?:0[567]|1[67])|177)\.([A-Z0-9]{1,12})", row)
-            pcts = re.findall(r"([\d.]+)%", row)
-            if not pcts:
-                continue
-            if m:
-                out.append((m.group(1), float(pcts[0])))
-            elif g:
-                out.append(((g.group(1), g.group(2)), float(pcts[0])))
-        return out[:10]
+        return _parse_holdings_page(t)
 
     cache_key = f"top_hold_{code}"
     with _LOCK:
@@ -461,13 +480,49 @@ _GLOBAL_INDEX_PROXY: list[tuple[str, str, str]] = [
 
 def _overseas_pct(tickers: list[tuple[str, str]]) -> dict:
     """批量取海外标的实时涨跌幅 {(mkt, code): pct}。入参是 _top_holdings 解析出的
-    (东财secid前缀, 代码) 元组；逐只 stock/get（自带 10^f59 缩放，批量 ulist 不返回
-    f59 不可用）；20s 缓存。"""
+    (东财secid前缀, 代码) 元组。
+
+    ulist.np 批量一次拉完（f3=涨跌幅，fltt=2 已缩放，与单只 stock/get 的 f170/100
+    实测一致）——原来逐只 stock/get 要 1 秒/只的限流间隔，10 只重仓就 10+ 秒。
+    批量失败时逐只回退 stock/get（f170 自带 /100），保证可用性。
+    20s 缓存。
+    """
     out: dict = {}
+    uniq = list(dict.fromkeys(tickers))
+    if not uniq:
+        return out
     import gstock
-    for tk in dict.fromkeys(tickers):
+
+    def _batch():
+        secids = ",".join(f"{m}.{c}" for m, c in uniq)
+        for host_i in range(gstock._gs_host[0], len(gstock._GS_HOSTS)):
+            try:
+                r = gstock.astock.em_get(
+                    f"https://{gstock._GS_HOSTS[host_i]}/api/qt/ulist.np/get",
+                    params={"fltt": 2, "secids": secids, "fields": "f12,f13,f14,f3"},
+                    headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+                diff = (r.json().get("data") or {}).get("diff") or []
+            except Exception:
+                continue
+            if diff:
+                gstock._gs_host[0] = host_i
+                return {(str(row.get("f13")), str(row.get("f12"))): row.get("f3") for row in diff
+                        if isinstance(row.get("f3"), (int, float))}
+        return None  # 全部主机失败 → 走逐只回退
+
+    batch = _cached("ovl_batch_" + ",".join(sorted(f"{m}.{c}" for m, c in uniq)), 20, _batch)
+    if isinstance(batch, dict):
+        for tk in uniq:
+            pct = batch.get(tk)
+            if pct is not None:
+                out[tk] = round(pct, 2)
+        if out:
+            return out
+    # 回退：逐只 stock/get（f170 = 涨跌幅×100）
+    for tk in uniq:
         mkt, code = tk
         secid = f"{mkt}.{code}"
+
         def _fetch(s=secid):
             d = gstock._push2_stock_get(s, gstock._QUOTE_FIELDS)
             return gstock._quote_from(d or {}).get("change_pct")
@@ -519,10 +574,12 @@ def _index_estimate(code: str) -> Optional[dict]:
 # 历史净值与业绩指标
 # ---------------------------------------------------------------------------
 
-def nav_history(code: str, limit: int = 250) -> dict:
-    """单位净值走势（东财天天基金）。返回升序 rows + 区间统计。"""
-    code = (code or "").strip()
+def _nav_history_rows(code: str) -> list[dict]:
+    """单位净值走势原始行（东财），缓存 6h。升序。
 
+    注意口径：单位净值是除息后裸值，跨除息日直接环比会把分红算成亏损；
+    日增长率是复权收益（含分红加回）。需要真实收益率序列时用 day_pct 链乘。
+    """
     def _fetch():
         import akshare as ak
 
@@ -535,15 +592,33 @@ def nav_history(code: str, limit: int = 250) -> dict:
             rows.append({
                 "date": str(r.get("净值日期", ""))[:10],
                 "nav": nav,
-                "acc_nav": _num(r.get("累计净值")),
+                "acc_nav": None,
                 "day_pct": _num(r.get("日增长率")),
             })
         rows.sort(key=lambda x: x["date"])
         return rows
 
-    rows = _cached(f"nav_hist_{code}", 6 * 3600, _fetch)
+    return _cached(f"nav_hist_{code}", 6 * 3600, _fetch)
+
+
+def nav_history(code: str, limit: int = 250) -> dict:
+    """单位净值走势（东财天天基金）。返回升序 rows + 区间统计。"""
+    code = (code or "").strip()
+    rows = _nav_history_rows(code)
     rows = rows[-limit:] if limit else rows
     return {"code": code, "rows": rows, "count": len(rows)}
+
+
+def _adjusted_equity(code: str, limit: int = 250) -> list[float]:
+    """复权净值序列（=1 逐日 × (1+日增长率)）。分红基金的真实收益口径。"""
+    rows = [r for r in _nav_history_rows(code) if r.get("day_pct") is not None][-limit:]
+    if not rows:
+        return []
+    eq, out = 1.0, [1.0]
+    for r in rows[1:]:
+        eq *= 1 + r["day_pct"] / 100
+        out.append(eq)
+    return out
 
 
 def _ann_return(equity: list[float], periods_per_year: int = 252) -> Optional[float]:
@@ -568,24 +643,27 @@ def _max_drawdown(equity: list[float]) -> Optional[float]:
 
 
 def fund_metrics(code: str, risk_free: float = 0.015) -> dict:
-    """由近一年净值序列自算业绩指标：年化收益/最大回撤/年化波动率/夏普。"""
-    hist = nav_history(code, limit=250)
-    navs = [r["nav"] for r in hist["rows"] if r["nav"] and r["nav"] > 0]
-    if len(navs) < 30:
+    """由近一年净值序列自算业绩指标：年化收益/最大回撤/年化波动率/夏普。
+
+    用日增长率链乘的复权净值（分红基金的单位净值跨除息日会跳水 ~15%，
+    裸值口径曾把 006274 年化算到 -17%、回撤 -34%，复权后为 -2.9%/-21.8%）。
+    """
+    equity = _adjusted_equity(code)
+    if len(equity) < 30:
         return {"code": code, "ann_return": None, "max_drawdown": None,
-                "volatility": None, "sharpe": None, "n": len(navs)}
-    rets = [navs[i] / navs[i - 1] - 1 for i in range(1, len(navs))]
+                "volatility": None, "sharpe": None, "n": len(equity)}
+    rets = [equity[i] / equity[i - 1] - 1 for i in range(1, len(equity))]
     mean = sum(rets) / len(rets)
     var = sum((x - mean) ** 2 for x in rets) / len(rets)
     vol = math.sqrt(var) * math.sqrt(252)
     sharpe = ((mean * 252) - risk_free) / vol if vol > 0 else None
     return {
         "code": code,
-        "ann_return": round(_ann_return(navs) or 0.0, 2),
-        "max_drawdown": round(_max_drawdown(navs) or 0.0, 2),
+        "ann_return": round(_ann_return(equity) or 0.0, 2),
+        "max_drawdown": round(_max_drawdown(equity) or 0.0, 2),
         "volatility": round(vol * 100, 2),
         "sharpe": round(sharpe, 2) if sharpe is not None else None,
-        "n": len(navs),
+        "n": len(equity),
     }
 
 
@@ -741,6 +819,8 @@ def screen_funds(fund_type: str = "", r4433: bool = False,
             rows = _pct_filter(rows, col, 1 / 3)
 
     reverse = order != "asc"
-    rows.sort(key=lambda r: (r.get(sort_by) is None, r.get(sort_by) or 0.0), reverse=reverse)
+    # 缺业绩数据（新成立基金）无论升降序都排末尾：此前降序时 (is_none, val) 反转
+    # 会把 None 顶到榜首，一列新基金霸榜，排序完全失真。
+    rows.sort(key=lambda r: (r.get(sort_by) is not None, r.get(sort_by) or 0.0), reverse=reverse)
     return {"total_all": total_all, "total_matched": len(rows),
             "rows": rows[: max(1, min(limit, 500))], "sort_by": sort_by}

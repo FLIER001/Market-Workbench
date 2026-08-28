@@ -78,6 +78,30 @@ def test_portfolio_crud_roundtrip(tmp_pf):
     assert client.post("/api/portfolio/refresh").status_code == 200
 
 
+def test_portfolio_update_holding_overrides(tmp_pf):
+    """修改持仓：直接覆盖数量/成本/日期（区别于添加的加权合并），改完浮盈按新值算。"""
+    client.post("/api/portfolio/holding", json={"code": "600519", "shares": 100, "cost": 8.0})
+    r = client.put("/api/portfolio/holding", json={"code": "600519", "shares": 200, "cost": 9.0, "bought_date": "2026-01-05"})
+    assert r.status_code == 200
+    h = r.json()["data"]["holdings"][0]
+    assert h["shares"] == 200
+    assert h["cost"] == pytest.approx(9.0)
+    assert h["bought_date"] == "2026-01-05"
+    assert h["pnl"] == pytest.approx((10.0 - 9.0) * 200)
+
+    # 不传日期 → 保持原值
+    r = client.put("/api/portfolio/holding", json={"code": "600519", "shares": 200, "cost": 9.5})
+    assert r.json()["data"]["holdings"][0]["bought_date"] == "2026-01-05"
+
+    # 校验与边界：坏代码 / 非正数量 / 日期格式 / 不存在的持仓
+    assert client.put("/api/portfolio/holding", json={"code": "abc", "shares": 1, "cost": 1}).status_code == 400
+    assert client.put("/api/portfolio/holding", json={"code": "600519", "shares": 0, "cost": 1}).status_code == 400
+    assert client.put("/api/portfolio/holding", json={"code": "600519", "shares": 1, "cost": 1, "bought_date": "2026/01/05"}).status_code == 400
+    assert client.put("/api/portfolio/holding", json={"code": "000002", "shares": 1, "cost": 1}).status_code == 400
+
+    client.delete("/api/portfolio/holding?code=600519")
+
+
 def test_portfolio_partial_close_deducts_holding(tmp_pf):
     """部分清仓：从当前持仓扣减股数、成本不变；未持仓代码必须显式给成本。"""
     client.post("/api/portfolio/holding", json={"code": "600519", "shares": 300, "cost": 8.0})

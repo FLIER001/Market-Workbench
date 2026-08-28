@@ -33,18 +33,9 @@ _CATALOG_FILE = os.path.join(DATA_DIR, "catalog.json")
 
 # 进度状态（模块级，/api/factor/data-status 轮询读取）
 _STATE_LOCK = threading.Lock()
-_STATE: dict = {"building": False, "fetched": 0, "total": 0, "failed": 0, "started_at": None, "error": None, "done_at": None}
+_STATE: dict = {"building": False, "pre_acquired": False, "fetched": 0, "total": 0, "failed": 0, "started_at": None, "error": None, "done_at": None}
 
-_panel_cache: pd.DataFrame | None = None
-_panel_cached_version: str | None = None
-_fund_cache: pd.DataFrame | None = None
-_fund_cached_version: str | None = None
-
-
-def _fund_cache_clear() -> None:
-    global _fund_cache, _fund_cached_version
-    _fund_cache = None
-    _fund_cached_version = None
+_dates_cache: list[str] | None = None
 
 
 def data_version() -> str:
@@ -191,11 +182,16 @@ def _tencent_kline_paged(code: str, count: int, end_suffix: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def build_dataset(max_workers: int = 8) -> dict:
-    """同步构建全量数据集（调用方在后台线程跑，状态写 _STATE）。"""
+    """同步构建全量数据集（调用方在后台线程跑，状态写 _STATE）。
+
+    app 层 POST /api/factor/build 可能已先置位 building（TOCTOU 防双跑占位）——
+    此时直接走自己的流程，不要被 already_building 挡回来。
+    """
     with _STATE_LOCK:
-        if _STATE["building"]:
+        if _STATE["building"] and not _STATE.get("pre_acquired"):
             return {"already_building": True}
-        _STATE.update(building=True, fetched=0, failed=0, error=None, started_at=_now(), done_at=None, total=0)
+        _STATE.update(building=True, pre_acquired=False, fetched=0, failed=0,
+                      error=None, started_at=_now(), done_at=None, total=0)
 
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
@@ -278,7 +274,6 @@ def build_dataset(max_workers: int = 8) -> dict:
 
         with _STATE_LOCK:
             _STATE.update(building=False, done_at=built_at)
-        _panel_cache_clear()
         return catalog
     except Exception as exc:  # noqa: BLE001 — 状态机必须收敛
         with _STATE_LOCK:
@@ -311,27 +306,21 @@ def _now() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _panel_cache_clear() -> None:
-    global _panel_cache, _panel_cached_version
-    _panel_cache = None
-    _panel_cached_version = None
-
-
 # ---------------------------------------------------------------------------
-# 读取
+# 读取（不常驻内存：每次按需读 CSV.gz 的日期子集，用完交给 GC）
 # ---------------------------------------------------------------------------
 
 def load_panel(start: str | None = None, end: str | None = None) -> pd.DataFrame:
-    """日线面板（date,code,open,close,high,low,volume,amount）。构建后常驻内存。"""
-    global _panel_cache, _panel_cached_version
-    version = data_version()
-    if _panel_cache is None or _panel_cached_version != version:
-        if not os.path.exists(_BARS_FILE):
-            raise FileNotFoundError("因子数据未构建：先调 POST /api/factor/build")
-        df = pd.read_csv(_BARS_FILE, dtype={"code": str})
-        _panel_cache = df
-        _panel_cached_version = version
-    df = _panel_cache
+    """日线面板（date,code,open,close,high,low,volume,amount）。
+
+    内存友好：不常驻全量（全 A 全历史 float64 约 2GB），每次读 CSV.gz 过滤后返回，
+    调用方用完即弃。注意 pandas 读 CSV.gz 无谓词下推——start/end 只影响返回行数，
+    峰值仍是全量（~2GB 瞬时）；要降峰值需换 Parquet/DuckDB（见 ponytail 注）。
+    # ponytail: CSV.gz 全量读入后过滤；内存或并发吃紧时上 Parquet 谓词下推
+    """
+    if not os.path.exists(_BARS_FILE):
+        raise FileNotFoundError("因子数据未构建：先调 POST /api/factor/build")
+    df = pd.read_csv(_BARS_FILE, dtype={"code": str})
     if start:
         df = df[df["date"] >= start]
     if end:

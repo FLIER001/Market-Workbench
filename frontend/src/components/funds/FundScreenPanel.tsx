@@ -120,7 +120,7 @@ export function FundScreenPanel() {
               <tr onClick={() => setExpanded(expanded === row.code ? null : row.code)} className="cursor-pointer border-b border-border/30 transition hover:bg-black/10">
                 <td className="px-4 py-3"><div className="max-w-72 truncate font-medium">{row.name}</div><div className="mt-0.5 text-xs text-muted-foreground"><span className="font-mono">{row.code}</span> · {row.manager || "经理缺失"} · {row.platform || "平台缺失"}</div></td>
                 <td className="px-3 py-3"><div>{row.strategy}</div><div className="text-xs text-muted-foreground">{row.candidate_type}</div></td>
-                <td className="px-3 py-3"><div className={cn("font-mono text-lg font-bold", row.final_score >= 74 ? "text-primary" : row.final_score >= 68 ? "text-info" : "text-muted-foreground")}>{fmt(row.final_score)}</div><div className="text-[10px] text-muted-foreground">Raw {fmt(row.raw_score)}</div></td>
+                <td className="px-3 py-3"><div className={cn("font-mono text-lg font-bold", row.final_score >= 64 ? "text-primary" : row.final_score >= 61 ? "text-info" : "text-muted-foreground")}>{fmt(row.final_score)}</div><div className="text-[10px] text-muted-foreground">Raw {fmt(row.raw_score)}</div></td>
                 <td className="px-3 py-3 font-mono text-xs"><span className="text-foreground">{fmt(row.quality_score)}</span><span className="text-muted-foreground"> / </span><span className="text-primary">{fmt(row.potential_score)}</span></td>
                 <td className="px-3 py-3"><div className="font-mono">{Math.round(row.confidence * 100)}%</div><div className="mt-1 h-1.5 w-20 overflow-hidden rounded-full bg-muted"><div className="h-full bg-primary" style={{ width: `${row.confidence * 100}%` }} /></div></td>
                 <td className="px-3 py-3 font-mono text-xs"><div>{row.manager_aum != null ? `${fmt(row.manager_aum)}亿` : "—"}</div><div className="text-muted-foreground">{row.manager_fund_count != null ? `${row.manager_fund_count} 个产品` : "—"}</div></td>
@@ -150,8 +150,8 @@ function ResearchCard({ row }: { row: PFSCandidate }) {
     <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
       <Metric label="当前团队上任" value={row.team_start_date || "—"} />
       <Metric label="当前团队任期" value={row.team_tenure_days != null ? `${(row.team_tenure_days / 365).toFixed(1)}年` : "—"} />
-      <Metric label={`${row.risk_period}最大回撤`} value={row.risk_metrics.max_drawdown != null ? `${fmt(row.risk_metrics.max_drawdown)}%` : "—"} />
-      <Metric label={`${row.risk_period}夏普`} value={fmt(row.risk_metrics.sharpe, 2)} />
+      <Metric label={`${row.risk_period || "任期净值"}最大回撤`} value={row.risk_metrics.max_drawdown != null ? `${fmt(row.risk_metrics.max_drawdown)}%` : `${fmt(row.nav_metrics.max_drawdown)}%`} />
+      <Metric label={`${row.risk_period || "任期净值"}夏普`} value={fmt(row.risk_metrics.sharpe, 2)} />
       <Metric label="年度固定费率" value={row.annual_fee_pct != null ? `${fmt(row.annual_fee_pct)}%` : "—"} />
       <Metric label="申购 / 赎回" value={`${row.purchase_status || "—"} / ${row.redemption_status || "—"}`} />
       <Metric label="公开字段覆盖" value={`${row.data_coverage}%`} />

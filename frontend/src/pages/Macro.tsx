@@ -178,7 +178,7 @@ function CompositeCard({ comp, onOpenModule }: {
             </p>
           )}
           {covered.length < comp.parts.length && (
-            <p className="mt-0.5 text-[10px] text-warning">覆盖 {comp.coverage.toFixed(0)}%（缺失模块按权重归一）</p>
+            <p className="mt-0.5 text-[10px] text-warning">覆盖 {comp.coverage.toFixed(0)}%（缺失模块按中性 50 计入）</p>
           )}
         </div>
         {/* 右上 1/4：近3年总分走势 + 口径 */}

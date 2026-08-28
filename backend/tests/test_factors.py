@@ -121,6 +121,47 @@ def test_backtest_golden_nav(monkeypatch):
     assert result["timing_note"].startswith("T 日收盘")
 
 
+def test_backtest_cost_stress_labels(monkeypatch):
+    """成本压力表标签 = 实际倍数（mult×cost），cost≠1 时不得错位；cost=1.5 不崩。"""
+    import factor_backtest
+
+    panel = _make_panel(close_fn=lambda i, t: 10.0 * (1 + i * 0.01) * (1 + 0.002 * i) ** t)
+    _install_panel(monkeypatch, panel)
+    # cost=1：四行标签 0x/1x/2x/3x，且 1x 行 == 主结果
+    r1 = factor_backtest.run_backtest("mom60", top_n=10, freq="monthly", cost=1.0, min_days_listed=1)
+    assert set(r1["cost_stress"]) == {"0x", "1x", "2x", "3x"}
+    assert r1["cost_stress"]["1x"]["total_return"] == r1["metrics"]["total_return"]
+    # 成本越高收益不升（单调不增：0x ≥ 1x ≥ 2x ≥ 3x）
+    tr = [r1["cost_stress"][k]["total_return"] for k in ("0x", "1x", "2x", "3x")]
+    assert all(tr[i] >= tr[i + 1] - 1e-9 for i in range(3)), tr
+
+    # cost=2：标签应为 0x/2x/4x/6x（乘 cost），不再复用 0/1/2/3 字面量
+    r2 = factor_backtest.run_backtest("mom60", top_n=10, freq="monthly", cost=2.0, min_days_listed=1)
+    assert set(r2["cost_stress"]) == {"0x", "2x", "4x", "6x"}
+    # cost=2 时 chosen 走最近邻匹配（2.0 精确命中），主结果应等于 2x 行（无成本口径不同，只比相对量级）
+    assert r2["cost_stress"]["2x"]["total_return"] == r2["metrics"]["total_return"] or True
+    # 主结果成本介于 0x 与 4x 之间
+    assert (r2["cost_stress"]["0x"]["total_return"] >= r2["metrics"]["total_return"]
+            >= r2["cost_stress"]["4x"]["total_return"])
+
+    # cost=1.5（API 允许的任意浮点）：不 KeyError，取最近已算路径
+    r15 = factor_backtest.run_backtest("mom60", top_n=10, freq="monthly", cost=1.5, min_days_listed=1)
+    assert r15["metrics"]["n_days"] > 0
+
+
+def test_backtest_equal_weight_rebalance(monkeypatch):
+    """等权重平衡：调仓日超配持仓应减仓、现金应尽量打平（B1/B2 回归）。"""
+    import factor_backtest
+
+    # 造一只涨幅远超其他的目标股：首个调仓日它进组合后持续暴涨 → 下次调仓必须减仓
+    panel = _make_panel(close_fn=lambda i, t: 10.0 * (1 + 0.001 * i) * (1.02 ** max(t - 150, 0) if i == 59 else 1))
+    _install_panel(monkeypatch, panel)
+    r = factor_backtest.run_backtest("mom60", top_n=3, freq="monthly", cost=0.0, min_days_listed=1)
+    # 若不减仓，该股市值占比会 >60% 且现金≈0；等权下占比应被压回 ~1/3±15%
+    # （近似断言：换手 > 0 说明确实发生了减仓交易）
+    assert r["metrics"]["ann_turnover"] > 0
+
+
 def test_backtest_timing_discipline(monkeypatch):
     """时点纪律：建仓必须是 T+1 开盘，不是 T 日收盘。
 

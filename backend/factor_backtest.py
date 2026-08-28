@@ -44,7 +44,7 @@ def run_backtest(factor: str, start: str | None = None, end: str | None = None,
     factors = _factor_frame(panel, factor)
     factors = factors[factors["days_since_list"] >= min_days_listed]
 
-    close_wide = panel.pivot(index="date", columns="code", values="close").sort_index().ffill()
+    close_wide = panel.pivot(index="date", columns="code", values="close").sort_index().ffill(limit=20)
     open_wide = panel.pivot(index="date", columns="code", values="open").sort_index()
     high_wide = panel.pivot(index="date", columns="code", values="high").sort_index()
     low_wide = panel.pivot(index="date", columns="code", values="low").sort_index()
@@ -75,7 +75,8 @@ def run_backtest(factor: str, start: str | None = None, end: str | None = None,
     for mult in (0.0, 1.0, 2.0, 3.0):
         results[mult] = _run_once(candidates_by_exec, close_wide, open_wide, high_wide, low_wide,
                                   window_dates, bench_codes, mult * cost)
-    chosen = results[cost]
+    # cost 为任意浮点时取最接近的已算路径（API 校验 0-3，但 1.5 这类值不能 KeyError）
+    chosen = results[min(results, key=lambda k: abs(k - cost))]
 
     payload = {
         "factor": factor,
@@ -84,7 +85,8 @@ def run_backtest(factor: str, start: str | None = None, end: str | None = None,
                    "freq": freq, "cost_multiplier": cost, "min_days_listed": min_days_listed},
         "data_version": factor_data.data_version(),
         "metrics": chosen["metrics"],
-        "cost_stress": {f"{m:g}x": r["metrics"] for m, r in results.items()},
+        # 标签 = 实际成本倍数（mult×cost），cost≠1 时不再是 0/1/2/3 字面量
+        "cost_stress": {f"{m * cost:g}x": r["metrics"] for m, r in results.items()},
         "nav": {"dates": chosen["dates"], "strategy": chosen["nav"], "benchmark": chosen["bench"]},
         "yearly_returns": chosen["yearly"],
         "biases": factor_data.BIAS_LABELS + ["探索级撮合：一字板顺延/停牌持仓近似，非精算"],
@@ -92,6 +94,11 @@ def run_backtest(factor: str, start: str | None = None, end: str | None = None,
     }
     _save_run(payload)
     return payload
+
+
+def _one_word_board(o, h, l) -> bool:
+    """一字板：开=高=低（买不进也卖不出）。"""
+    return o is not None and not np.isnan(o) and h == l == o
 
 
 def _run_once(candidates_by_exec: dict, close_wide, open_wide, high_wide, low_wide,
@@ -119,7 +126,7 @@ def _run_once(candidates_by_exec: dict, close_wide, open_wide, high_wide, low_wi
 
         # 1) 调仓日：先卖后买（等权目标 = 可成交候选前 N 只）
         cands = candidates_by_exec.get(d)
-        target_set: set[str] | None = None
+        target_list: list[str] | None = None
         if cands is not None:
             n_target, cand_list = cands
             target: list[str] = []
@@ -132,8 +139,8 @@ def _run_once(candidates_by_exec: dict, close_wide, open_wide, high_wide, low_wi
                 if h == l == o:
                     continue  # 一字板买不进
                 target.append(code)
-            target_set = set(target)
-            pending_sell = {c for c in shares if c not in target_set}
+            target_list = target  # 有序：现金不足时优先买因子值最高的（可复现）
+            pending_sell = {c for c in shares if c not in set(target_list)}
 
         for code in list(pending_sell):
             o, h, l = opens.get(code), highs.get(code), lows.get(code)
@@ -145,21 +152,28 @@ def _run_once(candidates_by_exec: dict, close_wide, open_wide, high_wide, low_wi
             del shares[code]
             pending_sell.discard(code)
 
-        if cands is not None and target_set is not None:
-            # 等权建仓：按目标集逐只补齐（首批用全部现金，避免预算=总权益导致现金不足逐只衰减）
+        if cands is not None and target_list is not None:
+            # 等权重平衡：目标每只 = equity/N。超配的减仓（卖到 budget），欠配的用现金补。
+            # 预算不足时按候选顺序（因子值降序）成交——顺序确定，跨进程可复现。
             equity = cash + sum(q * close.get(c, 0.0) for c, q in shares.items())
-            budget = equity / max(1, len(target_set))
-            for code in target_set:
-                if code in shares:
-                    continue
+            budget = equity / max(1, len(target_list))
+            for code in target_list:
                 o = opens[code]
-                spend = min(budget, cash)
-                if spend <= 0:
-                    break  # 现金耗尽（首批建仓后可能余量不足）
-                qty = spend / (o * (1 + buy_cost))
-                cash -= qty * o * (1 + buy_cost)
-                shares[code] = qty
-                turnover_notional += qty * o
+                price_now = close.get(code, o)  # 减仓按开盘近似（与建仓同价）
+                cur_value = shares.get(code, 0.0) * price_now
+                if cur_value > budget * 1.05 and not _one_word_board(o, highs.get(code), lows.get(code)):
+                    # 超配 >5%：减仓到 budget
+                    sell_qty = (cur_value - budget) / price_now
+                    cash += sell_qty * o * (1 - sell_cost)
+                    shares[code] = shares[code] - sell_qty
+                elif cur_value < budget * 0.95:
+                    spend = min(budget - cur_value, cash)
+                    if spend <= 0:
+                        continue
+                    qty = spend / (o * (1 + buy_cost))
+                    cash -= qty * o * (1 + buy_cost)
+                    shares[code] = shares.get(code, 0.0) + qty
+                    turnover_notional += qty * o
 
         nav = cash + sum(q * close.get(c, 0.0) for c, q in shares.items())
         if prev_close is not None:
@@ -188,7 +202,8 @@ def _run_once(candidates_by_exec: dict, close_wide, open_wide, high_wide, low_wi
         "sharpe": round(float(rets.mean() / rets.std() * np.sqrt(244)), 3) if len(rets) > 1 and rets.std() > 0 else None,
         "max_drawdown": round(float((nav_s / nav_s.cummax() - 1.0).min()), 4),
         "win_rate": round(float((rets > 0).mean()), 4) if len(rets) else None,
-        "ann_turnover": round(turnover_notional / 1_000_000.0 / n_years, 2),
+        # 单边换手：买入名义累计 / 平均净值权益（组合增值后初始本金分母会低估）
+        "ann_turnover": round(turnover_notional / float(nav_s.mean()) / n_years, 2),
         "n_days": len(nav_list),
     }
     return {"metrics": metrics, "dates": dates_out, "nav": nav_list, "bench": bench_list, "yearly": yearly}

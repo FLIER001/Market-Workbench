@@ -73,7 +73,7 @@ _ORIGINS = [o.strip() for o in os.environ.get("VR_ALLOW_ORIGINS", "*").split(","
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ORIGINS,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 # GZip：债市框架/分品种等大 payload（含 3 年趋势序列）压缩传输，184KB → ~27KB
@@ -464,6 +464,26 @@ def portfolio_remove(request: Request, code: str = Query(...)):
     return {"data": pf.remove_holding(code.strip(), _portfolio_user_id(request))}
 
 
+@app.put("/api/portfolio/holding")
+def portfolio_update(h: HoldingIn, request: Request):
+    """修改一笔持仓的数量 / 成本价 / 买入日期（录错更正，直接覆盖）。"""
+    code = (h.code or "").strip()
+    if not code.isdigit() or len(code) != 6:
+        raise HTTPException(400, "代码必须是 6 位数字")
+    if h.shares <= 0:
+        raise HTTPException(400, "数量必须大于 0")
+    bd = (h.bought_date or "").strip()
+    if bd:
+        try:
+            datetime.strptime(bd, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(400, "买入日期格式应为 YYYY-MM-DD") from None
+    try:
+        return {"data": pf.update_holding(code, h.shares, h.cost, bd or None, _portfolio_user_id(request))}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
 # ---- 我的研报（用户上传自己的研报，存本地、不上传、不进开源仓库）----
 
 class ReportIn(BaseModel):
@@ -677,6 +697,26 @@ def fund_portfolio_add(h: FundHoldingIn, request: Request):
 @app.delete("/api/fund-portfolio/holding")
 def fund_portfolio_remove(request: Request, code: str = Query(...)):
     return {"data": fpf.remove_holding(code.strip(), _portfolio_user_id(request))}
+
+
+@app.put("/api/fund-portfolio/holding")
+def fund_portfolio_update(h: FundHoldingIn, request: Request):
+    """修改一笔基金持仓的份额 / 成本净值 / 买入日期（录错更正，直接覆盖）。"""
+    code = (h.code or "").strip()
+    if not code.isdigit() or len(code) != 6:
+        raise HTTPException(400, "基金代码必须是 6 位数字")
+    if h.shares <= 0:
+        raise HTTPException(400, "份额必须大于 0")
+    bd = (h.bought_date or "").strip()
+    if bd:
+        try:
+            datetime.strptime(bd, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(400, "买入日期格式应为 YYYY-MM-DD") from None
+    try:
+        return {"data": fpf.update_holding(code, h.shares, h.cost, bd or None, _portfolio_user_id(request))}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
 
 class FundCloseIn(BaseModel):
@@ -1544,6 +1584,15 @@ def gold_score(refresh: bool = False):
         raise HTTPException(502, f"黄金评分异常：{e}") from e
 
 
+@app.get("/api/gold/insight")
+async def gold_insight(refresh: bool = Query(False)):
+    """AI 通俗解读当前黄金评分（机会成本/资金仓位/综合形势三角度）。refresh=true 重新生成并写回快照。"""
+    try:
+        return {"data": await gold_score_layer.get_ai_insight(force=refresh) or ""}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"黄金 AI 解读异常：{e}") from e
+
+
 @app.get("/api/gold/spot")
 def gold_spot():
     """实时金价：伦敦金（XAU）与纽约金（GC），20 秒缓存。"""
@@ -1587,6 +1636,15 @@ def oil_score(refresh: bool = False):
         return {"data": oil_layer.get_oil_score(force=refresh)}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"油价评分异常：{e}") from e
+
+
+@app.get("/api/oil/insight")
+async def oil_insight(refresh: bool = Query(False)):
+    """AI 通俗解读当前油价评分（稀缺供需/计价溢价/综合形势三角度）。refresh=true 重新生成并写回快照。"""
+    try:
+        return {"data": await oil_layer.get_ai_insight(force=refresh) or ""}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"油价 AI 解读异常：{e}") from e
 
 
 @app.get("/api/oil/spot")

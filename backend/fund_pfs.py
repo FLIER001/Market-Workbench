@@ -28,7 +28,7 @@ BEIJING = timezone(timedelta(hours=8))
 DATA_DIR = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
 _CACHE_FILE = os.path.join(DATA_DIR, "fund_pfs.json")
 _DB_FILE = os.path.join(DATA_DIR, "fund_pfs.sqlite")
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 _TTL = 24 * 3600
 _DETAIL_LIMIT = 40
 _F10_LOCK = threading.Lock()
@@ -584,8 +584,15 @@ def _score_candidate(row: dict, detail: dict, peer_aum: list[float], peer_load: 
     aligned_scores = [row["return_percentiles"].get(field) for field in aligned]
     aligned_score = _mean(aligned_scores)
 
-    risk_period = "近3年" if tenure_days and tenure_days >= 1095 else "近1年"
-    risk = (detail.get("risk") or {}).get(risk_period) or {}
+    # 风险窗口必须完整落在现任任期内：任期不足 1 年时雪球「近1年」指标含前任
+    # 管理期（Manager-First 边界破坏），此时只保留任期净值复算的 nav_risk_score。
+    if tenure_days and tenure_days >= 1095:
+        risk_period = "近3年"
+    elif tenure_days and tenure_days >= 365:
+        risk_period = "近1年"
+    else:
+        risk_period = None
+    risk = (detail.get("risk") or {}).get(risk_period) or {} if risk_period else {}
     risk_score = _mean([risk.get("risk_return_peer"), risk.get("resilience_peer"), detail.get("nav_risk_score")])
     attribution = 90 if row["manager_count"] == 1 else 65 if row["manager_count"] == 2 else 45
     manager_score = _weighted([
@@ -593,8 +600,10 @@ def _score_candidate(row: dict, detail: dict, peer_aum: list[float], peer_load: 
     ])
     if aligned_scores:
         clean = [value for value in aligned_scores if value is not None]
+        # 一致性惩罚按均值-0.5σ：任期内各窗口分位大幅波动（好一年差一年）的
+        # 基金不应拿到接近均值的 persistence 分。
         spread = math.sqrt(sum((value - sum(clean) / len(clean)) ** 2 for value in clean) / len(clean)) if clean else 0
-        persistence = _clip((sum(clean) / len(clean)) - 0.25 * spread) if clean else None
+        persistence = _clip((sum(clean) / len(clean)) - 0.5 * spread) if clean else None
     else:
         persistence = None
     rolling_persistence = detail.get("rolling_persistence_score")
@@ -667,17 +676,19 @@ def _score_candidate(row: dict, detail: dict, peer_aum: list[float], peer_load: 
     penalty = 0.0
     raw = 0.75 * quality + 0.25 * potential
     final = 50 + confidence * (raw - 50) - penalty
+    # 阈值按模型数学上限校准：process/platform 恒为 50 分中性先验时，
+    # quality 理论上限约 81、final 上限约 79 —— 买入线必须落在这个可达区间内，
+    # 否则 core_buy 永远空缺（旧阈值 80/74 即此硬伤）。
     if gate_failures:
         tier = "exclude"
-    elif review_reasons and quality >= 68:
+    elif review_reasons and quality >= 62:
         tier = "review"
-    elif final >= 80 and quality >= 80 and confidence >= 0.80:
+    elif final >= 64 and quality >= 70 and confidence >= 0.72:
         tier = "core_buy"
-    elif final >= 74 and quality >= 75 and potential >= 80 and confidence >= 0.65:
+    elif final >= 61 and quality >= 66 and potential >= 58 and confidence >= 0.62:
         tier = "potential_buy"
-    elif final >= 68 or (raw >= 68 and confidence < 0.80):
-        # V3.0 将“Confidence 偏低”单列为 Watch；Raw 已达观察线但被证据收缩
-        # 压到 68 以下时不直接冒充买入，也不与低质量 Gate Exclude 混为一类。
+    elif final >= 56 or (raw >= 60 and confidence < 0.72):
+        # Raw 已达观察线但被证据收缩压低时不直接冒充买入，也不与低质量 Gate Exclude 混为一类。
         tier = "watch"
     else:
         tier = "exclude"
@@ -694,7 +705,7 @@ def _score_candidate(row: dict, detail: dict, peer_aum: list[float], peer_load: 
     if aligned_score is not None:
         why_good.append(f"现任团队任期可覆盖窗口的同类收益分位为 {aligned_score:.0f}%")
     if risk_score is not None:
-        why_good.append(f"{risk_period}同类风险收益与抗波动综合分位为 {risk_score:.0f}%")
+        why_good.append(f"{risk_period or '任期净值复算'}同类风险收益与抗波动综合分位为 {risk_score:.0f}%")
     if tenure_days is not None:
         why_good.append(f"当前管理团队已连续管理 {tenure_days / 365:.1f} 年")
     why_potential = []
@@ -783,10 +794,13 @@ def _build(previous: dict | None = None) -> dict:
     selected = _preselect(universe)
     old = {}
     for row in (previous or {}).get("rows", []):
-        if row.get("team_tenure_days"):
+        if row.get("team_start_date"):
+            # 只沿用「团队上任日期」这一稳定事实；任期为构建日与上任日之差，
+            # 必须按当前构建日重算——沿用旧快照的 tenure_days 会把它冻结在
+            # 基金首次进入深筛的那天（实测快照 35/40 只滞后 6 天且永不收敛）。
             old[row["code"]] = {"assignment": {
                 "team_start_date": row.get("team_start_date"),
-                "team_tenure_days": row.get("team_tenure_days"),
+                "team_tenure_days": None,
                 "assignments": row.get("manager_assignments") or [],
             }}
     details = {}
@@ -846,6 +860,8 @@ def _build(previous: dict | None = None) -> dict:
                 "Universe 按公开基金代码/份额统计；深筛前合并同基金的 A/C/E 等重复份额，保留净值证据更完整的代表份额。",
                 "产品收益仅在现任团队上任日期覆盖的窗口内参与经理初筛，前任经理历史不归给现任经理。",
                 "任期风险与滚动持续性由日净值复算；季度Flow使用真实申购/赎回份额，不解释为日频资金净流入。",
+                "任期为构建日与现任团队上任日期之差，每次构建重算（不沿用旧快照数值）；任期不足1年时雪球同类风险指标（含前任）不参与评分，仅用任期净值复算。",
+                "分层阈值按模型数学上限校准（process/platform 中性先验下 quality 上限约81、final 上限约79）：core_buy 需 Final≥64 且 Quality≥70 且 Confidence≥0.72；potential_buy 需 Final≥61 且 Quality≥66 且 Potential≥58 且 Confidence≥0.62。",
                 "历史回填尚无原始公告发布时间，SQLite中标为pit_usable=0；从本次运行开始的构建快照才可用于未来Point-in-Time验证。",
                 "Verified Skill 当前仅为同类净值与风险证据初筛，不等于因子 Alpha、持仓 Alpha 或真实 Skill Probability。",
                 "Capacity 当前仅用经理现管总规模的同策略相对位置作压力初筛，不等于策略真实容量。",

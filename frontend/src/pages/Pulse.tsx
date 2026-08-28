@@ -22,7 +22,6 @@ export function Pulse() {
   const [selected, setSelected] = useState<PulseMarket | null>(null);
   const [history, setHistory] = useState<TrendPoint[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [insightRefreshing, setInsightRefreshing] = useState<string | null>(null);
   const { data, loading, revalidating, revalidate } = useSWR<PulseOverview>(
     "pulse:v1",
     async (fresh) => {
@@ -79,27 +78,52 @@ export function Pulse() {
   const [localInsights, setLocalInsights] = useState<Record<string, PulseInsight>>({});
   const [localStatus, setLocalStatus] = useState<string | null>(null);
   const [localOverall, setLocalOverall] = useState<string | null>(null);
+  const [insightError, setInsightError] = useState<string | null>(null);
+  const [insightRefreshing, setInsightRefreshing] = useState<string | null>(null);
+  // 单卡重生成接口返回后，综合研判还在后台重算 —— 轮询取回新 overall
+  const pollOverall = () => {
+    let tries = 0;
+    const tick = () => {
+      tries += 1;
+      api.pulseOverview(false)
+        .then((d) => {
+          setLocalOverall(d.overall ?? null);
+          // overall 为空 = 后台还在算，继续轮询（上限约 2 分钟）
+          if (!d.overall && tries < 12) setTimeout(tick, 10000);
+        })
+        .catch(() => {});
+    };
+    setTimeout(tick, 5000);
+  };
   const refreshInsight = (module: string) => {
     setInsightRefreshing(module);
+    setInsightError(null);
     api.pulseInsight(module)
       .then((ins) => {
         if (ins && Array.isArray(ins.events) && ins.events.length > 0) {
           setLocalInsights((prev) => ({ ...prev, [module]: ins }));
-          // 后端同时重算了综合研判，顺手取回
-          api.pulseOverview(false).then((d) => setLocalOverall(d.overall ?? null)).catch(() => {});
+          pollOverall();
+        } else {
+          setInsightError(`「${module}」AI 研判未返回内容，已保留原卡片，请稍后重试`);
         }
       })
-      .catch(() => { /* 失败保留原卡片 */ })
+      .catch((e) => {
+        // 后端已在 120s 处提前返回带旧 impact 的结果；走到这里说明请求本身失败（网络/代理断开）
+        setInsightError(`「${module}」AI 研判刷新失败：${e instanceof Error ? e.message : "请稍后重试"}（原卡片保留）`);
+      })
       .finally(() => setInsightRefreshing(null));
   };
   const refreshStatus = () => {
     setInsightRefreshing("现状");
+    setInsightError(null);
     api.pulseStatus()
       .then((s) => {
         if (s) setLocalStatus(s);
-        api.pulseOverview(false).then((d) => setLocalOverall(d.overall ?? null)).catch(() => {});
+        pollOverall();
       })
-      .catch(() => { /* 失败保留原卡片 */ })
+      .catch((e) => {
+        setInsightError(`「现状」AI 研判刷新失败：${e instanceof Error ? e.message : "请稍后重试"}（原卡片保留）`);
+      })
       .finally(() => setInsightRefreshing(null));
   };
 
@@ -141,12 +165,25 @@ export function Pulse() {
       {err && (
         <div className="mb-4 rounded border border-danger/30 bg-danger/5 p-3 text-sm text-danger">{err}</div>
       )}
+      {insightError && (
+        <div className="mb-3 rounded border border-warning/30 bg-warning/5 p-3 text-sm text-warning">
+          {insightError}
+        </div>
+      )}
+      {insightRefreshing && (
+        <div className="mb-3 rounded border border-primary/30 bg-primary/5 p-2.5 text-[12px] text-primary/90">
+          AI 研判生成中（思考型模型约需 20-120 秒，请勿重复点击）…
+        </div>
+      )}
 
       {(localOverall ?? data?.overall) ? (
         <div className="mb-3 rounded-lg border border-primary/40 bg-primary/10 p-3.5">
           <div className="mb-1 flex items-center gap-1.5">
             <Sparkles className="h-3.5 w-3.5 text-primary" />
             <span className="text-xs font-semibold">综合研判</span>
+            {insightRefreshing && (
+              <span className="ml-auto text-[10px] font-normal text-primary/70">数据更新后稍后重算</span>
+            )}
           </div>
           <p className="text-[12.5px] font-medium leading-relaxed">{localOverall ?? data?.overall}</p>
         </div>

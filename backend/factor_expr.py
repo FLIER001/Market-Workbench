@@ -303,8 +303,9 @@ def evaluate(ast: tuple, fields: dict[str, pd.DataFrame], fund_fields: dict[str,
     if needed_fund and not fund_fields:
         raise ValueError(f"公式用到财务字段 {sorted(needed_fund)}：需先构建 PIT 财务数据")
     out = _eval(ast, w)
-    if isinstance(out, pd.Series):  # 全常数（如 1+2）没有意义但别崩
-        raise ValueError("公式结果是常数，不含任何字段")
+    if not isinstance(out, pd.DataFrame):
+        # 纯标量表达式（如 1+2、abs(5)、1/0）→ 没有任何字段引用，无意义
+        raise ValueError("公式结果不含任何字段（全是常数）")
     return out.replace([np.inf, -np.inf], np.nan)
 
 
@@ -345,6 +346,8 @@ def _eval(node: tuple, w: dict[str, pd.DataFrame]):
             return l - r
         if op == "*":
             return l * r
+        if isinstance(r, (int, float)) and r == 0:
+            return np.nan  # 标量除零：缺失而非异常（DataFrame 除零 pandas 自己出 inf/NaN）
         return l / r
     if kind == "lag":
         x = _eval(node[1], w)
@@ -357,6 +360,8 @@ def _eval(node: tuple, w: dict[str, pd.DataFrame]):
 def _call(name: str, args: list[tuple], w: dict[str, pd.DataFrame]):
     if name in CS_FUNCS:
         x = _eval(args[0], w)
+        if not isinstance(x, pd.DataFrame):
+            raise ValueError(f"{name} 只能作用于字段/序列表达式")
         if name == "cs_rank":
             return x.rank(axis=1)
         # pandas 3：DataFrame 与行 Series 运算必须显式 axis=0，否则按列对齐全为 NaN
@@ -364,6 +369,8 @@ def _call(name: str, args: list[tuple], w: dict[str, pd.DataFrame]):
         return x.sub(x.mean(axis=1), axis=0).div(std.where(std > 0), axis=0)
     if name in SCALAR_FUNCS:
         x = _eval(args[0], w)
+        if not isinstance(x, pd.DataFrame):
+            raise ValueError(f"{name} 只能作用于字段/序列表达式")
         if name == "abs":
             return x.abs()
         if name == "sign":
@@ -371,29 +378,33 @@ def _call(name: str, args: list[tuple], w: dict[str, pd.DataFrame]):
         if name == "log":
             return np.log(x.where(x > 0))
         return np.sqrt(x.where(x > 0))
-    # 时序算子（逐列）
+    # 时序算子（逐列）：输入必须是序列（字段表达式）；标量入参给可读错误
+    x = _eval(args[0], w)
+    if name in TS_FUNCS and not isinstance(x, pd.DataFrame):
+        raise ValueError(f"{name} 只能作用于字段/序列表达式")
     if name == "ts_corr":
-        x, y = _eval(args[0], w), _eval(args[1], w)
+        y = _eval(args[1], w)
+        if not isinstance(y, pd.DataFrame):
+            raise ValueError("ts_corr 的第二个参数必须是字段/序列表达式")
         return x.rolling(int(args[2][1])).corr(y)
     if name == "ts_cov":
-        x, y = _eval(args[0], w), _eval(args[1], w)
+        y = _eval(args[1], w)
+        if not isinstance(y, pd.DataFrame):
+            raise ValueError("ts_cov 的第二个参数必须是字段/序列表达式")
         return x.rolling(int(args[2][1])).cov(y)
     if name == "ts_rank":
         # 当日值在最近 n 日中的滚动分位（含当日）
-        x = _eval(args[0], w)
         n = int(args[1][1])
         return x.rolling(n).apply(lambda s: s.rank().iloc[-1] / len(s), raw=False)
     if name == "ts_skew":
-        return _eval(args[0], w).rolling(int(args[1][1])).skew()
+        return x.rolling(int(args[1][1])).skew()
     if name == "ts_kurt":
-        return _eval(args[0], w).rolling(int(args[1][1])).kurt()
+        return x.rolling(int(args[1][1])).kurt()
     if name == "ts_scale":
-        x = _eval(args[0], w)
         r = x.rolling(int(args[1][1]))
         lo, hi = r.min(), r.max()
         return (x - lo) / (hi - lo + 1e-12)
     if name == "ts_rsv":
-        x = _eval(args[0], w)
         r = x.rolling(int(args[1][1]))
         lo, hi = r.min(), r.max()
         return (x - lo) / (hi - lo + 1e-12)
@@ -422,12 +433,14 @@ _CUSTOM_FILE = os.path.join(factor_data.DATA_DIR, "custom_factors.json")
 
 
 def list_custom() -> list[dict]:
+    """已保存自定义因子。读取时清扫 __tmp_ 前缀的临时试跑因子（删除请求失败/关页残留）。"""
     try:
         with open(_CUSTOM_FILE, encoding="utf-8") as f:
             data = json.load(f)
-        return sorted(data.get("factors", []), key=lambda x: x.get("created_at", ""))
+        factors = [f for f in data.get("factors", []) if not str(f.get("id", "")).startswith("__tmp_")]
     except (OSError, ValueError):
         return []
+    return sorted(factors, key=lambda x: x.get("created_at", ""))
 
 
 def save_custom(fid: str, name: str, expr: str) -> dict:

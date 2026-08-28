@@ -1,18 +1,18 @@
 """油价多维评分系统（框架 V1.0，research/oil_price_analysis_framework_v1.0.html）。
 
-框架主线：边际物理稀缺 → 预期库存 → 风险溢价。5 维 8 指标，总分 100（高分=对油价偏多）：
+框架主线：边际物理稀缺 → 预期库存 → 风险溢价。7 维 8 指标，总分 100（高分=对油价偏多）：
   P01 商业原油库存季调偏离      EIA 周度 WCESTUS1（周）
   P02 原油需求天数              EIA 周度 W_EPC0_VSD_NUS_DAYS（周）
   P03 美国原油产量              EIA 周度 WCRFPUS2（周）
   P04 炼厂原油投入              EIA 周度 WCRRIUS2（周）
   P05 WTI 管理基金净多头        CFTC Disaggregated COT（周）
   P06 地缘风险指数              GPR 官方日度 GPRD（日）
-  P07 美元指数                  腾讯 hf_DINIW（日）
+  P07 美元指数                  frankfurter 合成 DXY（日）
   P08 布伦特动量                新浪全球期货日K OIL（日）
 
 工程口径与黄金评分一致：原始信号 → 5 年历史分位 × 100 → EMA 平滑；
 P05 带拥挤度上限修正（框架 §14：极端净多+基本面转弱→下行脆弱）。
-价格/期限结构层（Brent-WTI、SC 基差、裂解代理）单独成块呈现客观数据，不混入评分权重。
+价格/期限结构层（Brent-WTI、SC 比率、SPR、需求天数）单独成块呈现客观数据，不混入评分权重。
 """
 
 from __future__ import annotations
@@ -37,8 +37,9 @@ _SNAPSHOT_DIR = os.environ.get("VR_DATA_DIR") or os.path.join(
 _SNAPSHOT = os.path.join(_SNAPSHOT_DIR, "oil_score_snapshot.json")
 
 # EIA v2 / bulk：
-# v2 API 无 key 时可用 DEMO_KEY，但限流严格（OVER_RATE_LIMIT 后需长时间退避）。
-# 首选 v2 单请求；限流时落盘失败，后台按退避重试。用户可申请 key 后配 VR_EIA_API_KEY。
+# bulk zip（57MB，无 key 无限流）为常规主源，7 天重下一次；
+# v2 API 为兜底（DEMO_KEY 限流严格，OVER_RATE_LIMIT 后长时间退避）。
+# 用户可申请 key 后配 VR_EIA_API_KEY 提升 v2 兜底可用性。
 _EIA_KEY = os.environ.get("VR_EIA_API_KEY") or "DEMO_KEY"
 _EIA_SNDW = "https://api.eia.gov/v2/petroleum/sum/sndw/data/"
 _CFTC_ZIP = "https://www.cftc.gov/files/dea/history/fut_disagg_txt_{year}.zip"
@@ -185,35 +186,40 @@ def _parse_eia_bulk() -> dict[str, list[tuple[str, float]]]:
     """EIA Petroleum Bulk（57MB zip，无需 key、无限流）：全量历史到上周。
 
     行级 JSON：series_id=PET.WCESTUS1.W 等；data 为 [YYYYMMDD, value] 降序列表。
-    每次重解新 zip 前必须清缓存，否则进程内复用旧值、周度更新失效。
+    _BULK_CACHE 是模块级共享，先清后填；调用方（_series_cached）无锁并发执行
+    fn，这里必须自持锁，否则两个线程会互相清掉对方刚写入的系列。
     """
     import zipfile as _zf
-    _BULK_CACHE.clear()
-    with _zf.ZipFile(_EIA_BULK_ZIP) as z:
-        name = z.namelist()[0]
-        with z.open(name) as f:
-            import io as _io
-            for line in _io.TextIOWrapper(f, encoding="utf-8"):
-                sid = line[:64].split('"')[3] if '"' in line[:64] else ""
-                if sid in _EIA_BULK_IDS:
-                    try:
-                        rec = json.loads(line)
-                    except ValueError:
-                        continue
-                    key = _EIA_BULK_IDS[sid]
-                    points = {}
-                    for period, value in rec.get("data", []):
-                        d = f"{str(period)[:4]}-{str(period)[4:6]}-{str(period)[6:8]}"
+    with _bulk_lock:
+        _BULK_CACHE.clear()
+        with _zf.ZipFile(_EIA_BULK_ZIP) as z:
+            name = z.namelist()[0]
+            with z.open(name) as f:
+                import io as _io
+                for line in _io.TextIOWrapper(f, encoding="utf-8"):
+                    sid = line[:64].split('"')[3] if '"' in line[:64] else ""
+                    if sid in _EIA_BULK_IDS:
                         try:
-                            v = float(value)
-                        except (TypeError, ValueError):
+                            rec = json.loads(line)
+                        except ValueError:
                             continue
-                        if math.isfinite(v):
-                            points[d] = v
-                    _BULK_CACHE[key] = sorted(points.items())[-260:]
-                if len(_BULK_CACHE) == len(_EIA_BULK_IDS):
-                    break
-    return dict(_BULK_CACHE)
+                        key = _EIA_BULK_IDS[sid]
+                        points = {}
+                        for period, value in rec.get("data", []):
+                            d = f"{str(period)[:4]}-{str(period)[4:6]}-{str(period)[6:8]}"
+                            try:
+                                v = float(value)
+                            except (TypeError, ValueError):
+                                continue
+                            if math.isfinite(v):
+                                points[d] = v
+                        # p_stocks 保留 6 年：前 1 年只作季节基准预热（P01 同周中位数需要
+                        # 历史同周样本），其余指标 5 年（260 点）够用
+                        keep = 312 if key == "p_stocks" else 260
+                        _BULK_CACHE[key] = sorted(points.items())[-keep:]
+                    if len(_BULK_CACHE) == len(_EIA_BULK_IDS):
+                        break
+        return dict(_BULK_CACHE)
 
 
 _EIA_BULK_IDS = {
@@ -224,6 +230,7 @@ _EIA_BULK_IDS = {
     "PET.WCRSTUS1.W": "p_total",
 }
 _BULK_CACHE: dict[str, list[tuple[str, float]]] = {}
+_bulk_lock = threading.Lock()
 
 
 def _parse_eia(raw: bytes) -> dict[str, list[tuple[str, float]]]:
@@ -275,8 +282,9 @@ def _eia_weekly() -> dict[str, list[tuple[str, float]]]:
             parsed.pop("p_total", None)
             return {k: v for k, v in parsed.items() if k != "p_total"}
 
-    # 兜底：v2 单请求（DEMO_KEY 限流常见，间隔重试）
-    start = (datetime.now(BEIJING) - timedelta(days=260 * 7)).strftime("%Y-%m-%d")
+    # 兜底：v2 单请求（DEMO_KEY 限流常见，间隔重试）。
+    # 窗口 6 年：p01 季节基准需要 1 年预热（与 bulk 的 312 点口径一致）。
+    start = (datetime.now(BEIJING) - timedelta(days=312 * 7)).strftime("%Y-%m-%d")
     url = (_EIA_SNDW + f"?api_key={_EIA_KEY}&frequency=weekly&data%5B0%5D=value"
            + "&facets%5Bduoarea%5D%5B%5D=NUS&facets%5Bproduct%5D%5B%5D=EPC0"
            + f"&start={start}&length=5000")
@@ -651,7 +659,8 @@ def _build() -> dict:
     scored: dict[str, dict] = {}
     notes: list[str] = []
 
-    # P01 库存季调偏离：相对 5 年同周中位数的偏离（框架 §3.3 InventoryZ）
+    # P01 库存季调偏离：相对历史同周中位数的偏离（框架 §3.3 InventoryZ）。
+    # 序列含 1 年预热（bulk 保留 6 年），分位与展示仍只用最近 5 年（260 点）。
     if len(stocks) >= 60:
         sig = []
         for i, (d, v) in enumerate(stocks):
@@ -664,6 +673,7 @@ def _build() -> dict:
             med = sorted(history)[len(history) // 2]
             sig.append((d, -(v - med)))  # 库存低于季节性 → 利多
         sig = [(d, v) for d, v in sig if math.isfinite(v)]
+        sig = sig[-260:]
         if len(sig) > 40:
             smoothed = list(zip([d for d, _ in sig], _ema([v for _, v in sig], 3)))
             latest = smoothed[-1]
@@ -739,14 +749,15 @@ def _build() -> dict:
     else:
         notes.append("CFTC 持仓缺失")
 
-    # P06 GPR：30 日均值（月度化事件强度）
+    # P06 GPR：30 日均值（月度化事件强度）。日频序列 260 点仅约 1 年，
+    # 分位窗口用近 5 年（约 1260 点）与其他指标的"5 年历史分位"口径对齐。
     if len(gpr) >= 60:
         sig = []
         for i in range(30, len(gpr)):
             avg = sum(v for _, v in gpr[i - 29:i + 1]) / 30
             sig.append((gpr[i][0], avg))
         latest = sig[-1]
-        score = _pct_rank([v for _, v in sig[-260:]], latest[1]) * 100
+        score = _pct_rank([v for _, v in sig[-1260:]], latest[1]) * 100
         ind = _mk_indicator("p06_gpr", gpr[-260:], score, latest[1],
                             "官方 GPR 日度指数 30 日均值；风险溢价代理，仅在物理层同向时可信")
         indicators.append(ind)
@@ -754,13 +765,13 @@ def _build() -> dict:
     else:
         notes.append("GPR 缺失")
 
-    # P07 美元指数：60 日收益率取反
+    # P07 美元指数：60 日收益率取反。日频序列分位窗口用近 5 年（约 1260 点）。
     usd = _usd_index_series()
     if len(usd) > 60:
         sig = [(usd[i][0], -(math.log(usd[i][1] / usd[i - 60][1]))) for i in range(60, len(usd))
                if usd[i - 60][1] > 0]
         latest = sig[-1]
-        score = _pct_rank([v for _, v in sig[-260:]], latest[1]) * 100
+        score = _pct_rank([v for _, v in sig[-1260:]], latest[1]) * 100
         ind = _mk_indicator("p07_usd", usd[-260:], score, latest[1],
                             "美元指数 60 日收益率取反；框架提醒强内生性，只作计价维度")
         indicators.append(ind)
@@ -768,12 +779,12 @@ def _build() -> dict:
     else:
         notes.append("美元指数缺失")
 
-    # P08 布伦特风险调整动量
+    # P08 布伦特风险调整动量。日频序列分位窗口用近 5 年（约 1260 点）。
     if len(brent) > 121:
         mom = _risk_adj_momentum_series(brent)
         smoothed = list(zip([d for d, _ in mom], _ema([v for _, v in mom], 3)))
         latest = smoothed[-1]
-        score = _pct_rank([v for _, v in smoothed[-260:]], latest[1]) * 100
+        score = _pct_rank([v for _, v in smoothed[-1260:]], latest[1]) * 100
         ind = _mk_indicator("p08_mom", brent[-260:], score, latest[1],
                             "布伦特连续 60/120 日风险调整动量（新浪日K），3 日 EMA")
         # 展示价格水平 + 动量信号两个口径
@@ -827,6 +838,9 @@ def _build() -> dict:
     total = round(sum(i["score"] * i["effective_weight"] for i in got) / wsum, 1) if wsum > 0 else None
 
     # 维度得分 + 趋势（趋势必须是 0-100 得分口径：逐日把信号转分位，再按权重合成）
+    # 滚动分位窗口按序列频率：周频 260 点=5 年，日频 1260 点=5 年。
+    _sig_window = {k: 260 if k in ("p01_stocks", "p02_dos", "p03_prod", "p04_runs", "p05_cot")
+                   else 1260 for k in scored}
     dims: dict[str, dict] = {}
     for name, parts in _DIM_PARTS.items():
         avail = [(k, w) for k, w in parts if k in scored]
@@ -834,19 +848,21 @@ def _build() -> dict:
             continue
         w = sum(pw for _, pw in avail)
         score = round(sum(scored[k]["score"] * pw for k, pw in avail) / w, 1)
+        win = max(_sig_window[k] for k, _ in avail)
         dim_hist = _daily_score_history(
             _merge_dim_score_signals(
                 [(scored[k].get("_hist_sig") or [(p["date"], p["v"]) for p in scored[k]["hist"]], pw)
-                 for k, pw in avail]))
+                 for k, pw in avail], window=win))
         dims[name] = {"score": score, "weight": _DIM_WEIGHT[name],
                       "effective_weight": round(w, 4), "hist": dim_hist}
 
     # 总分趋势（与总合同口径：各指标信号转分位后按有效权重合成）
+    # 混频序列取各指标自身窗口（分指标计算分位），合成时无需统一窗口。
     total_hist = _daily_score_history(
         _merge_dim_score_signals(
             [(scored[k].get("_hist_sig") or [(p["date"], p["v"]) for p in scored[k]["hist"]],
               scored[k].get("effective_weight", scored[k]["weight"]))
-             for k in scored]))
+             for k in scored], window=0))
     if total is not None and total_hist:
         if total_hist[-1]["date"] == current_date:
             total_hist[-1] = {"date": current_date, "v": total}
@@ -921,10 +937,13 @@ def _shift_day(d: str, days: int) -> str:
         return d
 
 
-def _merge_dim_score_signals(pairs: list[tuple[list[tuple[str, float]], float]]) -> list[tuple[str, float]]:
+def _merge_dim_score_signals(pairs: list[tuple[list[tuple[str, float]], float]],
+                             window: int = 260) -> list[tuple[str, float]]:
     """多指标信号按日期转分位得分后加权合成（0-100 口径，与卡片得分一致）。
 
-    每个指标用自身信号序列的滚动窗口分位；然后按维度/总分权重合成到共同日期轴。
+    每个指标用自身信号序列的滚动窗口分位；然后按权重合成到共同日期轴。
+    window 按序列频率传入：周频 260 点=5 年，日频 1260 点=5 年；
+    window<=0 表示逐序列自适应（周频 260 / 日频按点数密度 1260）。
     """
     if not pairs:
         return []
@@ -934,14 +953,25 @@ def _merge_dim_score_signals(pairs: list[tuple[list[tuple[str, float]], float]])
             continue
         vals = [v for _, v in series]
         dates = [d for d, _ in series]
-        # 滚动分位：截至当日的 260 点窗口（与卡片 _pct_rank 口径一致）
+        if window > 0:
+            win = window
+        else:
+            # 自适应：按点数密度估计频率（周频一年约 52 点 → 260=5 年；日频 → 1260）
+            span_days = 365
+            try:
+                span_days = max(1, (date.fromisoformat(dates[-1][:10])
+                                    - date.fromisoformat(dates[0][:10])).days)
+            except ValueError:
+                pass
+            win = 260 if len(vals) / max(1, span_days / 365) < 100 else 1260
+        # 滚动分位：截至当日的窗口（与卡片 _pct_rank 口径一致）
         score_map: dict[str, float] = {}
         for i, d in enumerate(dates):
-            window = vals[max(0, i - 260):i + 1]
-            if len(window) < 20:
+            seg = vals[max(0, i - win):i + 1]
+            if len(seg) < 20:
                 score_map[d] = 50.0
             else:
-                score_map[d] = sum(1 for x in window if x < vals[i]) / len(window) * 100
+                score_map[d] = sum(1 for x in seg if x < vals[i]) / len(seg) * 100
         per_series.append((score_map, weight))
     if not per_series:
         return []
@@ -1068,3 +1098,119 @@ def get_oil_score(force: bool = False) -> dict:
         warm=_warm, ttl=3600, force=force,
         save=lambda v: None,  # _build 内已落盘
     )
+
+
+# ---------------------------------------------------------------------------
+# AI 解读：油价评分的通俗解释（复用择时配置的 LLM 发现；写回评分快照）
+# ---------------------------------------------------------------------------
+
+_INSIGHT_MAX_CHARS = 120  # 每段字数上限（prompt 要求 ≤80，截断兜底）
+
+
+async def _build_insight(force: bool = False) -> dict[str, str] | str:
+    """调 LLM 按稀缺与供需/计价与溢价/综合形势三段解读当前油价评分；失败返回空串。"""
+    payload = get_oil_score(force=force)
+    if payload.get("oil_score") is None:
+        return ""
+    from pulse.pulse_insight import chat_json
+
+    def _dim_lines() -> list[str]:
+        lines = []
+        for name, d in (payload.get("dimensions") or {}).items():
+            if not isinstance(d, dict) or d.get("score") is None:
+                continue
+            lines.append(f"  · {name}（维度权重{d['weight'] * 100:.0f}%）：分 {d['score']:.0f}/100")
+        return lines
+
+    def _ind_lines() -> list[str]:
+        lines = []
+        for i in payload.get("indicators") or []:
+            if not isinstance(i, dict) or i.get("score") is None:
+                continue
+            stale_tag = ""
+            if i.get("effective_weight") is not None and i["effective_weight"] < i["weight"]:
+                stale_tag = "，数据滞后半权"
+            lines.append(
+                f"  · {i['label']}（{i['dimension']}，权重{i['weight'] * 100:.0f}%{stale_tag}）："
+                f"{i.get('value_text') or '—'}，分 {i['score']:.0f}/100，观测日 {i.get('date') or '—'}"
+            )
+        return lines
+
+    structure = payload.get("structure") or {}
+
+    def _structure_line(key: str, label: str) -> str:
+        data = structure.get(key) or []
+        if not data:
+            return ""
+        return f"  · {label}：{data[-1]['v']:.2f}" if key != "spr" else \
+            f"  · {label}：{data[-1]['v'] / 1000:.1f} 百万桶"
+
+    stale = [s["label"] for s in payload.get("source_status") or []
+             if isinstance(s, dict) and s.get("status") != "fresh"]
+    prompt = (
+        "你是资产管理公司的能源策略分析师，为油价多维评分写三段解读。\n"
+        f"模型当前：总分 {payload['oil_score']:.0f}/100、信号「{payload.get('signal')}」、"
+        f"置信度 {payload.get('confidence')}（{payload.get('mode')}）。\n\n"
+        "七维读数如下，仅供你推理——页面已展示全部分数，正文禁止复述：\n"
+        "【维度】\n" + "\n".join(_dim_lines()) + "\n"
+        "【指标】\n" + "\n".join(_ind_lines()) + "\n"
+        "【价格结构（客观呈现，不计入评分）】\n"
+        + "\n".join(x for x in (
+            _structure_line("brent_wti", "Brent-WTI 价差（USD，走阔=美湾瓶颈或布伦特体系更紧）"),
+            _structure_line("sc_brent_ratio", "SC/Brent 比率（>1=亚太采购溢价）"),
+            _structure_line("spr", "美国 SPR 战略储备"),
+            _structure_line("days_of_supply", "商业库存需求天数（不含 SPR）"),
+        ) if x) + "\n"
+        "口径（方向语义，引用读数前先核对，禁止照抄读数当方向）：\n"
+        "- 每个指标的 score 已统一为越高越利多油价（如库存高于季节性→稀缺维度分低）。\n"
+        "- P01 是相对 5 年同周中位数的季调偏离，不是库存绝对水平；P05 带拥挤度上限"
+        "（极端净多+基本面转弱→下行脆弱）；GPR 为 30 日均值口径。\n"
+        "- 分位是历史百分位不是水平值；时效折减（半权）=该数据发布滞后（EIA/CFTC 周频），"
+        "读数方向仍有效但确定性打折。\n"
+        + (f"数据状态：{'、'.join(stale)} 滞后或缺失，置信度已降。\n" if stale else "")
+        + "\n输出三段，每段 1-2 句、80 字以内：\n"
+        "- scarcity_demand：边际物理稀缺与供需（库存偏离、产量、炼厂需求反映的紧平衡程度与方向）\n"
+        "- pricing_premium：计价环境与风险溢价（美元、地缘溢价、仓位拥挤度对油价的压制或助推，与基本面是否背离）\n"
+        "- overall：综合形势（七维合起来看原油市场处于什么环境、最大的利多与利空分别是什么、信号可信度）\n"
+        "- 实描、高信息密度：先判断后依据，写读数背后的含义与维度间的逻辑关系，不罗列子项；"
+        "分数/贡献/百分比一律不复述，最多引用一个能强化判断的关键数字；禁过渡语、比喻和两面下注\n"
+        "- 语言规范：陈述句 + 常用金融词汇（紧平衡/过剩/背离/透支/确认等）；不预测未来、不给交易指令\n"
+        '只返回 JSON：{"scarcity_demand": "...", "pricing_premium": "...", "overall": "..."}，'
+        "不要解释或代码块标记。"
+    )
+    parsed = await chat_json(prompt)
+    out = {k: str(parsed.get(k)).strip()[:_INSIGHT_MAX_CHARS]
+           for k in ("scarcity_demand", "pricing_premium", "overall")
+           if isinstance(parsed.get(k), str) and parsed.get(k).strip()}
+    return out if len(out) == 3 else ""
+
+
+def _valid_insight(v) -> bool:
+    return isinstance(v, dict) and all(
+        isinstance(v.get(k), str) and v.get(k) for k in
+        ("scarcity_demand", "pricing_premium", "overall"))
+
+
+async def get_ai_insight(force: bool = False) -> dict[str, str] | str:
+    """AI 解读三段：手动刷新（force）直接重建；否则返回缓存里已存的解读。
+
+    评分重建后（ai_insight_at 早于评分的 updated）旧解读描述的已不是当前
+    读数，非 force 请求也会重生成一次。LLM 失败时保留旧解读，不让页面文字消失。"""
+    cached = cache_runtime.peek("oil_score_v1") or {}
+    old = cached.get("ai_insight") if _valid_insight(cached.get("ai_insight")) else ""
+    if not force and old:
+        updated = str(cached.get("updated") or "")
+        at = str(cached.get("ai_insight_at") or "")
+        if not updated or not at or at >= updated:
+            return old
+    fresh = await _build_insight(force=False)
+    if not fresh:
+        warmed = cache_runtime.peek("oil_score_v1") or {}
+        cand = warmed.get("ai_insight")
+        return cand if _valid_insight(cand) else old
+    snap = cache_runtime.peek("oil_score_v1") or cached
+    if snap.get("indicators"):
+        snap["ai_insight"] = fresh
+        snap["ai_insight_at"] = datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M")
+        _save_json(_SNAPSHOT, snap)
+    return fresh

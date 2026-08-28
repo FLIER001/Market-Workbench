@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 _CONTEXT_PICKS = 4
 _EVENT_LINES = 4
+# 思考型模型（glm/deepseek reasoning）偶发一轮推理就跑 90s+；超时太短会把正文
+# 整个截断成 fallback。240s 覆盖观察到的最慢往返，仍给调用方留出重试余地。
+_LLM_TIMEOUT_S = 240.0
 
 
 def _configured() -> bool:
@@ -162,7 +165,7 @@ async def _chat_json(prompt: str) -> dict[str, Any]:
         "temperature": 0,
     }
     try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
+        async with httpx.AsyncClient(timeout=_LLM_TIMEOUT_S) as client:
             resp = await client.post(
                 f"{base_url.rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -214,6 +217,21 @@ async def module_insight(module: str, markets: list[dict[str, Any]]) -> dict[str
     if isinstance(parsed.get("impact"), str) and parsed["impact"].strip():
         base["impact"] = parsed["impact"].strip()
     return base
+
+
+def merge_insight(
+    old: dict[str, Any] | None, new: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """单卡重生成的合并规则：LLM 失败时 new 里 impact 为空 —— 保留旧 impact
+    （旧卡是上一次成功生成的结论，仍然有效），事件行则用新数据刷新。"""
+    if not old:
+        return new
+    if not new:
+        return old
+    merged = {**new}
+    if not merged.get("impact") and old.get("impact"):
+        merged["impact"] = old["impact"]
+    return merged
 
 
 def _status_fallback(anchor: str) -> str:

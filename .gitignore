@@ -35,3 +35,6 @@ frontend/tsconfig.tsbuildinfo
 *.log
 .vscode/
 .idea/
+
+# ── ZCode 本地配置（只存本地、不上传） ──────────────────────────
+.zcode/

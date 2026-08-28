@@ -4,7 +4,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Sparkline } from "@/components/ui/Sparkline";
 import { AskAiButton } from "@/components/ui/AskAiButton";
-import { api, type OilScoreData, type OilIndicator, type OilSpotData, type OilSpotQuote, type BrentHistData, type HistPoint } from "@/lib/api";
+import { api, type OilScoreData, type OilIndicator, type OilSpotData, type OilSpotQuote, type BrentHistData, type HistPoint, type OilInsight } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useSWR } from "@/hooks/useSWR";
 
@@ -118,6 +118,9 @@ export function Oil() {
   const [err, setErr] = useState<string | null>(null);
   const [spot, setSpot] = useState<OilSpotData | null>(null);
   const [brent, setBrent] = useState<BrentHistData | null>(null);
+  // AI 三段解读（稀缺供需/计价溢价/综合形势）：后端存快照，这里只做局部替换 + 手动重生成
+  const [aiInsight, setAiInsight] = useState<OilInsight | null>(null);
+  const [insightLoading, setInsightLoading] = useState(false);
 
   const { data: score, loading, revalidating, revalidate } = useSWR<OilScoreData>(
     "oil:v1",
@@ -167,9 +170,32 @@ export function Oil() {
     return () => { cancelled = true; window.clearInterval(timer); };
   }, []);
 
+  // 数据就绪后拉一次 AI 解读（非 force：后端有缓存就直接返回；没缓存才调 LLM）
+  useEffect(() => {
+    if (!score?.oil_score) return;
+    let cancelled = false;
+    setInsightLoading(true);
+    api.oilInsight()
+      .then((d) => { if (!cancelled && d) setAiInsight(d); })
+      .catch(() => { /* 解读不可用时回落主要驱动列表 */ })
+      .finally(() => { if (!cancelled) setInsightLoading(false); });
+    return () => { cancelled = true; };
+  }, [score?.date, score?.oil_score]);
+
+  // 手动重生成：只重调 LLM，不动评分数据
+  const refreshInsight = () => {
+    setInsightLoading(true);
+    api.oilInsight(true)
+      .then((d) => { if (d) setAiInsight(d); })
+      .catch(() => { /* 失败保留已有解读 */ })
+      .finally(() => setInsightLoading(false));
+  };
+
   const total = score?.oil_score ?? null;
   const totalHist = isHist(score?.hist) ? score.hist : [];
-  // 布伦特按评分趋势的同日期对齐：保证得分与油价两张图 x 轴完全一致（与黄金 AU0 同模式）
+  // 布伦特按评分趋势的同日期对齐：保证得分与油价两张图 x 轴完全一致（与黄金 AU0 同模式）。
+  // 评分趋势含非交易日（前向填充），且最新评分日可能晚于布伦特最新交易日：
+  // 超出末端的日期沿用最后一根布伦特收盘，避免曲线尾部落空。
   const brentAligned = useMemo(() => {
     if (!brent || totalHist.length < 2) return [];
     const byDate = new Map(brent.points.map((p) => [p.date, p.v]));
@@ -178,8 +204,13 @@ export function Oil() {
     let cursor = 0;
     for (const h of totalHist) {
       while (cursor < brentDates.length && brentDates[cursor] < h.date) cursor += 1;
-      const d = brentDates[cursor];
-      const v = d === h.date ? byDate.get(d) : (d && d > h.date && cursor > 0 ? byDate.get(brentDates[cursor - 1]) : byDate.get(d));
+      let v: number | undefined;
+      if (cursor < brentDates.length && brentDates[cursor] === h.date) {
+        v = byDate.get(h.date);
+      } else if (cursor > 0) {
+        // h.date 介于两根 K 线之间（或超出末端）：用最近的前一根
+        v = byDate.get(brentDates[cursor - 1]);
+      }
       if (v != null) out.push({ date: h.date, v });
     }
     return out;
@@ -322,29 +353,52 @@ export function Oil() {
             </GlassCard>
 
             <GlassCard className="p-5">
-              <div className="mb-3 text-xs font-medium text-muted-foreground">主要驱动</div>
-              <div className="space-y-2.5">
-                <div className="flex items-start gap-2">
-                  <TrendingUp className="mt-0.5 h-4 w-4 shrink-0 text-danger" />
-                  <div className="text-sm">
-                    {score.top_positive_drivers.length
-                      ? score.top_positive_drivers.join("、")
-                      : <span className="text-muted-foreground">暂无明显利多驱动</span>}
-                  </div>
+              <div className="mb-3 flex items-center gap-2">
+                <span className="text-xs font-medium text-muted-foreground">AI 解读</span>
+                <button
+                  onClick={refreshInsight}
+                  disabled={insightLoading}
+                  className="ml-auto rounded p-1 text-muted-foreground transition-colors hover:text-primary disabled:opacity-60"
+                  title="重新生成 AI 解读">
+                  <RefreshCw className={cn("h-3 w-3", insightLoading && "animate-spin")} />
+                </button>
+              </div>
+              {aiInsight ? (
+                <div className="space-y-1.5 text-sm leading-relaxed text-foreground/85">
+                  <p><span className="font-medium text-primary/90">稀缺与供需</span>　{aiInsight.scarcity_demand}</p>
+                  <p><span className="font-medium text-primary/90">计价与溢价</span>　{aiInsight.pricing_premium}</p>
+                  <p><span className="font-medium text-primary/90">综合形势</span>　{aiInsight.overall}</p>
                 </div>
-                <div className="flex items-start gap-2">
-                  <TrendingDown className="mt-0.5 h-4 w-4 shrink-0 text-success" />
-                  <div className="text-sm">
-                    {score.top_negative_drivers.length
-                      ? score.top_negative_drivers.join("、")
-                      : <span className="text-muted-foreground">暂无明显利空驱动</span>}
-                  </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {insightLoading
+                    ? <p className="text-sm text-muted-foreground">AI 正在生成解读…</p>
+                    : (
+                      <>
+                        <div className="flex items-start gap-2">
+                          <TrendingUp className="mt-0.5 h-4 w-4 shrink-0 text-danger" />
+                          <div className="text-sm">
+                            {score.top_positive_drivers.length
+                              ? score.top_positive_drivers.join("、")
+                              : <span className="text-muted-foreground">暂无明显利多驱动</span>}
+                          </div>
+                        </div>
+                        <div className="flex items-start gap-2">
+                          <TrendingDown className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+                          <div className="text-sm">
+                            {score.top_negative_drivers.length
+                              ? score.top_negative_drivers.join("、")
+                              : <span className="text-muted-foreground">暂无明显利空驱动</span>}
+                          </div>
+                        </div>
+                      </>
+                    )}
                 </div>
-                <div className="flex items-start gap-2 border-t border-border/40 pt-2.5">
-                  <Minus className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                  <div className="text-[11px] text-muted-foreground">
-                    数据状态：{score.data_quality} · 更新于 {score.updated}
-                  </div>
+              )}
+              <div className="mt-2.5 flex items-start gap-2 border-t border-border/40 pt-2.5">
+                <Minus className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                <div className="text-[11px] text-muted-foreground">
+                  数据状态：{score.data_quality} · 更新于 {score.updated}
                 </div>
               </div>
             </GlassCard>

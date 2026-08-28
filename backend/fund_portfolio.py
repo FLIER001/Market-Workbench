@@ -61,6 +61,48 @@ def _invalidate(user_id: int | None = None) -> None:
             _RESP_CACHE.pop(_cache_key(user_id), None)
 
 
+def _snap_estimates(user_id: int | None = None) -> dict:
+    """从当前响应缓存里抠出「行情部分」（每只基金的净值/估值/日收益），供写操作
+    秒回时复用。缓存不存在时返回空 dict——新增持仓的净值/估值列显示空，后台
+    预热或下次刷新补上，不阻塞写操作。"""
+    with _LOCK:
+        snap = _RESP_CACHE.get(_cache_key(user_id))
+    if not snap:
+        return {}
+    out: dict = {}
+    for row in snap.get("holdings", []):
+        code = row.get("code")
+        if not code:
+            continue
+        out[code] = {k: row.get(k) for k in (
+            "name", "nav", "nav_date", "estimate_pct", "estimate_time",
+            "estimate_source", "estimate_stale", "estimate_proxy",
+            "today_return_pct", "today_return_date", "today_return_per_share",
+            "today_return_base_per_share", "yesterday_return_pct",
+            "yesterday_return_date", "yesterday_return_per_share",
+            "yesterday_return_base_per_share")}
+    for c in snap.get("closed", []):
+        code = c.get("code")
+        if not code or code in out:
+            continue
+        # 快照里清仓记录只存了涨跌幅：按 卖出净值 × (1 + pct) 反推现净值，
+        # 写操作秒回时「清仓后」列不闪空（两位小数往返无损）。
+        nav = c.get("nav") or 0.0
+        pct = c.get("post_close_pct")
+        out[code] = {"name": c.get("name"),
+                     "nav": nav * (1 + pct / 100) if nav and pct is not None else None}
+    return out
+
+
+def _respond(user_id: int | None = None) -> dict:
+    """写操作统一出口：用旧快照行情拼新账本，秒回；旧快照缺失时（服务器重启后
+    第一次写）才走真重算，保住正确性。"""
+    est = _snap_estimates(user_id)
+    if est or not _load(user_id).get("holdings"):
+        return get_portfolio(reuse_estimates=est, user_id=user_id)
+    return get_portfolio(user_id=user_id)
+
+
 def _now() -> str:
     return datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M")
 
@@ -132,7 +174,33 @@ def add_holding(code: str, shares: float, cost: float, bought_date: str | None =
             d["holdings"].append(entry)
         _save(d, user_id)
     _invalidate(user_id)
-    return get_portfolio(user_id=user_id)
+    return _respond(user_id)
+
+
+def update_holding(code: str, shares: float, cost: float, bought_date: str | None = None,
+                   user_id: int | None = None) -> dict:
+    """直接改一笔基金持仓的份额 / 成本净值 / 买入日期（录错更正用，覆盖而非合并）。
+
+    bought_date 传 None 表示保持原值不变（区别于空串 = 清除日期）。
+    """
+    with _LOCK:
+        d = _load(user_id)
+        for h in d["holdings"]:
+            if h["code"] == code:
+                h["shares"] = shares
+                h["cost"] = cost
+                if bought_date is not None:
+                    bd = _clean_bought_date(bought_date)
+                    if bd:
+                        h["bought_date"] = bd
+                    else:
+                        h.pop("bought_date", None)
+                break
+        else:
+            raise ValueError(f"持仓中没有 {code}，无法修改")
+        _save(d, user_id)
+    _invalidate(user_id)
+    return _respond(user_id)
 
 
 def remove_holding(code: str, user_id: int | None = None) -> dict:
@@ -141,12 +209,24 @@ def remove_holding(code: str, user_id: int | None = None) -> dict:
         d["holdings"] = [h for h in d["holdings"] if h["code"] != code]
         _save(d, user_id)
     _invalidate(user_id)
-    return get_portfolio(user_id=user_id)
+    return _respond(user_id)
 
 
 def close_position(code: str, date: str, nav: float, shares: float, cost: float | None = None,
                    user_id: int | None = None) -> dict:
     """记一笔已卖出：按卖出净值算已实现盈亏，存 closed 并扣减当前份额。"""
+    # 先在锁外取基金名（fund_meta 冷缓存要拉全量名单 ~5s，别堵账本锁）：
+    # 快照缓存里有名字就直接用（零网络）；没有再走 fund_meta（它有自己的进程级缓存）。
+    snap_est = _snap_estimates(user_id)
+    cached_name = (snap_est.get(code) or {}).get("name")
+    name = cached_name or code
+    if not cached_name:
+        try:
+            meta = fund.fund_meta(code)
+            if meta:
+                name = meta["name"]
+        except Exception:
+            pass
     with _LOCK:
         d = _load(user_id)
         holding = next((h for h in d["holdings"] if h["code"] == code), None)
@@ -156,13 +236,6 @@ def close_position(code: str, date: str, nav: float, shares: float, cost: float 
             cost = holding["cost"]
         pnl = (nav - cost) * shares
         d.setdefault("closed", [])
-        name = code
-        try:
-            meta = fund.fund_meta(code)
-            if meta:
-                name = meta["name"]
-        except Exception:
-            pass
         d["closed"].append({
             "code": code, "name": name, "date": date, "nav": nav,
             "shares": shares, "cost": cost, "pnl": round(pnl, 2),
@@ -176,7 +249,7 @@ def close_position(code: str, date: str, nav: float, shares: float, cost: float 
                 d["holdings"] = [h for h in d["holdings"] if h["code"] != code]
         _save(d, user_id)
     _invalidate(user_id)
-    return get_portfolio(user_id=user_id)
+    return _respond(user_id)
 
 
 def remove_closed(index: int, user_id: int | None = None) -> dict:
@@ -187,24 +260,54 @@ def remove_closed(index: int, user_id: int | None = None) -> dict:
             cl.pop(index)
             _save(d, user_id)
     _invalidate(user_id)
-    return get_portfolio(user_id=user_id)
+    return _respond(user_id)
 
 
-def get_portfolio(bypass: bool = False, user_id: int | None = None) -> dict:
+def replace_ledger(d: dict, user_id: int | None = None) -> None:
+    """用校验过的基金账本整体替换当前账本（数据导入用）。结构异常抛 ValueError。"""
+    if not isinstance(d, dict) or not isinstance(d.get("holdings"), list):
+        raise ValueError("基金持仓账本格式不对（缺 holdings 列表）")
+    for h in d["holdings"]:
+        if not isinstance(h, dict):
+            raise ValueError("持仓条目必须是对象")
+        code = h.get("code")
+        if not isinstance(code, str) or not (6 <= len(code) <= 12):
+            raise ValueError(f"基金代码不合法: {code!r}")
+        for field in ("shares", "cost"):
+            v = h.get(field)
+            if not isinstance(v, (int, float)) or isinstance(v, bool):
+                raise ValueError(f"{code} 的 {field} 必须是数字")
+        if h.get("shares") <= 0:
+            raise ValueError(f"{code} 的份额必须大于 0")
+    if not isinstance(d.get("closed", []), list):
+        raise ValueError("已卖出记录必须是列表")
+    with _LOCK:
+        _save(d, user_id)
+    _invalidate(user_id)
+
+
+def get_portfolio(bypass: bool = False, user_id: int | None = None,
+                  reuse_estimates: dict | None = None) -> dict:
     """读基金持仓 + 最新净值/盘中估值，算浮盈与最近两个确认净值日收益。
 
     默认走进程内响应缓存（后台预热/入场补刷写入），秒回；bypass=True 真重算。
+    reuse_estimates：写操作（加/删/卖出）秒回时传入上次快照的行情，跳过网络
+    拉取直接拼新账本——账本变了但行情没变，盈亏数字与旧快照一致即可接受，
+    新行情由下一次后台预热/刷新补上。
     """
-    if not bypass:
+    if not bypass and reuse_estimates is None:
         with _LOCK:
             if _cache_key(user_id) in _RESP_CACHE:
                 return _RESP_CACHE[_cache_key(user_id)]
     with _LOCK:
         d = _load(user_id)
     hs = d.get("holdings", [])
-    codes = [h["code"] for h in hs]
+    # 行情源：已清仓记录也要最新净值（算「清仓后」），未持仓的代码一并拉
+    codes = list(dict.fromkeys([h["code"] for h in hs] + [c["code"] for c in d.get("closed", [])]))
     est: dict = {}
-    if codes:
+    if reuse_estimates is not None:
+        est = reuse_estimates
+    elif codes:
         try:
             est = fund.realtime_estimates(codes, bypass=bypass)
         except TypeError:
@@ -277,6 +380,14 @@ def get_portfolio(bypass: bool = False, user_id: int | None = None) -> dict:
         tcost += cv
     total_pnl = tmv - tcost
     closed = d.get("closed", [])
+    # 卖出后至今涨跌幅 = 最新净值 / 卖出净值 - 1；最新净值取不到时留 None，前端显示占位
+    closed = [
+        {**c, "post_close_pct": (
+            round((est.get(c["code"], {}).get("nav", 0.0) - c["nav"]) / c["nav"] * 100, 2)
+            if c.get("nav") and (est.get(c["code"], {}) or {}).get("nav") else None
+        )}
+        for c in closed
+    ]
     # 本年盈亏（YTD）分段口径（同场内证券）：年前买入按年初净值 → 最新净值，
     # 年内买入按成本净值 → 最新净值；并入本年已卖出的实现盈亏。
     # 年初净值是历史定值，只在需要时拉一次并落账本（ytd_open），之后直接重放。

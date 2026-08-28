@@ -44,7 +44,7 @@ def test_parse_daily_kline():
 
 
 def test_eia_bulk_parse_from_fixture(tmp_path, monkeypatch):
-    """bulk 解析：临时 zip 内嵌两条目标系列 + 一条干扰行。"""
+    """bulk 解析：临时 zip 内嵌两条目标系列 + 一条干扰行；p_stocks 保留 6 年。"""
     import zipfile
     lines = [
         {"series_id": "PET.OTHER.W", "name": "x", "data": [["20260101", 1]]},
@@ -64,6 +64,37 @@ def test_eia_bulk_parse_from_fixture(tmp_path, monkeypatch):
     oil._BULK_CACHE.clear()
     got = oil._parse_eia_bulk()
     assert got["p_stocks"] == [("2026-07-31", 406987.0), ("2026-08-07", 424410.0)]
+
+
+def test_eia_bulk_keeps_6y_for_stocks(tmp_path):
+    """p_stocks 保留 312 点（6 年），其余 260 点（5 年）。"""
+    import zipfile
+    import json as _json
+    import io as _io
+    from datetime import date, timedelta
+
+    def period(i: int) -> str:
+        return (date(2020, 1, 3) + timedelta(weeks=i)).strftime("%Y%m%d")
+
+    data = [[period(i), 1000 + i] for i in range(320)]
+    row = {"series_id": "PET.WCESTUS1.W", "name": "stocks", "data": data}
+    row2 = {"series_id": "PET.WCRFPUS2.W", "name": "prod", "data": data}
+    buf = _io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("PET.txt", _json.dumps(row) + "\n" + _json.dumps(row2))
+    zip_path = tmp_path / "pet.zip"
+    zip_path.write_bytes(buf.getvalue())
+    import oil as _oil
+    orig = _oil._EIA_BULK_ZIP
+    _oil._EIA_BULK_ZIP = str(zip_path)
+    _oil._BULK_CACHE.clear()
+    try:
+        got = _oil._parse_eia_bulk()
+        assert len(got["p_stocks"]) == 312
+        assert len(got["p_prod"]) == 260
+    finally:
+        _oil._EIA_BULK_ZIP = orig
+        _oil._BULK_CACHE.clear()
 
 
 def test_week_dist_wraps_year_end():

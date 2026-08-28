@@ -1039,9 +1039,7 @@ def _dimension_score_history(parts: list[tuple[str, float]], score_histories: di
 
 
 def _append_current_score(hist: list[dict], current_date: str, score: float) -> None:
-    """把当前计算值作为独立时点放入趋势，避免覆盖最近观测日。
-
-    周末/节假日计算的分数落到最近已有观测日，避免历史里出现非交易日时点。"""
+    """把当前实时分作为独立时点放入趋势尾（wall date），不覆盖最近观测日的历史值。"""
     point = {"date": current_date, "v": score}
     if hist and hist[-1]["date"] == current_date:
         hist[-1] = point
@@ -1167,6 +1165,104 @@ def get_gold_score(force: bool = False) -> dict:
         ttl=3600,
         force=force,
     )
+
+
+# ---------------------------------------------------------------------------
+# AI 解读：黄金评分的通俗解释（复用择时配置的 LLM 发现；写回评分快照）
+# ---------------------------------------------------------------------------
+
+_INSIGHT_MAX_CHARS = 120  # 每段字数上限（prompt 要求 ≤80，截断兜底）
+
+
+async def _build_insight(force: bool = False) -> dict[str, str] | str:
+    """调 LLM 按机会成本/资金仓位/综合形势三段解读当前黄金评分；失败返回空串。"""
+    payload = get_gold_score(force=force)
+    if payload.get("gold_score") is None:
+        return ""
+    from pulse.pulse_insight import chat_json
+
+    def _dim_lines() -> list[str]:
+        lines = []
+        for name, d in (payload.get("dimensions") or {}).items():
+            if not isinstance(d, dict) or d.get("score") is None:
+                continue
+            lines.append(f"  · {name}（维度权重{d['weight'] * 100:.0f}%）：分 {d['score']:.0f}/100")
+        return lines
+
+    def _ind_lines() -> list[str]:
+        lines = []
+        for i in payload.get("indicators") or []:
+            if not isinstance(i, dict) or i.get("score") is None:
+                continue
+            stale_tag = ""
+            if i.get("effective_weight") is not None and i["effective_weight"] < i["weight"]:
+                stale_tag = "，数据滞后半权"
+            lines.append(
+                f"  · {i['label']}（{i['dimension']}，权重{i['weight'] * 100:.0f}%{stale_tag}）："
+                f"{i.get('value_text') or '—'}，分 {i['score']:.0f}/100，观测日 {i.get('date') or '—'}"
+            )
+        return lines
+
+    stale = [s["label"] for s in payload.get("source_status") or []
+             if isinstance(s, dict) and s.get("status") != "fresh"]
+    prompt = (
+        "你是资产管理公司的贵金属策略分析师，为黄金多维评分写三段解读。\n"
+        f"模型当前：总分 {payload['gold_score']:.0f}/100、信号「{payload.get('signal')}」、"
+        f"置信度 {payload.get('confidence')}（{payload.get('mode')}）。\n\n"
+        "五维读数如下，仅供你推理——页面已展示全部分数，正文禁止复述：\n"
+        "【维度】\n" + "\n".join(_dim_lines()) + "\n"
+        "【指标】\n" + "\n".join(_ind_lines()) + "\n"
+        "口径（方向语义，引用读数前先核对，禁止照抄读数当方向）：\n"
+        "- 每个指标的 score 已统一为越高越利多黄金（如实际利率大幅上行→机会成本维度分低）。\n"
+        "- ETF 指标是剔除价格动量解释后的超预期流量，不是总持仓；央行指标为已报告口径，实际购金通常更高。\n"
+        "- 分位是历史百分位不是水平值；时效折减（半权）=该数据发布滞后，读数方向仍有效但确定性打折。\n"
+        + (f"数据状态：{'、'.join(stale)} 滞后或缺失，置信度已降。\n" if stale else "")
+        + "\n输出三段，每段 1-2 句、80 字以内：\n"
+        "- opportunity_cost：机会成本与美元维度当前状态（实际利率与美元对黄金的压制或支撑、强度如何）\n"
+        "- flows_positioning：投资资金与仓位（ETF 流量、COMEX 仓位反映的资金态度，与趋势是否背离）\n"
+        "- overall：综合形势（五维合起来看黄金处于什么环境、最大的支撑与拖累分别是什么、信号可信度）\n"
+        "- 实描、高信息密度：先判断后依据，写读数背后的含义与维度间的逻辑关系，不罗列子项；"
+        "分数/贡献/百分比一律不复述，最多引用一个能强化判断的关键数字；禁过渡语、比喻和两面下注\n"
+        "- 语言规范：陈述句 + 常用金融词汇（压制/支撑/背离/透支/确认等）；不预测未来、不给交易指令\n"
+        '只返回 JSON：{"opportunity_cost": "...", "flows_positioning": "...", "overall": "..."}，'
+        "不要解释或代码块标记。"
+    )
+    parsed = await chat_json(prompt)
+    out = {k: str(parsed.get(k)).strip()[:_INSIGHT_MAX_CHARS]
+           for k in ("opportunity_cost", "flows_positioning", "overall")
+           if isinstance(parsed.get(k), str) and parsed.get(k).strip()}
+    return out if len(out) == 3 else ""
+
+
+def _valid_insight(v) -> bool:
+    return isinstance(v, dict) and all(
+        isinstance(v.get(k), str) and v.get(k) for k in
+        ("opportunity_cost", "flows_positioning", "overall"))
+
+
+async def get_ai_insight(force: bool = False) -> dict[str, str] | str:
+    """AI 解读三段：手动刷新（force）直接重建；否则返回缓存里已存的解读。
+
+    评分重建后（ai_insight_at 早于评分的 updated）旧解读描述的已不是当前
+    读数，非 force 请求也会重生成一次。LLM 失败时保留旧解读，不让页面文字消失。"""
+    cached = market._last_good("gold_score_v3") or {}
+    old = cached.get("ai_insight") if _valid_insight(cached.get("ai_insight")) else ""
+    if not force and old:
+        updated = str(cached.get("updated") or "")
+        at = str(cached.get("ai_insight_at") or "")
+        if not updated or not at or at >= updated:
+            return old
+    fresh = await _build_insight(force=False)
+    if not fresh:
+        warmed = market._last_good("gold_score_v3") or {}
+        cand = warmed.get("ai_insight")
+        return cand if _valid_insight(cand) else old
+    snap = market._last_good("gold_score_v3") or cached
+    if snap.get("indicators"):
+        snap["ai_insight"] = fresh
+        snap["ai_insight_at"] = datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M")
+        market._save_json(_SNAPSHOT, snap)
+    return fresh
 
 
 def _load_gold_snapshot():
@@ -1371,7 +1467,8 @@ def _build() -> dict:
         sig = momentum_signal
         if sig:
             score_hist = [v for _, v in sig[-1260:]]
-            ind = _mk_indicator("g08_momentum", lbma_pm,
+            # 指标卡口径 = 动量信号本身（value/chg/hist 走 sig）；金价水平不进指标卡
+            ind = _mk_indicator("g08_momentum", sig,
                                 _pct_rank(score_hist, sig[-1][1]) * 100, sig[-1][1],
                                 "WGC/ICE LBMA Gold Price PM；60/120日风险调整动量，3日EMA")
             ind["_score_hist"] = _score_history(sig, score_hist)
@@ -1400,10 +1497,10 @@ def _build() -> dict:
         [(ind["key"], ind["effective_weight"]) for ind in scored], score_histories,
         {ind["key"]: ind["effective_weight"] for ind in scored},
     )
-    # 观测日 = 已有趋势的最近观测日（周末/节假日计算沿用上一观测日，不制造非交易日时点）
-    current_date = total_hist[-1]["date"] if total_hist else wall_date
+    # 当前实时分作为独立时点追加到 wall date（不覆盖最近观测日的历史值）。
+    current_date = wall_date
     if total is not None:
-        _append_current_score(total_hist, current_date, total)
+        _append_current_score(total_hist, wall_date, total)
     dims: dict[str, dict] = {}
     for name, parts in _DIM_PARTS.items():
         got = [(scored_keys[k]["score"], scored_keys[k]["effective_weight"])
@@ -1414,7 +1511,7 @@ def _build() -> dict:
         score = round(sum(s * part_w for s, part_w in got) / w, 1)
         hist = _dimension_score_history(parts, score_histories,
                                         {k: scored_keys[k]["effective_weight"] for k, _ in parts if k in scored_keys})
-        _append_current_score(hist, hist[-1]["date"] if hist else wall_date, score)
+        _append_current_score(hist, wall_date, score)
         dims[name] = {"score": score, "weight": _DIM_WEIGHT[name],
                       "effective_weight": round(w, 4), "hist": hist}
 

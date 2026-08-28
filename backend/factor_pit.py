@@ -69,10 +69,11 @@ def _all_periods() -> list[str]:
 
 
 def _fetch_period(report_date: str) -> list[dict]:
-    """拉一个报告期全部股票（500 行/页，东财上限）。"""
+    """拉一个报告期全部股票（500 行/页，东财上限）。连接被掐时重试 3 次。"""
     url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
     rows: list[dict] = []
     page = 1
+    failures = 0
     while page <= 60:
         params = {
             "sortColumns": "SECURITY_CODE", "sortTypes": "1",
@@ -80,7 +81,15 @@ def _fetch_period(report_date: str) -> list[dict]:
             "reportName": "RPT_LICO_FN_CPD", "columns": "ALL",
             "filter": f"(REPORTDATE='{report_date}')",
         }
-        d = astock.em_get(url, params=params, timeout=25).json()
+        try:
+            d = astock.em_get(url, params=params, timeout=25).json()
+        except Exception:  # noqa: BLE001 — 东财偶发掐连接（见 push2his 同款问题），退避重试
+            failures += 1
+            if failures > 3:
+                break
+            time.sleep(2 * failures)
+            continue
+        failures = 0
         res = d.get("result") or {}
         data = res.get("data") or []
         if not data:
@@ -124,14 +133,23 @@ def build_fundamentals() -> dict:
             _STATE["periods_total"] = len(periods)
 
         all_records: list[dict] = list(_load_existing_records()) if meta["periods"] else []
+        existing_periods = {r["report_date"] for r in all_records}
         for period in periods:
-            if period in meta["periods"]:
+            # 断点续传判据用「记录里实际存在的期」而非 meta 标记——历史 bug：
+            # fetch 失败的期曾写入 meta 但记录为空，重启后该期被跳过造成永久缺口
+            if period in meta["periods"] and period in existing_periods:
                 with _STATE_LOCK:
                     _STATE["periods_done"] += 1
                 continue
             records = [r for r in (_row_to_record(x) for x in _fetch_period(period)) if r]
+            if not records and period not in meta["periods"]:
+                # 完全拉不到（东财不可达）：不写 meta，下轮重试
+                with _STATE_LOCK:
+                    _STATE["error"] = f"{period} 拉取为空，将在下次构建重试"
+                continue
             all_records.extend(records)
-            meta["periods"].append(period)
+            if period not in meta["periods"]:
+                meta["periods"].append(period)
             with _STATE_LOCK:
                 _STATE["periods_done"] += 1
                 _STATE["rows"] = len(all_records)
@@ -147,8 +165,10 @@ def build_fundamentals() -> dict:
         os.replace(tmp, _FUND_FILE)
 
         with _STATE_LOCK:
-            _STATE.update(building=False, done_at=built_at)
-        factor_data._fund_cache_clear()
+            # error 只反映本轮流空期；整体完成即清（否则旧错误永久挂在状态里）
+            _STATE.update(building=False, done_at=built_at, error=None)
+        global _pit_cache
+        _pit_cache = None  # 财务表重建后立即失效进程缓存（data_version 只看日线 catalog，不会自动失效）
         return {
             "built_at": built_at, "rows": int(len(df)), "stocks": int(df["code"].nunique()),
             "report_periods": len(periods),
@@ -192,7 +212,11 @@ _pit_cache_version: str | None = None
 
 
 def pit_table() -> pd.DataFrame:
-    """财务长表（code,report_date,notice_date,指标）。构建后常驻内存。"""
+    """财务长表（code,report_date,notice_date,指标）。
+
+    445k 行 × 13 列 ≈ 45MB 内存，量级无害，保留进程内缓存（evaluate 单次会调多次）。
+    真正的大头是日线面板（~2GB），那边的缓存已在 factor_data 移除。
+    """
     global _pit_cache, _pit_cache_version
     version = factor_data.data_version()
     if _pit_cache is None or _pit_cache_version != version:

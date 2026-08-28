@@ -137,6 +137,32 @@ def add_holding(code: str, shares: float, cost: float, bought_date: str | None =
     return get_portfolio(user_id=user_id)
 
 
+def update_holding(code: str, shares: float, cost: float, bought_date: str | None = None,
+                   user_id: int | None = None) -> dict:
+    """直接改一笔持仓的数量 / 成本价 / 买入日期（录错更正用，覆盖而非合并）。
+
+    bought_date 传 None 表示保持原值不变（区别于空串 = 清除日期）。
+    """
+    with _LOCK:
+        d = _load(user_id)
+        for h in d["holdings"]:
+            if h["code"] == code:
+                h["shares"] = shares
+                h["cost"] = cost
+                if bought_date is not None:
+                    bd = _clean_bought_date(bought_date)
+                    if bd:
+                        h["bought_date"] = bd
+                    else:
+                        h.pop("bought_date", None)
+                break
+        else:
+            raise ValueError(f"持仓中没有 {code}，无法修改")
+        _save(d, user_id)
+    _invalidate(user_id)
+    return get_portfolio(user_id=user_id)
+
+
 def remove_holding(code: str, user_id: int | None = None) -> dict:
     with _LOCK:
         d = _load(user_id)
@@ -191,6 +217,29 @@ def remove_closed(index: int, user_id: int | None = None) -> dict:
             _save(d, user_id)
     _invalidate(user_id)
     return get_portfolio(user_id=user_id)
+
+
+def replace_ledger(d: dict, user_id: int | None = None) -> None:
+    """用校验过的账本整体替换当前账本（数据导入用）。结构异常抛 ValueError。"""
+    if not isinstance(d, dict) or not isinstance(d.get("holdings"), list):
+        raise ValueError("证券持仓账本格式不对（缺 holdings 列表）")
+    for h in d["holdings"]:
+        if not isinstance(h, dict):
+            raise ValueError("持仓条目必须是对象")
+        code = h.get("code")
+        if not isinstance(code, str) or len(code) != 6 or not code.isdigit():
+            raise ValueError(f"持仓代码不合法: {code!r}")
+        for field in ("shares", "cost"):
+            v = h.get(field)
+            if not isinstance(v, (int, float)) or isinstance(v, bool):
+                raise ValueError(f"{code} 的 {field} 必须是数字")
+        if h.get("shares") <= 0:
+            raise ValueError(f"{code} 的股数必须大于 0")
+    if not isinstance(d.get("closed", []), list):
+        raise ValueError("已清仓记录必须是列表")
+    with _LOCK:
+        _save(d, user_id)
+    _invalidate(user_id)
 
 
 def get_portfolio(fresh: bool = False, user_id: int | None = None, refresh_bases: bool = False) -> dict:

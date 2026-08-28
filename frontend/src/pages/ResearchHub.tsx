@@ -29,14 +29,14 @@ export function ResearchHub() {
   return (
     <div>
       <PageHeader
-        title="研究"
-        subtitle="我的研报与研究记录 · 研报归档、AI 分析沉淀"
+        title="笔记"
+        subtitle="我的研报与笔记记录 · 研报归档、AI 分析沉淀"
       />
 
       <div className="mb-4 grid max-w-md grid-cols-2 gap-2 rounded-xl border border-border/50 bg-muted/20 p-1.5">
         {([
           ["reports", "我的研报"],
-          ["notes", "研究记录"],
+          ["notes", "我的笔记"],
         ] as const).map(([id, label]) => (
           <button
             key={id}

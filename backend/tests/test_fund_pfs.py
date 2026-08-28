@@ -36,6 +36,57 @@ def test_score_uses_neutral_prior_and_confidence_formula():
     assert result["gate_pass"] is True
 
 
+def test_tier_thresholds_are_reachable_and_ordered():
+    """分层阈值必须落在模型数学上限内：中性先验(process/platform=50)下
+    quality 上限约 81、final 上限约 79 —— core_buy 阈值超过它就永远空缺。"""
+    row = {
+        **_row(),
+        "近6月": 99.0, "近1年": 99.0, "近2年": 99.0, "近3年": 99.0,
+        "return_percentiles": {"近6月": 99.0, "近1年": 99.0, "近2年": 99.0, "近3年": 99.0},
+        "manager_career_days": 5000, "manager_aum": 5.0, "manager_fund_count": 1, "fee_pct": 0.0,
+    }
+    detail = {
+        **_detail(days=4000),
+        "fees": {"total": 0.1, "items": {}},
+        "nav": {"features": {}}, "scale": {"features": {}}, "holders": {"features": {}},
+        "nav_risk_score": 99.0, "rolling_persistence_score": 99.0,
+    }
+    best = fund_pfs._score_candidate(
+        row, detail, [5.0, 100.0, 200.0, 300.0], [1, 5, 10, 20], [0.0, 0.5, 1.0], [0.1, 0.5, 1.0, 1.5],
+    )
+    # 满分候选必须能进 core_buy —— 锁住阈值不越过数学上限
+    assert best["tier"] == "core_buy", f"best case got {best['tier']}: final={best['final_score']} q={best['quality_score']} c={best['confidence']}"
+    # 中游偏上候选应落 watch，不得冒充买入（分位 55-65、费用中游）
+    mid = fund_pfs._score_candidate(
+        {**_row(), "return_percentiles": {"近6月": 58.0, "近1年": 62.0, "近2年": 65.0, "近3年": 60.0}},
+        {**_detail(), "nav_risk_score": 55.0, "rolling_persistence_score": 55.0},
+        [20, 30, 50, 100], [2, 3, 5, 8], [0, 0.08, 0.15, 0.3],
+    )
+    assert mid["tier"] == "watch"
+    # 证据收缩后低分候选必须排除
+    low = fund_pfs._score_candidate(
+        {**_row(), "return_percentiles": {"近6月": 20.0, "近1年": 25.0, "近2年": 30.0, "近3年": 35.0}},
+        _detail(days=400),
+        [20, 30, 50], [2, 3, 5], [0, 0.15, 0.3],
+    )
+    assert low["tier"] == "exclude"
+
+
+def test_short_tenure_excludes_predecessor_risk_period():
+    """任期不足 1 年：雪球「近1年」风险指标窗口含前任管理期，不得参与评分。"""
+    detail = {
+        **_detail(days=204),
+        "risk": {"近1年": {"risk_return_peer": 99.0, "resilience_peer": 99.0, "sharpe": 2.0, "max_drawdown": -5.0}},
+    }
+    result = fund_pfs._score_candidate(_row(), detail, [20, 30, 50], [2, 3, 5], [0, 0.15, 0.3])
+    assert result["risk_period"] is None
+    # 近1年雪球分位 99 不应进入评分：nav_risk_score 缺失时 risk_score 应为 None
+    assert result["risk_metrics"] == {}
+    assert "risk_score" not in result  # risk_score 是中间量，验证其未污染输出
+    # 任期风险字段 why_good 里不得引用雪球近1年口径
+    assert all("近1年" not in item for item in result["why_good"])
+
+
 def test_manager_evidence_does_not_use_period_before_current_team():
     result = fund_pfs._score_candidate(_row(), _detail(days=800), [20, 30, 50], [2, 3, 5], [0, 0.15, 0.3])
 

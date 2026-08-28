@@ -813,6 +813,17 @@ def _bonds_segments(args: dict):
     }
 
 
+def _bonds_positioning(args: dict):
+    """期货量仓：模型侧裁掉 oi_hist 走势（120KB→1KB），只留最新值与分位。"""
+    d = bonds.get_positioning() or {}
+    contracts = d.get("contracts") or []
+    if not contracts:
+        return {"error": "国债期货量仓暂不可用"}
+    slim = [{k: v for k, v in c.items() if k != "oi_hist"} for c in contracts]
+    return {"date": d.get("date"), "contracts": slim,
+            "source": d.get("source"), "method": d.get("method")}
+
+
 def _bonds_overview(args: dict):
     """债市全景：各子块只留最新值 + 日/月变动，序列只带迷你走势，控 token。"""
     d = bonds.get_overview() or {}
@@ -948,24 +959,42 @@ _HANDLERS = {
     "query_bonds_overview": _bonds_overview,
     "query_bonds_framework": _bonds_framework,
     "query_bonds_calc": lambda a: bonds.get_calc() or {"error": "债市计算层暂不可用"},
-    "query_bonds_positioning": lambda a: bonds.get_positioning() or {"error": "国债期货量仓暂不可用"},
+    "query_bonds_positioning": _bonds_positioning,
     "query_bonds_segments": _bonds_segments,
     "query_timing_allocation": _timing_allocation,
     "factor_lab_status": lambda a: _factor_lab_status(),
-    "factor_evaluate": lambda a: _factor_evaluate(str(a["factor"]), a.get("start"), a.get("end")),
+    "factor_evaluate": lambda a: _factor_evaluate(str(a["factor"]), _norm_opt_date(a.get("start")), _norm_opt_date(a.get("end"))),
     "factor_backtest": lambda a: _factor_backtest(
-        str(a["factor"]), int(a.get("top_n", 50)), str(a.get("freq", "monthly")),
-        a.get("start"), a.get("end")),
+        str(a["factor"]), _opt_int(a, "top_n", 50), str(a.get("freq") or "monthly"),
+        _norm_opt_date(a.get("start")), _norm_opt_date(a.get("end"))),
 }
+
+
+def _norm_opt_date(v) -> str | None:
+    """LLM 常传 "None"/"null" 字符串；归一成 None（否则日期过滤把全表滤空报错难懂）。"""
+    if v in (None, "", "None", "null", "None的"):
+        return None
+    return str(v)
+
+
+def _opt_int(a: dict, key: str, default: int) -> int:
+    v = a.get(key, default)
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
 
 
 def _factor_lab_status() -> dict:
     import factor_data
+    import factor_pit
     import factors
 
     return {
         "factors": [{"id": k, "name": v} for k, v in factors.FACTOR_META.items()],
+        "fin_factors": [{"id": k, "name": v} for k, v in factors.FIN_FACTOR_META.items()],
         **factor_data.lab_status(),
+        "fundamentals": factor_pit.pit_status(),
     }
 
 

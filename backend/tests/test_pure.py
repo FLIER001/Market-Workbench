@@ -324,6 +324,64 @@ def test_fund_top_holdings_parse_mixed_markets():
     assert out[3] == (("177", "005930"), 7.10) # 韩股元组
 
 
+def test_fund_screen_sort_sinks_missing_values():
+    """筛选排序：无业绩数据（新基金）无论升降序都排末尾，不霸榜。"""
+    rows = [{"c": "A", "v": None}, {"c": "B", "v": 50.0}, {"c": "C", "v": 30.0}, {"c": "D", "v": None}]
+    key = lambda r: (r["v"] is not None, r["v"] or 0.0)
+    asc = sorted(rows, key=key)
+    desc = sorted(rows, key=key, reverse=True)
+    assert [r["c"] for r in desc] == ["B", "C", "A", "D"]  # 降序：数值降序 + None 沉底
+    assert [r["c"] for r in desc][-2:] == ["A", "D"]       # None 恒沉底
+
+
+def test_fund_metrics_uses_adjusted_returns():
+    """业绩指标用日增长率链乘的复权序列：跨除息日（-15% 跳水、day_pct -0.47%）
+    不应把分红算成亏损。"""
+    import fund
+    rows = [{"date": f"2025-{i:02d}-01", "nav": 1.0, "acc_nav": None, "day_pct": 1.0}
+            for i in range(1, 13)]
+    fund._CACHE["nav_hist_TESTADJ"] = (fund.time.time(), rows)  # 新鲜缓存：不走网络
+    try:
+        equity = fund._adjusted_equity("TESTADJ", limit=250)
+        assert len(equity) == 12
+        # 首日锚 1.0，之后逐日 ×1.01 —— 与裸 nav 链一致（无除息时两口径等价）
+        assert abs(equity[-1] - 1.01 ** 11) < 1e-9
+    finally:
+        fund._CACHE.pop("nav_hist_TESTADJ", None)
+    # 除息日口径：nav 跳水 15% 但 day_pct=-0.47，复权序列不应出现 -15%
+    rows2 = [
+        {"date": "2025-12-26", "nav": 2.2152, "acc_nav": None, "day_pct": -0.73},
+        {"date": "2025-12-29", "nav": 1.8747, "acc_nav": None, "day_pct": -0.47},
+        {"date": "2025-12-30", "nav": 1.8701, "acc_nav": None, "day_pct": -0.25},
+    ]
+    fund._CACHE["nav_hist_TESTDIV"] = (fund.time.time(), rows2)  # 新鲜缓存：不走网络
+    try:
+        eq = fund._adjusted_equity("TESTDIV")
+        rets = [eq[i] / eq[i-1] - 1 for i in range(1, len(eq))]
+        assert all(r > -0.01 for r in rets)  # 复权后无 -15% 级别的假回撤
+    finally:
+        fund._CACHE.pop("nav_hist_TESTDIV", None)
+
+
+def test_fund_top_holdings_latest_section_by_quarter_key():
+    """_top_holdings 按季度标题分节取最新一期：Q1 节在前的乱序页不取错；
+    无季度标题时回退全页解析。"""
+    import fund
+    html_rev = """
+    <h4>2026年1季度股票投资明细</h4>
+    <tr><td>1</td><td><a href='//quote.eastmoney.com/unify/r/1.301239'>301239</a></td><td>8.49%</td></tr>
+    <tr><td>2</td><td><a href='//quote.eastmoney.com/unify/r/1.688198'>688198</a></td><td>8.14%</td></tr>
+    <h4>2026年2季度股票投资明细</h4>
+    <tr><td>1</td><td><a href='//quote.eastmoney.com/unify/r/1.688114'>688114</a></td><td>10.25%</td></tr>
+    <tr><td>2</td><td><a href='//quote.eastmoney.com/unify/r/116.02419'>02419</a></td><td>8.92%</td></tr>
+    """
+    out = fund._parse_holdings_page(html_rev)
+    assert out == [("688114", 10.25), (("116", "02419"), 8.92)]  # 取 Q2 节，非页面首节
+    assert fund._parse_holdings_page(
+        "<tr><td><a href='//quote.eastmoney.com/unify/r/1.600519'>600519</a></td><td>9.5%</td></tr>"
+    ) == [("600519", 9.5)]  # 无标题回退全页
+
+
 def test_fund_holdings_latest_quarter_selection():
     """档案持仓按季度键取最新一期：不依赖东财返回行序、跨年不回退。"""
     import fund
@@ -528,6 +586,13 @@ def test_gold_current_score_is_appended_without_overwriting_latest_observation()
     gold_score._append_current_score(rows, "2026-08-11", 45.0)
     assert rows[-1] == {"date": "2026-08-11", "v": 45.0}
 
+    # 同日重算只刷新末点，不产生重复时点
+    gold_score._append_current_score(rows, "2026-08-11", 45.5)
+    assert rows == [
+        {"date": "2026-08-10", "v": 44.3},
+        {"date": "2026-08-11", "v": 45.5},
+    ]
+
 
 def test_parse_binance_paxg_klines():
     """Binance klines 数组 → 北京时间分时点；openTime(UTC ms)→北京时钟分。"""
@@ -624,7 +689,7 @@ def test_usdcny_rate_parses_sina_fx(monkeypatch):
 
 
 def test_macro_composite_weights_direction_and_coverage():
-    """宏观总分：反向模块取 100-分合成；缺分模块按权重归一；覆盖不足一半不输出。"""
+    """宏观总分：反向模块取 100-分合成；缺分模块按中性 50 计入；覆盖不足一半不输出。"""
     import market
 
     mods = [
@@ -647,10 +712,16 @@ def test_macro_composite_weights_direction_and_coverage():
     assert market._composite_state(70.0) == "偏多"
     assert market._composite_state(40.0) == "中性偏空"
 
-    # 缺一个模块：剩余 95 权重（100-5 货币金融条件）归一
+    # 缺一个模块（货币金融条件，权重 5，分值 50=中性）：分数不变，覆盖 95%
     comp2 = market._macro_composite(mods[:5])
     assert comp2 is not None
     assert math.isclose(comp2["coverage"], 95.0)
+    assert math.isclose(comp2["score"], 53.0)
+
+    # 缺的是有信号模块（财政地产 +6 分量）→ 分数被压回中性方向
+    comp3 = market._macro_composite(mods[1:])
+    assert comp3 is not None
+    assert math.isclose(comp3["score"], 47.0)  # -5+2+0+0+0 → 47
 
     # 覆盖不足一半（只有 10+5 权重的模块有分）→ 不输出
     assert market._macro_composite(mods[4:]) is None

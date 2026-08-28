@@ -524,7 +524,10 @@ def get_overview(force: bool = False) -> dict:
 # - 社融存量同比：官方存量表（当期 7 个月）作锚 + shrzgm 月增量（2015 起）回推存量，算同比；
 # - 资金利率-政策锚利差：东财银行间拆借隔夜（2004 起）× OMO 7D 利率时间表。
 
-_OMO_SCHEDULE = [  # 7 天逆回购操作利率（公开市场业务公告，生效日 → 利率%）
+_OMO_SCHEDULE = [  # 7 天逆回购操作利率（生效日 → 利率%）
+    # 硬编码时间表：macro_fetch._reverse_repo_rate_schedule 抓公告的正则在 2026 年
+    # 措辞变化后失效。下次央行调整 OMO 利率时需手动补一行，否则 ib_overnight
+    # 的 spread_bp 会系统性偏移（当前 1.4% 与市场一致，隔夜-OMO 利差 -2.5~7.7bp 正常）。
     ("2020-03-30", 2.20), ("2022-01-17", 2.10), ("2022-08-15", 2.00),
     ("2023-06-13", 1.90), ("2023-08-15", 1.80), ("2024-07-22", 1.70),
     ("2024-09-27", 1.50), ("2025-05-08", 1.40),
@@ -542,75 +545,149 @@ def _omo_on(date: str) -> float | None:
 
 
 def _afre_stock_payload() -> dict:
-    """社融存量同比（3 年+）：官方存量锚 + shrzgm 月增量回推。
+    """社融存量同比（3 年目标）：三层来源取最优。
 
-    官方表只给最新 7 个月的存量/同比；shrzgm 增量自 2015 年完整。
-    以官方最新存量为锚逐月倒扣增量得到存量序列，同比由存量直接算出，
-    与官方公布的当月同比交叉验证（偏差 <0.2pp 视为通过）。
+    1. mofcom shrzgm 136 月增量 + 官方存量锚回推（主路径，mofcom 常挂）；
+    2. 本地累积快照（官方每月 7 个月窗口滚动留存，levels/growth 逐月变长）；
+    3. 两者合并取最长。官方公布月优先用官方同比（回推两端误差 ~1pp）。
     """
     try:
         import macro_fetch
         official = macro_fetch.social_financing_stock() or {}
     except Exception:  # noqa: BLE001
         official = {}
-    anchor_date = anchor_level = None
-    if official.get("stock_level_hist"):
-        pts = sorted(official["stock_level_hist"], key=lambda p: p["date"])
-        anchor_date, anchor_level = pts[-1]["date"], pts[-1]["v"]
-    if not anchor_date:
+    if not official.get("stock_level_hist"):
         return {}
-    ak = astock._akshare()
-    df = ak.macro_china_shrzgm()
-    if df is None or df.empty:
-        return {}
+    # 累积快照先滚动并入官方最新窗口（即使 mofcom 挂也能攒数据）
+    accum = _merge_accum(official)
+
     flows: dict[str, float] = {}
-    for _, r in df.iterrows():
-        m = str(r["月份"])
-        # '202604' → '2026-04'（补零，与官方存量表日期对齐）
-        d = f"{m[:4]}-{m[4:6].zfill(2)}" if len(m) == 6 else m
-        try:
-            flows[d] = float(r["社会融资规模增量"])
-        except (TypeError, ValueError):
-            continue
-    if anchor_date not in flows and not any(p["date"] == anchor_date for p in official.get("stock_level_hist", [])):
-        return {}
-    # 官方存量月份优先（避免增量源滞后引入误差），其余月份由后一月存量倒扣当月增量回推
-    levels: dict[str, float] = {p["date"]: p["v"] for p in official.get("stock_level_hist", [])}
-    months = sorted({*flows.keys(), *levels.keys()})
-    months = [m for m in months if m <= anchor_date]
-    for i in range(len(months) - 2, -1, -1):
-        m = months[i]
-        if m in levels:
-            continue
-        nxt = months[i + 1]
-        base = levels.get(nxt)
-        if base is None or m not in flows:
-            continue
-        levels[m] = round(base - flows[m] / 10000.0, 4)  # 增量亿元 → 万亿元
-    # 同比（万亿口径直接比值）；官方公布月份优先采用官方值（回推在两端累积误差 ~1pp）
-    official_growth = {p["date"]: p["v"] for p in official.get("hist", [])}
+    try:
+        df = astock._akshare().macro_china_shrzgm()
+    except Exception:  # noqa: BLE001
+        df = None
+    if df is not None and not df.empty:
+        for _, r in df.iterrows():
+            m = str(r["月份"])
+            # '202604' → '2026-04'（补零，与官方存量表日期对齐）
+            d = f"{m[:4]}-{m[4:6].zfill(2)}" if len(m) == 6 else m
+            try:
+                flows[d] = float(r["社会融资规模增量"])
+            except (TypeError, ValueError):
+                continue
+
+    anchor_date = max(str(p["date"]) for p in official["stock_level_hist"])
+
+    # 路径 A：mofcom 增量回推存量
+    levels: dict[str, float] = {str(p["date"]): p["v"] for p in official["stock_level_hist"]}
+    if flows:
+        months = sorted({*flows.keys(), *levels.keys()})
+        months = [m for m in months if m <= anchor_date]
+        for i in range(len(months) - 2, -1, -1):
+            m = months[i]
+            if m in levels:
+                continue
+            nxt = months[i + 1]
+            base = levels.get(nxt)
+            if base is None or m not in flows:
+                continue
+            levels[m] = round(base - flows[m] / 10000.0, 4)  # 增量亿元 → 万亿元
+
+    # 路径 B：累积快照的 levels（mofcom 挂时的存量来源）——与 A 合并取并集
+    accum_levels = {str(k): v for k, v in (accum.get("levels") or {}).items()
+                    if isinstance(v, (int, float)) and str(k) <= anchor_date}
+    merged_levels = dict(accum_levels)
+    merged_levels.update({k: v for k, v in levels.items() if v})
+    # 官方月覆盖累积快照（官方即最新修正）
+    for p in official["stock_level_hist"]:
+        merged_levels[str(p["date"])] = p["v"]
+
+    # 同比：官方 > 累积 growth > 由合并存量计算（存量非正视为脏数据跳过）
+    official_growth = {str(p["date"]): p["v"] for p in official.get("hist") or []}
+    accum_growth = {str(k): v for k, v in (accum.get("growth") or {}).items()
+                    if isinstance(v, (int, float))}
     hist = []
-    for m in sorted(levels):
-        year_ago = f"{int(m[:4]) - 1}-{m[5:]}"
-        if year_ago not in levels or levels[year_ago] <= 0:
+    for m in sorted(merged_levels):
+        if merged_levels[m] <= 0:
             continue
-        v = official_growth.get(m, round((levels[m] / levels[year_ago] - 1) * 100, 2))
+        year_ago = f"{int(m[:4]) - 1}-{m[5:]}"
+        if year_ago not in merged_levels or merged_levels[year_ago] <= 0:
+            continue
+        if m in official_growth:
+            v = official_growth[m]
+        elif m in accum_growth:
+            v = accum_growth[m]
+        else:
+            v = round((merged_levels[m] / merged_levels[year_ago] - 1) * 100, 2)
         hist.append({"date": m, "v": v})
     hist = hist[-36:]
-    if len(hist) < 24:
+    if len(hist) < 8:  # 分位下限同口径；序列会随累积逐月变长
         return {}
     dev = [abs(p["v"] - official_growth[p["date"]]) for p in hist[-7:] if p["date"] in official_growth]
+    src = "人民银行存量表" + (" + mofcom 增量回推" if flows else " + 本地累积快照")
     return {
         "date": hist[-1]["date"],
         "hist": hist,
         "value": hist[-1]["v"],
         "validated": (max(dev) < 1.5) if dev else None,
-        "source": "人民银行存量表 + 社融增量回推（官方同比优先）",
+        "source": src,
     }
 
 
 def get_afre_stock(force: bool = False) -> dict:
-    return cache_runtime.get("bonds:afre", _afre_stock_payload, valid=lambda v: bool(v.get("hist")), ttl=24 * 3600, force=force)
+    """社融存量同比（3 年目标）：官方增量表 + mofcom 长增量 双源 + 本地累积快照。
+
+    三层降级（finflux 项目经验：mofcom 需 legacy TLS 且常挂）：
+    1. mofcom shrzgm 136 月增量（挂时自动跳过）回推存量同比；
+    2. 官方月度快照累积文件 bonds_afre_accum.json——每月抓到的官方存量/同比
+       逐月并入（官方表只给最新 7 个月，滚动留存后序列自然变长）；
+    3. 仅当期官方 7 个月（不够分位下限则 policy 状态如实少一个 part）。
+    """
+    return cache_runtime.get(
+        "bonds:afre", _afre_stock_payload,
+        valid=lambda v: bool(v.get("hist")),
+        ttl=24 * 3600, force=force,
+        warm=lambda: _load_snapshot("afre"),
+        save=lambda value: _save_snapshot("afre", value),
+    )
+
+
+def _merge_accum(official: dict) -> dict:
+    """把官方最新 7 个月的存量/同比并入本地累积文件，返回累积后的完整序列。
+
+    累积文件结构：{"levels": {date: 万亿}, "growth": {date: %}}。
+    官方每月覆盖 7 个月窗口，滚动合并后日期单调去重（新值覆盖旧值）。
+    """
+    accum_path = _snapshot_path("afre_accum")
+    accum: dict = {"levels": {}, "growth": {}}
+    try:
+        with open(accum_path, encoding="utf-8") as fh:
+            loaded = json.load(fh)
+        if isinstance(loaded, dict) and isinstance(loaded.get("levels"), dict) and isinstance(loaded.get("growth"), dict):
+            accum = loaded
+    except (OSError, ValueError):
+        pass
+    changed = False
+    for pt in official.get("stock_level_hist") or []:
+        d = str(pt.get("date"))
+        if d and pt.get("v") is not None and accum["levels"].get(d) != pt["v"]:
+            accum["levels"][d] = pt["v"]
+            changed = True
+    for pt in official.get("hist") or []:
+        d = str(pt.get("date"))
+        if d and pt.get("v") is not None and accum["growth"].get(d) != pt["v"]:
+            accum["growth"][d] = pt["v"]
+            changed = True
+    if changed:
+        try:
+            os.makedirs(DATA_DIR, exist_ok=True)
+            temp = accum_path + ".tmp"
+            with open(temp, "w", encoding="utf-8") as fh:
+                json.dump(accum, fh, ensure_ascii=False)
+            os.replace(temp, accum_path)  # 原子写：崩溃不留半文件
+        except OSError:
+            pass
+    return accum
 
 
 def _ib_overnight_payload() -> dict:
@@ -700,9 +777,14 @@ def _score_at_vals(values: list[float], idx: int, direction: str, n: int = 60) -
 def _state_hist(parts: list[dict], max_points: int = 740) -> list[dict]:
     """逐期回算状态分（近 3 年≈740 个交易日；月度指标约 36 点，不足按可用长度）。
 
-    每个 part 用自身 hist（date→v）按滚动 60 期窗口分位映射成 [-2,+2]
-    （direction 存于 part["_direction"]），逐日期对可用指标加权。只用当期及
-    以前的数据，无前视。
+    每个 part 用自身 hist（date→v）按滚动窗口分位映射成 [-2,+2]
+    （direction 存于 part["_direction"]，窗口 part["_window"] 默认 60 期），
+    逐日期对可用指标加权。只用当期及以前的数据，无前视。
+
+    各 part 更新节奏不同步（如隔夜源晚一天、月度指标只有 12 期）——
+    某日缺值的 part 取其最近一期值前向填充，保证任意日期的权重集合
+    与当期 score 一致（趋势图尾端 ≈ 卡片分数），与全站「得分趋势
+    逐日前向填充」口径相同。
     """
     all_dates: set[str] = set()
     for p in parts:
@@ -710,8 +792,7 @@ def _state_hist(parts: list[dict], max_points: int = 740) -> list[dict]:
             if pt.get("date"):
                 all_dates.add(str(pt["date"]))
     dates = sorted(all_dates)
-    # 预展开：每个 part 的 (方向, 权重, 日期→值, 有序日期, 完整序列)。
-    # 序列只建一次，循环里按序号切片，避免逐日期重建。
+    # 预展开：每个 part 的 (方向, 权重, 有序日期, 值序列, 分位窗口)。
     expanded = []
     for p in parts:
         h = [(str(pt.get("date")), pt.get("v")) for pt in (p.get("hist") or [])
@@ -719,20 +800,19 @@ def _state_hist(parts: list[dict], max_points: int = 740) -> list[dict]:
         if not h:
             continue
         order = [d for d, _ in h]
-        lookup = dict(h)
-        expanded.append((p.get("_direction", "up"), p.get("weight", 1.0), lookup, order,
-                         list(lookup.values())))
+        expanded.append((p.get("_direction", "up"), p.get("weight", 1.0), order,
+                         [v for _, v in h], int(p.get("_window") or 60)))
     out: list[dict] = []
     for d in dates:
         num = den = 0.0
-        for direction, weight, lookup, order, values in expanded:
-            v = lookup.get(d)
-            if v is None:
-                continue
-            idx = bisect_left(order, d)  # order 有序，等价于 index(d) 但 O(log n)
+        for direction, weight, order, values, window in expanded:
+            # 该 part 在日期轴上的位置（含前向填充：无当日值时取最近一期）
+            idx = bisect_left(order, d)
             if idx >= len(order) or order[idx] != d:
-                continue
-            s = _score_at_vals(values, idx, direction)
+                idx -= 1  # 无当日值 → 回退到最近一期
+            if idx < 0:
+                continue  # 该 part 序列尚未开始，不参与
+            s = _score_at_vals(values, idx, direction, n=window)
             if s is None:
                 continue
             num += s * weight
@@ -796,16 +876,20 @@ def _policy_state(cn: dict) -> dict:
     add("social_financing_stock", "社融存量同比（越高越利好债）", "up", 1.0)
     add("fiscal_revenue_expenditure", "财政收支差额同比（扩张越强越利好债）", "down", 0.8)
     add("special_bond_issuance", "专项债发行（供给增=利率债供给压力，利空债）", "down", 0.8)
-    # 社融存量同比：market 层只有 7 个月；换成重建的 3 年序列
+    # 社融存量同比：market 层只有 7 个月；换成重建的 3 年序列（源失败时如实标注降级）
     afre = get_afre_stock() or {}
     for p in parts:
-        if p["key"] == "social_financing_stock" and afre.get("hist"):
-            p["hist"] = afre["hist"]
-            p["label"] = "社融存量同比（3 年重建，越高越利好债）"
-            pct = _pct(afre["hist"])
-            s = _score_from_pct(pct, "up")
-            if s is not None:
-                p["pct"], p["score"] = round(pct, 2), round(s, 2)
+        if p["key"] == "social_financing_stock":
+            if afre.get("hist"):
+                p["hist"] = afre["hist"]
+                p["label"] = "社融存量同比（3 年重建，越高越利好债）"
+                pct = _pct(afre["hist"])
+                s = _score_from_pct(pct, "up")
+                if s is not None:
+                    p["pct"], p["score"] = round(pct, 2), round(s, 2)
+            elif p.get("hist") and len(p["hist"]) < 8:
+                # 官方表短序列不够分位下限 → 该 part 本就被 add() 跳过；这里不会到达
+                pass
     if not parts:
         return {}
     tw = sum(p["weight"] for p in parts)
@@ -899,21 +983,19 @@ def _curve_tp_state(curve: dict, index: dict) -> dict:
             continue
         parts.append({"key": key, "label": label, "pct": round(pct, 2), "score": round(s, 2),
                       "weight": weight, "hist": hist, "_direction": "up"})
-    # 中债指数动量：债价趋势确认（近 20 日涨跌幅在自身 60 日窗口的分位）
+    # 中债指数动量：债价趋势确认（滚动 20 日涨跌幅，60 日窗口分位——与其他 part 同口径）
     series = (index.get("series") or []) if index else []
     if len(series) >= 60:
         vals = [p["v"] for p in series]
-        mom = (vals[-1] / vals[-21] - 1) * 100
-        windows = [(vals[i] / vals[i - 20] - 1) * 100 for i in range(20, len(vals))]
-        rank = sum(1 for w in windows if w <= mom)
-        pct = rank / len(windows)
-        s = _clamp((pct - 0.5) * 4.0)
         # 动量序列：滚动 20 日涨跌幅（可回算全长度）
         mom_hist = [{"date": series[i]["date"], "v": round((vals[i] / vals[i - 20] - 1) * 100, 3)}
                     for i in range(20, len(series))]
-        parts.append({"key": "index_mom_20d", "label": "中债指数 20 日动量（%）",
-                      "pct": round(pct, 2), "score": round(s, 2), "weight": 1.0,
-                      "hist": mom_hist, "_direction": "up"})
+        pct = _pct(mom_hist)  # 与其他 part 统一用 60 期窗口
+        s = _score_from_pct(pct, "up")
+        if s is not None:
+            parts.append({"key": "index_mom_20d", "label": "中债指数 20 日动量（%）",
+                          "pct": round(pct, 2), "score": round(s, 2), "weight": 1.0,
+                          "hist": mom_hist, "_direction": "up"})
     if not parts:
         return {}
     tw = sum(p["weight"] for p in parts)
@@ -1024,9 +1106,10 @@ def get_positioning(force: bool = False) -> dict:
 
 
 def _positioning_state() -> dict:
-    """Positioning：国债期货持仓分位（持仓越高=拥挤越高，利空债券；价格分位越高越拥挤）。
+    """Positioning：国债期货持仓分位（持仓越高=拥挤越高，利空债券）。
 
-    用四品种持仓分位的加权均值反向映射；缺数据时如实留空。
+    当期分与历史回算统一用滚动 250 期（≈1 年交易日）持仓分位，
+    与 _positioning_payload 的 oi_pct_1y 同口径，保证 hist 尾端 ≈ score。
     """
     d = get_positioning() or {}
     contracts = d.get("contracts") or []
@@ -1036,9 +1119,10 @@ def _positioning_state() -> dict:
             continue
         # 拥挤度分数：持仓分位越高越利空债券 → 反向
         s = _clamp(-(c["oi_pct_1y"] - 0.5) * 4.0)
-        parts.append({"key": c["symbol"], "label": f"{c['label']}主力持仓分位",
+        parts.append({"key": c["symbol"], "label": f"{c['label']}主力持仓分位（近 1 年）",
                       "pct": c["oi_pct_1y"], "score": round(s, 2), "weight": 1.0,
-                      "hist": c.get("oi_hist") or [], "_direction": "down"})
+                      "hist": c.get("oi_hist") or [], "_direction": "down",
+                      "_window": 250})
     if not parts:
         return {
             "key": "positioning", "name": "仓位与拥挤度", "score": None,
@@ -1104,6 +1188,7 @@ def _framework_payload() -> dict:
             if isinstance(h, list) and len(h) > 60:
                 p["hist"] = h[-60:]
             p.pop("_direction", None)
+            p.pop("_window", None)
         s.pop("_direction", None)
     scored = [s for s in states if s.get("score") is not None]
 

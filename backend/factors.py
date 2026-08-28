@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pandas as pd
 
@@ -338,14 +340,14 @@ def factor_name_of(factor: str) -> str:
 # ---------------------------------------------------------------------------
 
 FIN_FACTOR_META = {
-    "fin_ep": "EP 盈收益率 = TTM 净利/市值（Fama-French 1992 价值）",
-    "fin_ep_ocf": "OCF 盈利率 = TTM 每股经营现金流/收盘价（更抗操纵的便宜）",
+    "fin_ep": "EP 盈收益率 = 最新已公告报告期 EPS/收盘价（Fama-French 1992 价值，累计期口径）",
+    "fin_ep_ocf": "OCF 盈利率 = 最新已公告报告期每股经营现金流/收盘价（累计期口径）",
     "fin_sue": "SUE 标准化未预期盈余（Bernard-Thomas 1989 盈余动量）",
-    "fin_accruals": "应计质量代理 = (净利-经营现金流TTM)/总资产(净利代理)",
-    "fin_gross_margin": "毛利率（Novy-Marx 2013 质量 proxy）",
-    "fin_roe_ttm": "ROE TTM（质量因子，近四季加总）",
-    "fin_rev_grow_ttm": "营收 TTM 同比增长（成长）",
-    "fin_profit_grow_ttm": "净利 TTM 同比增长（成长）",
+    "fin_accruals": "应计质量代理 = 单季 EPS-单季 OCFPS（Sloan 1996 每股价差口径）",
+    "fin_gross_margin": "毛利率（Novy-Marx 2013 质量 proxy，累计期口径）",
+    "fin_roe": "ROE（加权，最新已公告报告期；非 TTM，Q1 与 Q3 不可直接比）",
+    "fin_rev_grow": "营收同比增长（最新已公告报告期，报表披露口径）",
+    "fin_profit_grow": "净利同比增长（最新已公告报告期，报表披露口径）",
     "fin_earnings_stab": "盈利稳定性 = 近 8 季单季 EPS 的 均值/std（质量）",
     "fin_rev_stab": "营收稳定性 = 近 8 季单季营收 均值/std（质量）",
     "fin_delta_roe": "ROE 环比改善（质量动量）",
@@ -358,7 +360,8 @@ def _fin_factor_frame(panel: pd.DataFrame, factor: str) -> pd.DataFrame:
     import factor_pit
 
     base = compute_factors(panel, [])
-    trade_dates = base.index.get_level_values("date").unique().tolist()
+    # 必须排序：unique() 保序是 first-seen，停牌缺口会造成非单调 → merge_asof 崩
+    trade_dates = sorted(base.index.get_level_values("date").unique())
     pit = factor_pit.as_of_panel(trade_dates)  # index=date, columns=(code, field)
     if pit.empty:
         raise ValueError("PIT 财务数据为空：先构建财务数据（构建按钮两阶段）")
@@ -378,7 +381,9 @@ def _fin_derive(pit: pd.DataFrame, close_w: pd.DataFrame) -> dict[str, pd.DataFr
 
     def field(name: str) -> pd.DataFrame:
         try:
-            return pit.xs(name, axis=1, level=1).reindex(close_w.index)[close_w.columns]
+            # reindex 而非 [] 取列：面板里有股票在 PIT 表无任何记录（次新未出首报）时
+            # [] 会抛 KeyError 导致整只因子全 NaN；reindex 对缺失列填 NaN
+            return pit.xs(name, axis=1, level=1).reindex(index=close_w.index, columns=close_w.columns)
         except KeyError:
             return pd.DataFrame(np.nan, index=close_w.index, columns=close_w.columns)
 
@@ -396,9 +401,9 @@ def _fin_derive(pit: pd.DataFrame, close_w: pd.DataFrame) -> dict[str, pd.DataFr
     out["fin_ep"] = eps / close
     out["fin_ep_ocf"] = ocf_ps / close
     out["fin_gross_margin"] = gm
-    out["fin_roe_ttm"] = roe  # 单期 ROE 近似（加权 ROE 本身已年化倾向）
-    out["fin_rev_grow_ttm"] = rev_yoy
-    out["fin_profit_grow_ttm"] = profit_yoy
+    out["fin_roe"] = roe
+    out["fin_rev_grow"] = rev_yoy
+    out["fin_profit_grow"] = profit_yoy
     out["fin_ocf_to_profit"] = (ocf_ps / eps).where(eps.abs() > 1e-6)
 
     # 需要 PIT 长表历史序列的因子：SUE / 应计 / 稳定性 / ΔROE
@@ -426,16 +431,37 @@ def _quarter_series_factors(fund: pd.DataFrame, close_w: pd.DataFrame) -> tuple:
     """
     fund = fund.sort_values(["code", "report_date"]).copy()
 
+    _QUARTERS = ["03-31", "06-30", "09-30", "12-31"]
+
+    def _next_quarter(rd: str) -> str | None:
+        """rd 的下一个季度报告期；rd 非法返回 None。"""
+        try:
+            year, md = rd[:4], rd[5:]
+            i = _QUARTERS.index(md)
+        except (ValueError, IndexError):
+            return None
+        if i == 3:
+            return f"{int(year) + 1}-03-31"
+        return f"{year}-{_QUARTERS[i + 1]}"
+
     def quarterize(g: pd.DataFrame) -> pd.DataFrame:
         g = g.copy()
         g["prev_rd"] = g["report_date"].shift(1)
-        # 累计口径：同一年内本期累计-上期累计；跨年（12-31 → 03-31）时 Q1 单季 = 累计本身
+        # 相邻报告期必须恰好差一个季度（东财缺报/跳报时 shift(1) 的差不是单季）
+        contiguous = g["prev_rd"].map(lambda p: bool(p)) & g.apply(
+            lambda r: _next_quarter(r["prev_rd"]) == r["report_date"]
+            if isinstance(r["prev_rd"], str) and r["prev_rd"] else False, axis=1)
+        # 跨年重置（12-31 → 次年 03-31）也是相邻季度，同属 contiguous
         same_year = g["report_date"].str[:4] == g["prev_rd"].str[:4].fillna("")
+        valid = contiguous  # 相邻季度（含跨年 12-31→03-31）
         for col in ("net_profit", "revenue", "ocf_ps", "eps"):
             q_col = f"q_{col}"
             g[q_col] = g[col]
             prev = g[col].shift(1)
-            g.loc[same_year, q_col] = g.loc[same_year, col] - prev[same_year]
+            mask = valid & same_year
+            g.loc[mask, q_col] = g.loc[mask, col] - prev[mask]
+            # Q1（跨年首季）单季 = 累计本身；不连续的期置 NaN（跳报无法差分）
+            g.loc[~valid & ~g["report_date"].str.endswith("03-31"), q_col] = np.nan
         g["roe_prev"] = g["roe"].shift(1)
         g["eps_std8"] = g["q_eps"].rolling(8, min_periods=6).std()
         g["eps_mean8"] = g["q_eps"].rolling(8, min_periods=6).mean()
@@ -551,11 +577,17 @@ def evaluate(factor: str, start: str | None = None, end: str | None = None,
         f = day[factor].to_numpy()
         ic = _safe_pearson(f, day["ret_fwd_1"].to_numpy())
         rank_ic = _safe_spearman(f, day["ret_fwd_1"].to_numpy())
-        if ic is None:
-            continue
+        if ic is None or rank_ic is None:
+            continue  # 两个都有效才记录，防 None 进 dict 后变 NaN 污染序列
         ic_series[date] = ic
         rank_ic_series[date] = rank_ic
         n_days += 1
+
+    if n_days == 0:
+        # 空 IC 序列 mean() 出 NaN → JSON 序列化 500；提前给可读错误
+        raise ValueError(
+            f"因子 {factor} 的有效横截面天数不足（每日需 ≥{MIN_CROSS_SECTION} 只有有效样本；"
+            "常见原因：因子覆盖股票太少、区间太短或数据未构建）")
 
     ic_s = pd.Series(ic_series).sort_index()
     rank_ic_s = pd.Series(rank_ic_series).sort_index()
@@ -573,7 +605,7 @@ def evaluate(factor: str, start: str | None = None, end: str | None = None,
                 vals[date] = r
         s = pd.Series(vals)
         decay[h] = {
-            "rank_ic_mean": float(s.mean()),
+            "rank_ic_mean": float(s.mean()) if len(s) else None,
             "rank_ic_ir": float(s.mean() / s.std()) if len(s) > 1 and s.std() > 0 else None,
         }
 
@@ -596,7 +628,7 @@ def evaluate(factor: str, start: str | None = None, end: str | None = None,
             "rank_ic_mean": float(rank_ic_s.mean()),
             "rank_ic_ir": float(rank_ic_s.mean() / rank_ic_s.std()) if rank_ic_s.std() > 0 else None,
             "rank_ic_positive_ratio": float((rank_ic_s > 0).mean()),
-            "ic_std": float(rank_ic_s.std()),
+            "ic_std": float(ic_s.std()),
         },
         "ic_series": {"dates": list(rank_ic_s.index), "values": [round(float(v), 4) for v in rank_ic_s.values]},
         "ic_decay": decay,
@@ -686,10 +718,22 @@ def _ic_by_year(rank_ic_s: pd.Series) -> dict[str, dict]:
 
 
 def _safe_pearson(a, b) -> float | None:
+    """成对剔除 NaN/Inf 后再算 Pearson；样本不足或零方差返回 None。
+
+    必须先剔除 NaN：np.std([nan,...]) 是 NaN，`NaN == 0` 为 False 会绕过
+    零方差守卫，随后 corrcoef 返回 NaN 并混进 ic_series → JSON 序列化 500
+    （典型来源：停牌股的 ret_fwd_1 为 NaN、或尾部日整列无前瞻收益）。
+    """
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    if a.shape != b.shape:
+        return None
+    mask = np.isfinite(a) & np.isfinite(b)
+    a, b = a[mask], b[mask]
     if len(a) < 3:
         return None
     sa, sb = np.std(a), np.std(b)
-    if sa == 0 or sb == 0:
+    if not (math.isfinite(sa) and math.isfinite(sb)) or sa == 0 or sb == 0:
         return None
     return float(np.corrcoef(a, b)[0, 1])
 

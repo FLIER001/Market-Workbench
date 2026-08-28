@@ -58,7 +58,7 @@ function EvidenceCard({ title, icon: Icon, score, state, date, parts, hist, sour
       <button type="button" className="flex w-full items-center gap-3 text-left"
         onClick={() => setOpen((v) => !v)}>
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-          <Icon className="h-4.5 w-4.5" />
+          <Icon className="h-4 w-4" />
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline gap-2">

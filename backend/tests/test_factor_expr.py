@@ -56,6 +56,22 @@ def test_expr_matches_builtin_rev5(monkeypatch):
     assert np.allclose(joined["expr"], joined["rev5"], atol=1e-9)
 
 
+def test_scalar_expr_rejected_at_runtime():
+    """纯标量表达式（无字段）在 evaluate 时给可读 ValueError 而非 AttributeError。"""
+    import factor_expr
+
+    import pandas as pd
+
+    fields = {"close": pd.DataFrame({"A": [1.0, 2.0]})}
+    for expr in ["1/0", "abs(5)", "log(1)", "2+3"]:
+        ast = factor_expr.compile_expr(expr)  # 静态校验通过（语法本身没错）
+        try:
+            factor_expr.evaluate(ast, fields)
+            raise AssertionError(f"应当报错：{expr}")
+        except ValueError:
+            pass  # 统一转成 ValueError → API 层 400
+
+
 def test_expanded_fields_and_ops(monkeypatch):
     """扩充字段集（K 线形态/相对昨收/多周期动量/量比）与新算子可执行且量纲合理。"""
     import factor_expr

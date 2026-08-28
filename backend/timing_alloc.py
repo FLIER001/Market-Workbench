@@ -90,15 +90,20 @@ def _ranks_from_values(points: list[dict], window: int = 250, min_periods: int =
 
 
 def _combine(parts: list[tuple[str, float, float, list[dict]]], weights: dict[str, float],
-             scale: float) -> tuple[float | None, list[dict], list[dict]]:
+             scale: float, replay_today: str | None = None) -> tuple[float | None, list[dict], list[dict]]:
     """按权重合成子成分 → (总分, parts分解, 逐日回放)。
 
     parts 元素：(名称, 当前分, 当前原始读数文本, 逐日分位序列)；缺成分（None）按已覆盖
     权重归一，覆盖 <50% 返回 None。回放 = 当期同权重对逐日分位加权。
+
+    replay_today：给定日期时，把每个「当期有分但 hist 缺当日值」的成分的当期分注入
+    回放尾点——否则样本积累期的成分（如上涨家数占比只有数日观测）在 replay 里整体丢权，
+    导致 hist 尾点与当期分脱节（同一时刻差出数分）。
     """
     num = den = 0.0
     out_parts = []
     hists: list[tuple[dict[str, float], float]] = []
+    today_scores: dict[str, float] = {}
     for name, score, text, hist in parts:
         w = weights.get(name, 0.0)
         if score is None or w <= 0:
@@ -109,21 +114,35 @@ def _combine(parts: list[tuple[str, float, float, list[dict]]], weights: dict[st
         den += w
         out_parts.append({"name": name, "weight": w, "score": round(score, 1),
                           "value": text, "contribution": round((score - 50.0) / 100.0 * w, 2)})
+        today_scores[name] = round(score, 1)
         if hist:
             hists.append(({str(p["date"]): p["v"] for p in hist}, w))
     total_w = sum(weights.values())
     # scale：围绕 50 的放大倍数（1=普通加权均值；2=以 50 为中性放大偏离，用于择时合成）
     avg = num / den if den > 0 else 50.0
     score = round(_clamp(50.0 + (avg - 50.0) * scale, 0, 100), 1) if den >= 0.5 * total_w and den > 0 else None
+    # 回放日期 = 成分 hist 的并集；某成分当天缺值时按已覆盖权重归一，
+    # 样本积累期的成分（如上涨家数只有数日观测）不会把曲线起点拖到自己的首日
+    all_dates: set[str] = set()
+    for m, _w in hists:
+        all_dates |= set(m)
     replay = []
-    if hists:
-        dates = set(hists[0][0])
-        for m, _w in hists[1:]:
-            dates &= set(m)
-        replay = [{"date": d, "v": round(_clamp(
-            50.0 + (sum(m[d] * w for m, w in hists) / sum(w for m, w in hists
-                                                      if d in m) - 50.0) * scale, 0, 100), 1)}
-            for d in sorted(dates)]
+    for d in sorted(all_dates):
+        vals = [(m[d], w) for m, w in hists if d in m]
+        den_d = sum(w for _v, w in vals)
+        if den_d <= 0:
+            continue
+        replay.append({"date": d, "v": round(_clamp(
+            50.0 + (sum(v * w for v, w in vals) / den_d - 50.0) * scale, 0, 100), 1)})
+    # 尾点对齐：把当期有分但 hist 缺当日值的成分（含完全无 hist 的）以当期分注入今天，
+    # 保证 replay 最新一点与当期分同口径（否则样本积累期成分在 replay 里丢权，尾点失真）
+    if replay_today and today_scores:
+        wnum = sum(today_scores[n] * weights.get(n, 0.0) for n in today_scores)
+        wden = sum(weights.get(n, 0.0) for n in today_scores)
+        avg_t = wnum / wden if wden > 0 else 50.0
+        today_v = round(_clamp(50.0 + (avg_t - 50.0) * scale, 0, 100), 1)
+        replay = [p for p in replay if p["date"] != replay_today]
+        replay.append({"date": replay_today, "v": today_v})
     return score, out_parts, replay
 
 
@@ -142,6 +161,12 @@ def _zh_parts(parts: list[dict]) -> list[dict]:
         q["name"] = _FACTOR_NAMES.get(p.get("name"), p.get("name"))
         out.append(q)
     return out
+
+
+def _zh_drivers(parts: list[dict], top: int = 3) -> list[dict]:
+    """资产 drivers 的 name 转中文（与 parts 同名映射）。"""
+    return [{"name": _FACTOR_NAMES.get(d["name"], d["name"]), "contribution": d["contribution"]}
+            for d in _drivers(parts, top)]
 
 
 # ---------------------------------------------------------------------------
@@ -349,10 +374,13 @@ def _market_confirm(macro: dict, macro_date: str, curve: dict, pos: dict,
         ("risk_pressure", (100 - rp_score) if rp_score is not None else None,
          "；".join(f"{p['name']} {p['value']}" for p in rp_parts if p["value"] not in (None, "—")), rp_hist),
         ("crowding", crowding_adj,
-         f"拥挤度 {crowding_score:.0f}/100" + ("（饱和区扣分）" if crowding_score and crowding_score > 85 else ""),
+         (f"拥挤度 {crowding_score:.0f}/100" if crowding_score is not None else "拥挤度数据不足")
+         + ("（饱和区扣分）" if crowding_score and crowding_score > 85 else ""),
          []),
     ]
-    score, parts, hist = _combine(mc_parts, _MC_WEIGHTS, 1.0)
+    # crowding 的当期分注入回放尾点（它没有逐日 hist）
+    today = str(datetime.now(_BEIJING).strftime("%Y-%m-%d"))
+    score, parts, hist = _combine(mc_parts, _MC_WEIGHTS, 1.0, replay_today=today)
 
     # 波动率/信用利差当日值留给失效条件生成
     return {
@@ -372,13 +400,33 @@ def _regime_of(score: float) -> dict:
 
 
 def _expand_monthly(hist: list[dict], daily_dates: list[str]) -> list[dict]:
-    """月度序列（如宏观总分）前向填充到日度日期轴（当月值覆盖整月，无前视）。"""
+    """月度序列（如宏观总分）前向填充到日度日期轴：每日用「上一个完整月」的值。
+
+    宏观 hist 的当月值是随发布持续更新的，直接填当月会在月内引入前视；
+    改用滞后一月（t 月值只填 t+1 月的日度点），回放线无前视，代价是宏观信号
+    滞后约一个月——对月频先验（择时权重 40% 的中期锚）可接受。
+    """
     if not hist or not daily_dates:
         return []
     by_month = {str(p["date"])[:7]: p["v"] for p in hist}
+    months = sorted(by_month)
+    # prev_month[m] = m 前一个月的值；对 hist 最后一个月的「下一个月」（通常是当前月）
+    # 也补上映射，否则最新一段日度点会整体缺失
+    def _next_month(m: str) -> str:
+        y, mm = int(m[:4]), int(m[5:7])
+        return f"{y + mm // 12:04d}-{mm % 12 + 1:02d}"
+
+    prev_month: dict[str, float] = {}
+    last = None
+    for m in months:
+        if last is not None:
+            prev_month[m] = last
+        last = by_month[m]
+    if months:
+        prev_month[_next_month(months[-1])] = by_month[months[-1]]
     out = []
     for d in daily_dates:
-        v = by_month.get(str(d)[:7])
+        v = prev_month.get(str(d)[:7])
         if v is not None:
             out.append({"date": str(d)[:10], "v": v})
     return out
@@ -394,7 +442,8 @@ def _timing_engine(macro_score: float | None, liq_score: float | None, mc: dict,
         ("liquidity", liq_score, "中美流动性·国内综合（资金压力/政策/杠杆温度加权）", liq_hist),
         ("market_confirm", mc.get("score"), "价格与仓位确认", mc.get("hist") or []),
     ]
-    score, parts, hist = _combine(parts_in, _TIMING_WEIGHTS, _TIMING_SCALE)
+    score, parts, hist = _combine(parts_in, _TIMING_WEIGHTS, _TIMING_SCALE,
+                                   replay_today=(mc.get("hist") or [{}])[-1].get("date"))
 
     # —— 门控（对档位 clamp，不改变分数本身）——
     gates = []
@@ -564,9 +613,9 @@ def _asset_scores(macro: dict, macro_date: str, liq_score: float | None, mc: dic
     cmd_score, cmd_parts_out, _ = _combine(cmd_parts, _ASSET_SCORE_WEIGHTS["commodity"], 1.0)
 
     return {
-        "equity": {"score": eq_score, "parts": _zh_parts(eq_parts_out), "drivers": _drivers(eq_parts_out, 3)},
-        "bond": {"score": bd_score, "parts": _zh_parts(bd_parts_out), "drivers": _drivers(bd_parts_out, 3)},
-        "commodity": {"score": cmd_score, "parts": _zh_parts(cmd_parts_out), "drivers": _drivers(cmd_parts_out, 3)},
+        "equity": {"score": eq_score, "parts": _zh_parts(eq_parts_out), "drivers": _zh_drivers(eq_parts_out)},
+        "bond": {"score": bd_score, "parts": _zh_parts(bd_parts_out), "drivers": _zh_drivers(bd_parts_out)},
+        "commodity": {"score": cmd_score, "parts": _zh_parts(cmd_parts_out), "drivers": _zh_drivers(cmd_parts_out)},
     }
 
 
