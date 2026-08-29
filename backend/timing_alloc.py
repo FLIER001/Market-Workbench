@@ -20,6 +20,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import astock
+import ai_insight
 import bonds
 import gold_score
 import market
@@ -991,31 +992,19 @@ async def get_ai_insight(force: bool = False) -> dict[str, str] | str:
 
     数据重建后（ai_insight_at 早于 payload 的 updated）旧解读描述的已不是当前
     读数，非 force 请求也会重生成一次。LLM 失败时保留旧解读，不让页面文字消失。"""
-    cached = cache_runtime.peek("timing:allocation") or {}
-    old = cached.get("ai_insight")
-    old = old if isinstance(old, dict) and all(old.get(k) for k in
-                                              ("macro", "liquidity", "market_confirm")) else ""
-    if not force and old:
-        updated = str(cached.get("updated") or "")
-        at = str(cached.get("ai_insight_at") or "")
-        if not updated or not at or at >= updated:
-            return old
-    fresh = await _build_insight(force=False)
-    if not fresh:
-        # 冷缓存时开头的 peek 拿到空 dict，_build_insight 内部 warm 磁盘快照后缓存里
-        # 可能已有旧解读——重读一次再兜底，避免 force 失败时把磁盘上的解读丢掉
-        warmed = cache_runtime.peek("timing:allocation") or {}
-        cand = warmed.get("ai_insight")
-        return cand if isinstance(cand, dict) and all(cand.get(k) for k in
-                                                     ("macro", "liquidity", "market_confirm")) else old
-    # 冷缓存时上面 peek 到的是空 dict，_build_insight 内部才把 payload 填进缓存——
-    # 重新 peek 拿到真实对象再写回（同一引用，内存缓存随改随生效）
-    snap = cache_runtime.peek("timing:allocation") or cached
-    if snap.get("timing", {}).get("regime"):
-        snap["ai_insight"] = fresh
-        snap["ai_insight_at"] = datetime.now(_BEIJING).strftime("%Y-%m-%d %H:%M")
-        _save_snapshot(snap)
-    return fresh
+
+    def _valid(v) -> bool:
+        return isinstance(v, dict) and all(v.get(k) for k in
+                                           ("macro", "liquidity", "market_confirm"))
+
+    return await ai_insight.cached_insight(
+        cache_key="timing:allocation",
+        build=lambda: _build_insight(force=False),
+        valid=_valid,
+        writable=lambda snap: bool(snap.get("timing", {}).get("regime")),
+        save=_save_snapshot,
+        force=force,
+    )
 
 
 def _load_snapshot() -> dict | None:

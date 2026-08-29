@@ -28,6 +28,7 @@ import time
 import zipfile
 from datetime import date, datetime, timedelta, timezone
 
+import ai_insight
 import cache_runtime
 
 BEIJING = timezone(timedelta(hours=8))
@@ -1196,21 +1197,11 @@ async def get_ai_insight(force: bool = False) -> dict[str, str] | str:
 
     评分重建后（ai_insight_at 早于评分的 updated）旧解读描述的已不是当前
     读数，非 force 请求也会重生成一次。LLM 失败时保留旧解读，不让页面文字消失。"""
-    cached = cache_runtime.peek("oil_score_v1") or {}
-    old = cached.get("ai_insight") if _valid_insight(cached.get("ai_insight")) else ""
-    if not force and old:
-        updated = str(cached.get("updated") or "")
-        at = str(cached.get("ai_insight_at") or "")
-        if not updated or not at or at >= updated:
-            return old
-    fresh = await _build_insight(force=False)
-    if not fresh:
-        warmed = cache_runtime.peek("oil_score_v1") or {}
-        cand = warmed.get("ai_insight")
-        return cand if _valid_insight(cand) else old
-    snap = cache_runtime.peek("oil_score_v1") or cached
-    if snap.get("indicators"):
-        snap["ai_insight"] = fresh
-        snap["ai_insight_at"] = datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M")
-        _save_json(_SNAPSHOT, snap)
-    return fresh
+    return await ai_insight.cached_insight(
+        cache_key="oil_score_v1",
+        build=lambda: _build_insight(force=False),
+        valid=_valid_insight,
+        writable=lambda snap: bool(snap.get("indicators")),
+        save=lambda snap: _save_json(_SNAPSHOT, snap),
+        force=force,
+    )

@@ -224,9 +224,6 @@ export function Gold() {
   const [err, setErr] = useState<string | null>(null);
   const [paxg, setPaxg] = useState<PaxgSpotData | null>(null);
   const [au0, setAu0] = useState<Au0HistData | null>(null);
-  // AI 三段解读（机会成本/资金仓位/综合形势）：后端存快照，这里只做局部替换 + 手动重生成
-  const [aiInsight, setAiInsight] = useState<GoldInsight | null>(null);
-  const [insightLoading, setInsightLoading] = useState(false);
 
   const { data: spot, loading, revalidating, revalidate } = useSWR<GoldScoreData>(
     "gold:v4",
@@ -244,10 +241,13 @@ export function Gold() {
     let cancelled = false;
     let timer: number | null = null;
     const tick = async () => {
-      try {
-        const px = await api.paxgSpot();
-        if (!cancelled) setPaxg(px);
-      } catch { /* 静默保留旧值 */ }
+      // 页面在后台时暂停现货轮询（PAXG 近 24h 交易，无需后台空耗）
+      if (!document.hidden) {
+        try {
+          const px = await api.paxgSpot();
+          if (!cancelled) setPaxg(px);
+        } catch { /* 静默保留旧值 */ }
+      }
       if (!cancelled) timer = window.setTimeout(tick, SPOT_REFRESH_MS);
     };
     void tick();
@@ -275,26 +275,14 @@ export function Gold() {
     return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
   }, [revalidate]);
 
-  // 数据就绪后拉一次 AI 解读（非 force：后端有缓存就直接返回；没缓存才调 LLM）
-  useEffect(() => {
-    if (!spot?.gold_score) return;
-    let cancelled = false;
-    setInsightLoading(true);
-    api.goldInsight()
-      .then((d) => { if (!cancelled && d) setAiInsight(d); })
-      .catch(() => { /* 解读不可用时回落主要驱动列表 */ })
-      .finally(() => { if (!cancelled) setInsightLoading(false); });
-    return () => { cancelled = true; };
-  }, [spot?.date, spot?.gold_score]);
+  // AI 解读（三段）：独立 SWR 持久缓存——切页面秒显，挂载后台核对一跳
+  // （命中后端快照，不烧 LLM）；评分日期变化时跟进，让后端按需重生成一次
+  const { data: aiInsight, revalidating: insightLoading, revalidate: revalidateInsight } = useSWR<GoldInsight | null>(
+    "gold-insight:v1", (fresh) => api.goldInsight(fresh).then((d) => d ?? null), [spot?.date], undefined, { persist: true },
+  );
 
   // 手动重生成：只重调 LLM，不动评分数据
-  const refreshInsight = () => {
-    setInsightLoading(true);
-    api.goldInsight(true)
-      .then((d) => { if (d) setAiInsight(d); })
-      .catch(() => { /* 失败保留已有解读 */ })
-      .finally(() => setInsightLoading(false));
-  };
+  const refreshInsight = () => { void revalidateInsight(true); };
 
   const total = spot?.gold_score ?? null;
   const totalHist = isHist(spot?.hist) ? spot.hist : [];

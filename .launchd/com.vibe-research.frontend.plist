@@ -14,7 +14,7 @@
     <string>127.0.0.1</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>/Users/k/Vibe-Research/frontend</string>
+  <string>/Users/k/Market-Workbench/frontend</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>

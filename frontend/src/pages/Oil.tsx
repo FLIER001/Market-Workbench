@@ -118,9 +118,6 @@ export function Oil() {
   const [err, setErr] = useState<string | null>(null);
   const [spot, setSpot] = useState<OilSpotData | null>(null);
   const [brent, setBrent] = useState<BrentHistData | null>(null);
-  // AI 三段解读（稀缺供需/计价溢价/综合形势）：后端存快照，这里只做局部替换 + 手动重生成
-  const [aiInsight, setAiInsight] = useState<OilInsight | null>(null);
-  const [insightLoading, setInsightLoading] = useState(false);
 
   const { data: score, loading, revalidating, revalidate } = useSWR<OilScoreData>(
     "oil:v1",
@@ -133,15 +130,17 @@ export function Oil() {
 
   const load = () => { setErr(null); void revalidate(true); };
 
-  // 实时油价轮询（20 秒档，与后端缓存对齐）
+  // 实时油价轮询（20 秒档，与后端缓存对齐；后台标签页暂停）
   useEffect(() => {
     let cancelled = false;
     let timer: number | null = null;
     const tick = async () => {
-      try {
-        const px = await api.oilSpot();
-        if (!cancelled) setSpot(px);
-      } catch { /* 静默保留旧值 */ }
+      if (!document.hidden) {
+        try {
+          const px = await api.oilSpot();
+          if (!cancelled) setSpot(px);
+        } catch { /* 静默保留旧值 */ }
+      }
       if (!cancelled) timer = window.setTimeout(tick, SPOT_REFRESH_MS);
     };
     void tick();
@@ -170,26 +169,14 @@ export function Oil() {
     return () => { cancelled = true; window.clearInterval(timer); };
   }, []);
 
-  // 数据就绪后拉一次 AI 解读（非 force：后端有缓存就直接返回；没缓存才调 LLM）
-  useEffect(() => {
-    if (!score?.oil_score) return;
-    let cancelled = false;
-    setInsightLoading(true);
-    api.oilInsight()
-      .then((d) => { if (!cancelled && d) setAiInsight(d); })
-      .catch(() => { /* 解读不可用时回落主要驱动列表 */ })
-      .finally(() => { if (!cancelled) setInsightLoading(false); });
-    return () => { cancelled = true; };
-  }, [score?.date, score?.oil_score]);
+  // AI 解读（三段）：独立 SWR 持久缓存——切页面秒显，挂载后台核对一跳
+  // （命中后端快照，不烧 LLM）；评分日期变化时跟进，让后端按需重生成一次
+  const { data: aiInsight, revalidating: insightLoading, revalidate: revalidateInsight } = useSWR<OilInsight | null>(
+    "oil-insight:v1", (fresh) => api.oilInsight(fresh).then((d) => d ?? null), [score?.date], undefined, { persist: true },
+  );
 
   // 手动重生成：只重调 LLM，不动评分数据
-  const refreshInsight = () => {
-    setInsightLoading(true);
-    api.oilInsight(true)
-      .then((d) => { if (d) setAiInsight(d); })
-      .catch(() => { /* 失败保留已有解读 */ })
-      .finally(() => setInsightLoading(false));
-  };
+  const refreshInsight = () => { void revalidateInsight(true); };
 
   const total = score?.oil_score ?? null;
   const totalHist = isHist(score?.hist) ? score.hist : [];

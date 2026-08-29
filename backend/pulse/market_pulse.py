@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -141,6 +142,20 @@ def _snapshot_cached_at() -> str | None:
         return None
 
 
+def _snapshot_age_s() -> float:
+    """快照文件年龄（秒）。落盘即刷新，mtime 是现成的"数据时间"。"""
+    try:
+        return max(0.0, time.time() - _snapshot_path().stat().st_mtime)
+    except OSError:
+        return 0.0
+
+
+# 快照超龄（无人在场的日子打开页面，概率可能还是几天前的）就触发一版数据-only
+# 后台刷新：重拉双源概率但完整沿用旧 AI 研判——研判类 LLM 一次不调（中文标题
+# 翻译走永久缓存，仅新标题增量），花钱的全量重建仍只由用户手动刷新触发。
+STALE_AFTER_S = 12 * 3600
+
+
 def _with_cache_state(snapshot: dict[str, Any]) -> dict[str, Any]:
     """Expose refresh state without polluting the persisted last-good snapshot."""
     state = "refreshing" if _rebuilding else "error" if _refresh_error else "fresh"
@@ -238,9 +253,12 @@ def _spawn_overall_rebuild() -> None:
     asyncio.create_task(_rebuild())
 
 
-async def _build() -> dict[str, Any]:
+async def _build(include_ai: bool = True) -> dict[str, Any]:
     """Pull both sources, classify, translate, group, and pin. The slow path
-    (Kalshi's full event book can take 1-8 min when the API is loaded)."""
+    (Kalshi's full event book can take 1-8 min when the API is loaded).
+
+    ``include_ai=False``（数据-only，快照超龄自动触发）不调研判类 LLM：模块卡/
+    现状/综合研判按 key 对位沿用旧快照文本，等用户手动全量刷新再重写。"""
     pm, ks = await asyncio.gather(
         _shaped_polymarket(force=True),
         kalshi_signals.fetch_shaped(force=True),
@@ -253,11 +271,23 @@ async def _build() -> dict[str, Any]:
     merged = pm + ks
     await _translate(merged)
     modules = _group_by_module(merged)
-    await _attach_insights(modules)
-    status = await status_insight()
-    overall = await overall_insight(
-        status, [m["insight"] for m in modules if m.get("core") and m.get("insight")]
-    )
+    if include_ai:
+        await _attach_insights(modules)
+        status = await status_insight()
+        overall = await overall_insight(
+            status, [m["insight"] for m in modules if m.get("core") and m.get("insight")]
+        )
+    else:
+        previous = _load_snapshot() or {}
+        old_by_key = {
+            m.get("key"): m["insight"]
+            for m in previous.get("modules", []) if m.get("core") and m.get("insight")
+        }
+        for module in modules:
+            if module.get("core") and old_by_key.get(module["key"]):
+                module["insight"] = old_by_key[module["key"]]
+        status = previous.get("status", "")
+        overall = previous.get("overall", "")
     now = datetime.now().astimezone().isoformat(timespec="seconds")
     overview = {
         "as_of": now,
@@ -273,10 +303,10 @@ async def _build() -> dict[str, Any]:
     return overview
 
 
-async def _background_rebuild() -> None:
+async def _background_rebuild(include_ai: bool = True) -> None:
     global _rebuilding, _refresh_error
     try:
-        await _build()
+        await _build(include_ai=include_ai)
         _refresh_error = None
     except Exception as exc:  # noqa: BLE001 — best-effort; snapshot keeps serving
         _refresh_error = str(exc)
@@ -292,7 +322,9 @@ async def fetch_overview(force: bool = False) -> dict[str, Any]:
     kicks off a background rebuild and returns the current snapshot immediately with
     ``updating: True`` — Kalshi's full-book pull is too slow to block on, and the panel
     is a slow-moving gauge, so the frontend polls until ``as_of`` advances. Cold start
-    with no snapshot builds synchronously (nothing else to show).
+    with no snapshot builds synchronously (nothing else to show). A snapshot older
+    than ``STALE_AFTER_S`` starts a data-only background rebuild (probabilities
+    freshen, AI copy is carried over, zero LLM calls) the same way.
     """
     global _rebuilding, _refresh_error, _last_attempt_at
     snap = _load_snapshot()
@@ -302,9 +334,10 @@ async def fetch_overview(force: bool = False) -> dict[str, Any]:
         _refresh_error = None
         return _with_cache_state(built)
 
-    if force and not _rebuilding:
+    if not _rebuilding and (force or _snapshot_age_s() >= STALE_AFTER_S):
         _last_attempt_at = datetime.now().astimezone().isoformat(timespec="seconds")
         _rebuilding = True
-        asyncio.create_task(_background_rebuild())
+        # 手动刷新 = 全量重建（含 AI）；超龄自动刷新 = 数据-only（零 LLM）
+        asyncio.create_task(_background_rebuild(include_ai=bool(force)))
 
     return _with_cache_state(snap)

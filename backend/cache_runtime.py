@@ -16,6 +16,9 @@ from typing import Any, Callable
 
 BEIJING = timezone(timedelta(hours=8))
 _BACKOFF = (60, 300, 900, 1800)
+# Cold builds hit slow upstreams (akshare etc.); a waiter must not hang forever
+# if the owner wedges.  Past the deadline the caller gets the error decoration.
+_COLD_WAIT_MAX = 120.0
 
 
 @dataclass
@@ -78,6 +81,24 @@ def peek(key: str) -> Any:
     """Return the undecorated last-good value for partial-build merging."""
     with _lock:
         return _entries.get(key, _Entry()).value
+
+
+def update_value(key: str, mutator: Callable[[Any], Any]) -> Any:
+    """Mutate the last-good value in place under the lock and return it.
+
+    The official way to patch a cached payload (e.g. merging an AI insight
+    into the stored dict) without relying on ``peek`` handing out the live
+    object.  Returns ``None`` when the key has no value yet; the mutator's
+    non-None return value replaces the stored one.
+    """
+    with _lock:
+        entry = _entries.get(key)
+        if entry is None or entry.value is None:
+            return None
+        result = mutator(entry.value)
+        if result is not None:
+            entry.value = result
+        return entry.value
 
 
 def seed(key: str, value: Any, cached_at: float | None = None) -> None:
@@ -155,7 +176,11 @@ def get(
                     entry.cached_at, entry.value = float(warmed[0]), warmed[1]
                 else:
                     entry.value = warmed
-                    entry.cached_at = warm_time() if warm_time else (_time_from_value(warmed) or now)
+                    # 快照里若带自身的数据时点（as_of/updated 等），以它为准并封顶：
+                    # 进程重启高频（launchd KeepAlive）时文件 mtime 恒新，但数据可能
+                    # 是很久前的——按 mtime 判 fresh 会让页面长期展示旧数据时点。
+                    entry.cached_at = warm_time() if warm_time else min(
+                        now, _time_from_value(warmed) or now)
 
         if entry.value is not None:
             stale = force or now - entry.cached_at >= ttl
@@ -180,9 +205,11 @@ def get(
     if cold_owner:
         _refresh(key, build, valid, save)
     else:
-        # Cold starts are rare; a short wait keeps the API truthful without a
-        # second build.  The owner performs external timeout handling.
-        while True:
+        # Cold starts are rare; wait for the owner instead of building twice.
+        # Bounded so a wedged owner cannot hang this caller forever — falling
+        # through returns the error decoration below.
+        deadline = time.time() + _COLD_WAIT_MAX
+        while time.time() < deadline:
             with _lock:
                 if not _entries[key].refreshing:
                     break

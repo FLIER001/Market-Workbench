@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Activity, AlertCircle, Calculator, Coins, Gauge, Globe2, Landmark, Layers, Percent, PieChart, RefreshCw, Scale } from "lucide-react";
+import { Activity, AlertCircle, Calculator, Coins, Gauge, Globe2, Landmark, Layers, Percent, PieChart, RefreshCw, Scale, Sparkles } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Sparkline } from "@/components/ui/Sparkline";
@@ -9,6 +9,7 @@ import {
   type BondsCalcData,
   type BondsFrameworkData,
   type BondsFrameworkState,
+  type BondsInsight,
   type BondsOverviewData,
   type BondsPositioningData,
   type BondsSegmentRow,
@@ -219,10 +220,51 @@ function FrameworkPanel({ fw }: { fw?: BondsFrameworkData }) {
 }
 
 // —— 分品种评分：短债到杠杆套息（框架 §11.2 权重先验 + §0.2 失效条件）——
-function SegmentPanel({ seg }: { seg?: BondsSegmentsData }) {
+function SegmentPanel({ seg, aiInsight, insightLoading, onRefreshInsight }: {
+  seg?: BondsSegmentsData;
+  aiInsight?: BondsInsight | null;
+  insightLoading?: boolean;
+  onRefreshInsight?: () => void;
+}) {
   if (!seg?.rows?.length) return null;
   return (
     <GlassCard>
+      {/* AI 解读：品种优先顺序 + 逐品种解析（后端存快照，手动重生成） */}
+      {(aiInsight || insightLoading) && (
+        <div className="mb-4 rounded-xl bg-muted/20 p-3.5">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-3.5 w-3.5 text-primary/90" />
+            <span className="text-xs font-semibold text-primary/90">AI 解读</span>
+            {onRefreshInsight && (
+              <button
+                onClick={onRefreshInsight}
+                disabled={insightLoading}
+                className="ml-auto rounded p-1 text-muted-foreground transition-colors hover:text-primary disabled:opacity-60"
+                title="重新生成 AI 解读">
+                <RefreshCw className={cn("h-3 w-3", insightLoading && "animate-spin")} />
+              </button>
+            )}
+          </div>
+          {aiInsight ? (
+            <div className="mt-2 space-y-1.5">
+              {aiInsight.ranking && (
+                <p className="text-sm font-medium leading-relaxed text-foreground">{aiInsight.ranking}</p>
+              )}
+              <div className="grid gap-1.5 md:grid-cols-2">
+                {seg.rows.map((r) => (
+                  <p key={r.segment} className="text-[12px] leading-relaxed text-foreground/75">
+                    <span className="font-medium text-foreground">{r.segment}</span>
+                    <span className="mx-1 text-muted-foreground/40">·</span>
+                    {aiInsight.segments[r.segment]}
+                  </p>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <p className="mt-2 text-sm text-muted-foreground">AI 正在生成解读…</p>
+          )}
+        </div>
+      )}
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <h3 className="flex items-center gap-2 text-sm font-semibold">
           <PieChart className="h-4 w-4 text-primary" /> 分品种评分 · 短债 → 超长债 → 信用 → 杠杆套息
@@ -371,11 +413,21 @@ export function Bonds() {
   const { data: seg, revalidating: segRefreshing, revalidate: revalidateSeg } = useSWR<BondsSegmentsData>(
     "bonds-segments", (fresh) => api.bondsSegments(fresh), [], undefined, { persist: true },
   );
+  // AI 解读（品种优先顺序 + 逐品种解析）：独立 SWR 持久缓存——切页面秒显，
+  // 挂载后台核对一跳（命中后端快照，不烧 LLM）；手动重生成走 force 写回缓存
+  const { data: aiInsight, revalidating: insightLoading, revalidate: revalidateInsight } = useSWR<BondsInsight | null>(
+    "bonds-insight:v1", (fresh) => api.bondsInsight(fresh).then((d) => d ?? null), [], undefined, { persist: true },
+  );
   const refreshing = revalidating || fwRefreshing || segRefreshing;
   const refresh = async () => {
     await revalidate(true);
     await Promise.all([revalidateFw(true), revalidateSeg(true)]);
+    // 评分重建后解读即过时（ai_insight_at 早于评分 date），追一次让后端重生成
+    void revalidateInsight();
   };
+
+  // 手动重生成：只重调 LLM，不动评分数据
+  const refreshInsight = () => { void revalidateInsight(true); };
 
   const curve = data?.curve;
   const funding = data?.funding;
@@ -466,8 +518,9 @@ export function Bonds() {
         </GlassCard>
       ) : (
         <div className="space-y-4">
-          {/* —— 分品种评分：短债 → 超长 → 信用 → 杠杆套息（框架 §11.2，放最前）—— */}
-          <SegmentPanel seg={seg ?? undefined} />
+          {/* —— 分品种评分：短债 → 超长 → 信用 → 杠杆套息（框架 §11.2，放最前；顶部 AI 解读）—— */}
+          <SegmentPanel seg={seg ?? undefined} aiInsight={aiInsight}
+            insightLoading={insightLoading} onRefreshInsight={refreshInsight} />
 
           {/* —— 框架层：八状态仪表盘（宏观→政策→资金→供需→曲线→信用→仓位→全球）—— */}
           <FrameworkPanel fw={fw ?? undefined} />

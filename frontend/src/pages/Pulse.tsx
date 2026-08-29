@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   TrendingUp, TrendingDown, ExternalLink, RefreshCw,
   ChevronDown, ChevronRight, Globe, Sparkles,
@@ -36,28 +36,44 @@ export function Pulse() {
 
   const refreshing = revalidating || !!data?.updating;
 
+  // 轮询生命周期：卸载时中止挂起的等待循环（挂载时先复位，兼容 StrictMode 双挂载）
+  const pollCancelledRef = useRef(false);
+  const pollActiveRef = useRef(false);
+  useEffect(() => {
+    pollCancelledRef.current = false;
+    return () => { pollCancelledRef.current = true; };
+  }, []);
+
   const load = async () => {
     setErr(null);
     const prevAsOf = data?.as_of;
     try {
       await revalidate(true);
     } finally {
-      // 后台重建（Kalshi 全量 1-8 分钟）：轮询直到 as_of 前进
-      if (prevAsOf) {
-        for (let i = 0; i < 24; i++) {
-          await sleep(20000);
-          try {
-            const fresh = await api.pulseOverview(false);
-            if (fresh.as_of !== prevAsOf && !fresh.updating) {
-              await revalidate(false);
-              break;
-            }
-            if (fresh.cache_state === "error") {
-              await revalidate(false);
-              setErr(`更新失败，继续展示上次成功数据：${fresh.refresh_error || "数据源暂不可用"}`);
-              break;
-            }
-          } catch { /* 瞬时失败继续轮询 */ }
+      // 后台重建（Kalshi 全量 1-8 分钟）：轮询直到 as_of 前进。
+      // 单例：已有轮询在跑就不叠加第二条链；卸载后停止。
+      if (prevAsOf && !pollActiveRef.current) {
+        pollActiveRef.current = true;
+        try {
+          for (let i = 0; i < 24 && !pollCancelledRef.current; i++) {
+            await sleep(20000);
+            if (pollCancelledRef.current) break;
+            try {
+              const fresh = await api.pulseOverview(false);
+              if (pollCancelledRef.current) break;
+              if (fresh.as_of !== prevAsOf && !fresh.updating) {
+                await revalidate(false);
+                break;
+              }
+              if (fresh.cache_state === "error") {
+                await revalidate(false);
+                setErr(`更新失败，继续展示上次成功数据：${fresh.refresh_error || "数据源暂不可用"}`);
+                break;
+              }
+            } catch { /* 瞬时失败继续轮询 */ }
+          }
+        } finally {
+          pollActiveRef.current = false;
         }
       }
     }
@@ -80,18 +96,29 @@ export function Pulse() {
   const [localOverall, setLocalOverall] = useState<string | null>(null);
   const [insightError, setInsightError] = useState<string | null>(null);
   const [insightRefreshing, setInsightRefreshing] = useState<string | null>(null);
-  // 单卡重生成接口返回后，综合研判还在后台重算 —— 轮询取回新 overall
+  // 单卡重生成接口返回后，综合研判还在后台重算 —— 轮询取回新 overall。
+  // 单例 + 卸载中止：连点多张卡不叠加并行轮询链。
+  const overallPollRef = useRef<{ cancelled: boolean } | null>(null);
+  useEffect(() => {
+    return () => { if (overallPollRef.current) overallPollRef.current.cancelled = true; };
+  }, []);
   const pollOverall = () => {
+    if (overallPollRef.current) return;
+    const handle = { cancelled: false };
+    overallPollRef.current = handle;
     let tries = 0;
     const tick = () => {
+      if (handle.cancelled) return;
       tries += 1;
       api.pulseOverview(false)
         .then((d) => {
+          if (handle.cancelled) return;
           setLocalOverall(d.overall ?? null);
           // overall 为空 = 后台还在算，继续轮询（上限约 2 分钟）
           if (!d.overall && tries < 12) setTimeout(tick, 10000);
+          else overallPollRef.current = null;
         })
-        .catch(() => {});
+        .catch(() => { overallPollRef.current = null; });
     };
     setTimeout(tick, 5000);
   };

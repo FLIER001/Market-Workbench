@@ -16,10 +16,10 @@ import { WatchlistEventJudgement } from "@/components/intel/WatchlistEventJudgem
 import { useSWR } from "@/hooks/useSWR";
 
 const TABS = [
-  { key: "events", label: "自选事件研判", icon: TrendingUp, integrated: false, desc: "基于自选标的、关联板块与多源证据的 AI 事件研判" },
+  { key: "investment-news", label: "市场新闻", icon: Rss, integrated: true, desc: "12 赛道全球公开 RSS 资讯（集成自 investment-news 仓库）" },
+  { key: "events", label: "自选研判", icon: TrendingUp, integrated: false, desc: "基于自选标的、关联板块与多源证据的 AI 事件研判" },
   { key: "filings", label: "A股公告", icon: FileText, integrated: false, desc: "汇总关注列表里各个股的近期公告（东财公开披露）" },
   { key: "news", label: "公开新闻", icon: Newspaper, integrated: false, desc: "汇总关注列表里各个股的近期新闻（公开源）" },
-  { key: "investment-news", label: "Investment News", icon: Rss, integrated: true, desc: "12 赛道全球公开 RSS 资讯（集成自 investment-news 仓库）" },
 ];
 
 interface Digest {
@@ -626,7 +626,7 @@ export function Intel() {
       </GlassCard>
 
       <p className="mt-3 text-[11px] text-muted-foreground/60">
-        公告与新闻来自自选标的公开信息；Investment News 按关联板块筛选，重大事件按需联网核验。
+        公告与新闻来自自选标的公开信息；市场新闻按关联板块筛选，重大事件按需联网核验。
       </p>
     </div>
   );

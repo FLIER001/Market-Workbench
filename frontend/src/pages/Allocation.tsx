@@ -113,9 +113,6 @@ function EvidenceCard({ title, icon: Icon, score, state, date, parts, hist, sour
 
 export function Allocation() {
   const [err, setErr] = useState(false);
-  // AI 三段解读（宏观/流动性/市场确认）：后端存快照，这里只做局部替换 + 手动重生成
-  const [aiInsight, setAiInsight] = useState<AllocationInsight | null>(null);
-  const [insightLoading, setInsightLoading] = useState(false);
   const { data, loading, revalidating, revalidate } = useSWR<AllocationData>(
     "allocation:v1",
     async (fresh) => {
@@ -126,26 +123,15 @@ export function Allocation() {
   );
   const load = () => { setErr(false); void revalidate(true); };
 
-  // 数据就绪后拉一次 AI 解读（非 force：后端有缓存就直接返回，秒开；没缓存才调 LLM）
-  useEffect(() => {
-    if (!data?.timing) return;
-    let cancelled = false;
-    setInsightLoading(true);
-    api.allocationInsight()
-      .then((d) => { if (!cancelled && d) setAiInsight(d); })
-      .catch(() => { /* 解读不可用时回落模板结论句 */ })
-      .finally(() => { if (!cancelled) setInsightLoading(false); });
-    return () => { cancelled = true; };
-  }, [data?.timing?.score, data?.timing?.regime, data?.as_of]);
+  // AI 解读（宏观/流动性/市场确认）：独立 SWR 持久缓存——切页面秒显，挂载后台
+  // 核对一跳（命中后端快照，不烧 LLM）；择时读数变化时跟进，按需重生成一次
+  const { data: aiInsight, revalidating: insightLoading, revalidate: revalidateInsight } = useSWR<AllocationInsight | null>(
+    "allocation-insight:v1", (fresh) => api.allocationInsight(fresh).then((d) => d ?? null),
+    [data?.timing?.score, data?.timing?.regime], undefined, { persist: true },
+  );
 
   // 手动重生成：只重调 LLM，不动择时数据
-  const refreshInsight = () => {
-    setInsightLoading(true);
-    api.allocationInsight(true)
-      .then((d) => { if (d) setAiInsight(d); })
-      .catch(() => { /* 失败保留已有解读 */ })
-      .finally(() => setInsightLoading(false));
-  };
+  const refreshInsight = () => { void revalidateInsight(true); };
   useEffect(() => {
     const tick = () => { if (!document.hidden) void revalidate(); };
     const timer = window.setInterval(tick, 30 * 60_000);

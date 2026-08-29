@@ -72,7 +72,7 @@ def test_failed_background_refresh_reports_error_and_keeps_last_good(monkeypatch
     monkeypatch.setattr(market_pulse, "_rebuilding", True)
     monkeypatch.setattr(market_pulse, "_refresh_error", None)
 
-    async def fail():
+    async def fail(include_ai=True):
         raise RuntimeError("source down")
 
     monkeypatch.setattr(market_pulse, "_build", fail)

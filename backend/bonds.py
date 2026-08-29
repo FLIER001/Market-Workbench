@@ -15,11 +15,13 @@ from __future__ import annotations
 import json
 import math
 import os
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 
 import astock
 import cache_runtime
+from ai_insight import cached_insight
 from bisect import bisect_left
 
 BEIJING = timezone(timedelta(hours=8))
@@ -40,12 +42,17 @@ def _load_snapshot(name: str) -> dict | None:
 
 
 def _save_snapshot(name: str, value: dict) -> None:
-    os.makedirs(DATA_DIR, exist_ok=True)
-    path = _snapshot_path(name)
-    temp = path + ".tmp"
-    with open(temp, "w", encoding="utf-8") as handle:
-        json.dump(value, handle, ensure_ascii=False)
-    os.replace(temp, path)
+    """快照落盘是 best-effort：失败（含个别 payload 不 JSON 可序列化）只意味着
+    下次重启需重拉，不能让数据请求本身失败。"""
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        path = _snapshot_path(name)
+        temp = path + ".tmp"
+        with open(temp, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, ensure_ascii=False)
+        os.replace(temp, path)
+    except (OSError, TypeError, ValueError):
+        pass
 
 # 曲线关键期限（年 → DataFrame 列名）
 TENORS: list[tuple[str, str]] = [
@@ -62,28 +69,59 @@ def _tail(points: list[dict], n: int = 780) -> list[dict]:
     return points[-n:] if len(points) > n else points
 
 
+def _call_with_timeout(fn, *args, timeout: float = 30.0, **kwargs):
+    """上游调用加超时：akshare 底层 requests 不设超时，一次卡死会同时卡住
+    cache_runtime 冷启动 owner 和所有等待者。daemon 线程 + join 封顶，超时抛
+    TimeoutError；挂死的线程随进程退出回收，不再累积阻塞。"""
+    result: dict = {}
+
+    def _run():
+        try:
+            result["value"] = fn(*args, **kwargs)
+        except BaseException as exc:  # noqa: BLE001 - 原样转交调用方的 except 分支
+            result["error"] = exc
+
+    name = getattr(fn, "__name__", "upstream")
+    worker = threading.Thread(target=_run, daemon=True, name=f"upstream:{name}")
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        raise TimeoutError(f"{name} timed out after {timeout:.0f}s")
+    if "error" in result:
+        raise result["error"]
+    return result.get("value")
+
+
 def _fetch_yield_frame(days: int):
     """近 days 日的三条中债曲线（国债 / AAA 中短票 / AAA 商行债），失败返回 None。
 
-    接口对超过约 1 年的窗口直接返回空，按 365 日分段拉取后拼接。
+    接口对超过约 1 年的窗口直接返回空，按 365 日分段拉取后拼接；
+    各段并发请求并带超时（单段卡住最多耗一个超时周期，不再串行放大）。
     """
+    import concurrent.futures
+
     ak = astock._akshare()
     end = datetime.now(BEIJING)
-    frames = []
+    segments: list[tuple[str, str]] = []
     remaining = days
     seg_end = end
     while remaining > 0:
         span = min(remaining, 365)
         seg_start = seg_end - timedelta(days=span)
-        try:
-            df = ak.bond_china_yield(start_date=seg_start.strftime("%Y%m%d"),
-                                     end_date=seg_end.strftime("%Y%m%d"))
-        except Exception:  # noqa: BLE001
-            df = None
-        if df is not None and not df.empty:
-            frames.append(df)
+        segments.append((seg_start.strftime("%Y%m%d"), seg_end.strftime("%Y%m%d")))
         remaining -= span
         seg_end = seg_start
+
+    def _pull(span: tuple[str, str]):
+        try:
+            return _call_with_timeout(ak.bond_china_yield, timeout=30.0,
+                                      start_date=span[0], end_date=span[1])
+        except Exception:  # noqa: BLE001 - 单段失败跳过，其余段照常拼接
+            return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(segments))) as pool:
+        frames = [df for df in pool.map(_pull, segments)
+                  if df is not None and not df.empty]
     if not frames:
         return None
     import pandas as pd
@@ -167,7 +205,11 @@ def _curve_payload() -> dict:
 
 
 def get_curve(force: bool = False) -> dict:
-    return cache_runtime.get("bonds:curve", _curve_payload, valid=bool, ttl=6 * 3600, force=force)
+    return cache_runtime.get(
+        "bonds:curve", _curve_payload, valid=bool, ttl=6 * 3600, force=force,
+        warm=lambda: _load_snapshot("curve"),
+        save=lambda value: _save_snapshot("curve", value),
+    )
 
 
 # ——— 小型计算层：carry / roll / forward / breakeven（框架 §7.4 / §12.3）———
@@ -261,7 +303,11 @@ def _calc_payload() -> dict:
 
 
 def get_calc(force: bool = False) -> dict:
-    return cache_runtime.get("bonds:calc", _calc_payload, valid=bool, ttl=6 * 3600, force=force)
+    return cache_runtime.get(
+        "bonds:calc", _calc_payload, valid=bool, ttl=6 * 3600, force=force,
+        warm=lambda: _load_snapshot("calc"),
+        save=lambda value: _save_snapshot("calc", value),
+    )
 
 
 # ——— 资金面（Shibor，银行间资金价格的市场观测）———
@@ -272,7 +318,7 @@ _SHIBOR_TENORS = ["O/N", "1W", "1M", "3M", "6M", "1Y"]
 def _shibor_payload() -> dict:
     """Shibor 定价序列（全国银行间同业拆借中心口径），近 90 日。"""
     ak = astock._akshare()
-    df = ak.macro_china_shibor_all()
+    df = _call_with_timeout(ak.macro_china_shibor_all)
     if df is None or df.empty or "日期" not in df.columns:
         return {}
     out: dict[str, list[dict]] = {}
@@ -300,7 +346,11 @@ def _shibor_payload() -> dict:
 
 
 def get_shibor(force: bool = False) -> dict:
-    return cache_runtime.get("bonds:shibor", _shibor_payload, valid=bool, ttl=6 * 3600, force=force)
+    return cache_runtime.get(
+        "bonds:shibor", _shibor_payload, valid=bool, ttl=6 * 3600, force=force,
+        warm=lambda: _load_snapshot("shibor"),
+        save=lambda value: _save_snapshot("shibor", value),
+    )
 
 
 # ——— 政策利率锚（OMO 7 天逆回购 → LPR 的官方利率体系）———
@@ -315,7 +365,7 @@ _POLICY_DESC = {
 def _policy_payload() -> dict:
     """LPR 历史 + 政策利率锚的当期值与最近一次变动。"""
     ak = astock._akshare()
-    lpr = ak.macro_china_lpr()
+    lpr = _call_with_timeout(ak.macro_china_lpr)
     if lpr is None or lpr.empty:
         return {}
     rows = lpr.tail(24).to_dict("records")  # 近两年月度
@@ -345,7 +395,11 @@ def _policy_payload() -> dict:
 
 
 def get_policy(force: bool = False) -> dict:
-    return cache_runtime.get("bonds:policy", _policy_payload, valid=bool, ttl=24 * 3600, force=force)
+    return cache_runtime.get(
+        "bonds:policy", _policy_payload, valid=bool, ttl=24 * 3600, force=force,
+        warm=lambda: _load_snapshot("policy"),
+        save=lambda value: _save_snapshot("policy", value),
+    )
 
 
 # ——— 中债新综合指数（债市总回报的市场观测）———
@@ -353,7 +407,7 @@ def get_policy(force: bool = False) -> dict:
 def _index_payload() -> dict:
     """中债-新综合指数近 250 日净值序列。"""
     ak = astock._akshare()
-    df = ak.bond_new_composite_index_cbond()
+    df = _call_with_timeout(ak.bond_new_composite_index_cbond)
     if df is None or df.empty or "date" not in df.columns:
         return {}
     pts = []
@@ -374,7 +428,11 @@ def _index_payload() -> dict:
 
 
 def get_index(force: bool = False) -> dict:
-    return cache_runtime.get("bonds:index", _index_payload, valid=bool, ttl=6 * 3600, force=force)
+    return cache_runtime.get(
+        "bonds:index", _index_payload, valid=bool, ttl=6 * 3600, force=force,
+        warm=lambda: _load_snapshot("index"),
+        save=lambda value: _save_snapshot("index", value),
+    )
 
 
 # ——— 全球对照（中美利差）———
@@ -382,7 +440,7 @@ def get_index(force: bool = False) -> dict:
 def _global_payload() -> dict:
     """中美国债收益率对照与 10Y 利差，近 250 日。"""
     ak = astock._akshare()
-    df = ak.bond_zh_us_rate()
+    df = _call_with_timeout(ak.bond_zh_us_rate)
     if df is None or df.empty:
         return {}
     cn_col, us_col = "中国国债收益率10年", "美国国债收益率10年"
@@ -410,7 +468,11 @@ def _global_payload() -> dict:
 
 
 def get_global(force: bool = False) -> dict:
-    return cache_runtime.get("bonds:global", _global_payload, valid=bool, ttl=6 * 3600, force=force)
+    return cache_runtime.get(
+        "bonds:global", _global_payload, valid=bool, ttl=6 * 3600, force=force,
+        warm=lambda: _load_snapshot("global"),
+        save=lambda value: _save_snapshot("global", value),
+    )
 
 
 # ——— 页面聚合 ———
@@ -693,7 +755,8 @@ def _merge_accum(official: dict) -> dict:
 def _ib_overnight_payload() -> dict:
     """银行间隔夜利率 3 年序列（东财中国银行同业拆借市场·隔夜），减 OMO 得资金-政策锚利差。"""
     ak = astock._akshare()
-    df = ak.rate_interbank(market="中国银行同业拆借市场", symbol="Shibor人民币", indicator="隔夜")
+    df = _call_with_timeout(ak.rate_interbank, market="中国银行同业拆借市场",
+                            symbol="Shibor人民币", indicator="隔夜")
     if df is None or df.empty:
         return {}
     cutoff = (datetime.now(BEIJING) - timedelta(days=1200)).strftime("%Y-%m-%d")
@@ -718,7 +781,12 @@ def _ib_overnight_payload() -> dict:
 
 
 def get_ib_overnight(force: bool = False) -> dict:
-    return cache_runtime.get("bonds:ib_on", _ib_overnight_payload, valid=lambda v: bool(v.get("series")), ttl=6 * 3600, force=force)
+    return cache_runtime.get(
+        "bonds:ib_on", _ib_overnight_payload,
+        valid=lambda v: bool(v.get("series")), ttl=6 * 3600, force=force,
+        warm=lambda: _load_snapshot("ib_on"),
+        save=lambda value: _save_snapshot("ib_on", value),
+    )
 
 
 # ——— 研究框架层：八状态仪表盘 ———
@@ -1055,17 +1123,28 @@ _FUT_SYMBOLS = [("TS0", "TS 2年"), ("TF0", "TF 5年"), ("T0", "T 10年"), ("TL0
 
 
 def _positioning_payload() -> dict:
-    """四品种国债期货主力：最新持仓/成交/收盘 + 各自近一年分位。"""
+    """四品种国债期货主力：最新持仓/成交/收盘 + 各自近一年分位。
+
+    四个品种并发拉取（每路带超时），单品种失败跳过。"""
     ak = astock._akshare()
+    import concurrent.futures
     from datetime import date
     end = date.today().strftime("%Y%m%d")
     start = (date.today() - timedelta(days=1200)).strftime("%Y%m%d")
+
+    def _pull(sym: str):
+        try:
+            return _call_with_timeout(ak.futures_main_sina, timeout=30.0,
+                                      symbol=sym, start_date=start, end_date=end)
+        except Exception:  # noqa: BLE001 - 单品种失败跳过
+            return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(_FUT_SYMBOLS)) as pool:
+        pulled = dict(zip((sym for sym, _ in _FUT_SYMBOLS), pool.map(_pull, (s for s, _ in _FUT_SYMBOLS))))
+
     out = []
     for sym, label in _FUT_SYMBOLS:
-        try:
-            df = ak.futures_main_sina(symbol=sym, start_date=start, end_date=end)
-        except Exception:  # noqa: BLE001
-            continue
+        df = pulled.get(sym)
         if df is None or len(df) < 60 or "持仓量" not in df.columns:
             continue
         oi = [float(v) for v in df["持仓量"] if str(v).replace(".", "").isdigit()]
@@ -1102,7 +1181,11 @@ def _positioning_payload() -> dict:
 
 
 def get_positioning(force: bool = False) -> dict:
-    return cache_runtime.get("bonds:positioning", _positioning_payload, valid=bool, ttl=6 * 3600, force=force)
+    return cache_runtime.get(
+        "bonds:positioning", _positioning_payload, valid=bool, ttl=6 * 3600, force=force,
+        warm=lambda: _load_snapshot("positioning"),
+        save=lambda value: _save_snapshot("positioning", value),
+    )
 
 
 def _positioning_state() -> dict:
@@ -1361,5 +1444,94 @@ def get_segments(force: bool = False) -> dict:
         valid=lambda v: bool(v.get("rows")), ttl=3600,
         warm=lambda: _load_snapshot("segments"),
         save=lambda value: _save_snapshot("segments", value),
+        force=force,
+    )
+
+
+# ---------------------------------------------------------------------------
+# AI 解读：分品种优先顺序 + 各品种简要解析（复用择时配置的 LLM 发现；写回快照）
+# ---------------------------------------------------------------------------
+
+_INSIGHT_MAX_CHARS = 120  # 每段字数上限（prompt 要求 ≤80，截断兜底）
+
+
+async def _build_insight(force: bool = False) -> dict[str, str] | str:
+    """调 LLM 生成品种优先顺序一句话 + 每个品种一句解析；失败返回空串。"""
+    payload = get_segments(force=force)
+    rows = payload.get("rows") or []
+    if not rows:
+        return ""
+    from pulse.pulse_insight import chat_json
+
+    fw = get_framework() or {}
+    states = {s["key"]: s for s in fw.get("states", [])}
+
+    seg_lines = []
+    for r in rows:
+        drivers = "、".join(
+            f"{d['state']}（贡献{d['contribution']:+.2f}）" for d in r.get("drivers") or [])
+        carry = r.get("carry_roll_bp_3m")
+        carry_txt = f"，carry+roll {carry:+.0f}bp/3M" if isinstance(carry, (int, float)) else ""
+        seg_lines.append(
+            f"  · {r['segment']}：分 {r['score']:+.2f}（{carry_txt}；驱动：{drivers or '—'}）"
+        )
+    state_lines = [
+        f"  · {s['name']}（{s['key']}）：{s['score']:+.2f}"
+        for s in fw.get("states", []) if s.get("score") is not None
+    ]
+    prompt = (
+        "你是资产管理公司的固收策略分析师，为债市分品种评分写解读。\n"
+        "品种分口径：[-2,+2]，正分=对该品种价格有利；已按分数从高到低排序。\n\n"
+        "八状态读数（[-2,+2]，正分=对债券价格有利）如下，仅供推理——页面已展示全部分数，正文禁止复述：\n"
+        "【八状态】\n" + "\n".join(state_lines) + "\n"
+        "【分品种】\n" + "\n".join(seg_lines) + "\n"
+        "口径（方向语义，引用读数前先核对）：\n"
+        "- 品种分是八状态分的品种映射（短端重资金/仓位，长端重宏观/政策/期限溢价，信用品种叠加信用利差状态），"
+        "权重先验未经校准，只用于相对排序。\n"
+        "- carry+roll 为 3 个月静态收益锚（票息+骑乘，不含久期观点）；杠杆套息 = 短券收益减回购成本。\n"
+        "- 状态分为正 = 对债券价格有利 = 收益率趋于下行；表述方向必须与此一致，禁止说反。\n"
+        "- 分数/贡献/百分比一律不复述；最多引用一个能强化判断的关键数字。\n\n"
+        "输出：\n"
+        '- ranking：1 句话、60 字以内，说明当前品种优先顺序及核心逻辑（谁排前、谁殿后、由什么状态主导）。\n'
+        '- segments：JSON 对象，每个品种一段（键名用品种全名，与【分品种】列表完全一致），'
+        "每段 1-2 句、60 字以内：先给相对吸引力判断，再点出最大驱动或最大风险（可含失效信号），不罗列状态。\n"
+        "- 实描、高信息密度：禁过渡语、比喻和两面下注；语言规范用陈述句 + 常用固收词汇（骑乘/套息/拥挤/利差保护等）；"
+        "不预测未来、不给交易指令。\n"
+        '只返回 JSON：{"ranking": "...", "segments": {"短债(1-3Y)": "...", ...}}，不要解释或代码块标记。'
+    )
+    parsed = await chat_json(prompt)
+    ranking = str(parsed.get("ranking")).strip()[:_INSIGHT_MAX_CHARS] \
+        if isinstance(parsed.get("ranking"), str) and parsed.get("ranking").strip() else ""
+    segs_raw = parsed.get("segments")
+    valid_names = {r["segment"] for r in rows}
+    segments = {}
+    if isinstance(segs_raw, dict):
+        for k, v in segs_raw.items():
+            if isinstance(k, str) and k in valid_names and isinstance(v, str) and v.strip():
+                segments[k] = v.strip()[:_INSIGHT_MAX_CHARS]
+    if not ranking or len(segments) < len(valid_names):
+        return ""
+    return {"ranking": ranking, "segments": segments}
+
+
+def _valid_insight(v) -> bool:
+    if not isinstance(v, dict) or not isinstance(v.get("ranking"), str) or not v.get("ranking"):
+        return False
+    segs = v.get("segments")
+    return isinstance(segs, dict) and bool(segs)
+
+
+async def get_ai_insight(force: bool = False) -> dict[str, str] | str:
+    """AI 解读（ranking + 每品种一段）：手动刷新（force）直接重建；否则返回缓存里已存的解读。
+
+    分品种评分重建后（ai_insight_at 早于评分的 date）旧解读描述的已不是当前
+    读数，非 force 请求也会重生成一次。LLM 失败时保留旧解读，不让页面文字消失。"""
+    return await cached_insight(
+        cache_key="bonds:segments",
+        build=lambda: _build_insight(force=False),
+        valid=_valid_insight,
+        writable=lambda snap: bool(snap.get("rows")),
+        save=lambda snap: _save_snapshot("segments", snap),
+        stamp_field="date",
         force=force,
     )
