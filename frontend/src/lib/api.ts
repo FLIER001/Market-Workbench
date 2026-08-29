@@ -55,7 +55,21 @@ export async function downloadReport(id: string, name: string): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
-async function request<T>(path: string, method: "GET" | "POST" | "PUT" | "DELETE" = "GET", body?: unknown): Promise<T> {
+// 默认请求超时：后端挂起时 fetch 原本会一直吊着，现在统一封顶。
+// 慢接口（AI 解读等待 LLM、RSS 全量重建、持仓重算等）在各自方法上传 SLOW_TIMEOUT_MS。
+const DEFAULT_TIMEOUT_MS = 30_000;
+const SLOW_TIMEOUT_MS = 150_000;
+
+function isTimeoutError(err: unknown): boolean {
+  return err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError");
+}
+
+async function request<T>(
+  path: string,
+  method: "GET" | "POST" | "PUT" | "DELETE" = "GET",
+  body?: unknown,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<T> {
   let resp: Response;
   const headers: Record<string, string> = { ...authHeaders() };
   const opts: RequestInit = { method };
@@ -65,14 +79,21 @@ async function request<T>(path: string, method: "GET" | "POST" | "PUT" | "DELETE
   }
   if (Object.keys(headers).length > 0) opts.headers = headers;
   try {
-    resp = await fetch(`/api${path}`, opts);
-  } catch {
+    resp = await fetch(`/api${path}`, { ...opts, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    if (isTimeoutError(err)) {
+      throw new ApiError(`请求超时（${Math.round(timeoutMs / 1000)}s）：后端可能正在重建数据，稍后重试`, 504);
+    }
     throw new ApiError("连接不到后端，请先启动 backend（uvicorn app:app --port 8900）", 0);
   }
   let payload: any = null;
   try {
     payload = await resp.json();
-  } catch {
+  } catch (err) {
+    // 响应体读取阶段也可能超时（大 payload + 慢链路）
+    if (isTimeoutError(err)) {
+      throw new ApiError(`请求超时（${Math.round(timeoutMs / 1000)}s）：后端可能正在重建数据，稍后重试`, 504);
+    }
     /* 非 JSON 响应 */
   }
   if (!resp.ok) {
@@ -84,7 +105,7 @@ async function request<T>(path: string, method: "GET" | "POST" | "PUT" | "DELETE
   return (payload?.data ?? payload) as T;
 }
 
-const get = <T>(path: string) => request<T>(path, "GET");
+const get = <T>(path: string, timeoutMs?: number) => request<T>(path, "GET", undefined, timeoutMs);
 
 export interface Quote {
   name: string; price: number; last_close: number; change_pct: number;
@@ -1300,6 +1321,10 @@ export interface BondsSegmentsData {
   data_as_of?: string | null;
   refresh_error?: string | null;
 }
+export interface BondsInsight {
+  ranking: string;
+  segments: Record<string, string>;
+}
 export interface BondsOverviewData {
   curve?: BondsCurveData;
   funding?: BondsFundingData;
@@ -1498,12 +1523,78 @@ export interface SourceHealthData {
   };
 }
 
+// 事件分析 · 高管/管理层/股东增持
+export interface HolderIncreaseRecord {
+  person: string;
+  identity: string;
+  tier: string;
+  amount: number;
+  shares: number;
+  price: number | null;
+  activity_date: string;
+  notice_date: string;
+  start_date: string | null;
+  end_date: string | null;
+  ratio_pct: number;
+  reason: string;
+  market: string;
+  ongoing: boolean;
+  source: string;
+}
+
+export interface HolderIncreasePlan {
+  title: string;
+  notice_date: string;
+  amount: number | null;
+  amount_label: string;
+  deadline: string | null;
+  done: boolean;
+}
+
+export interface HolderIncreaseRow {
+  code: string;
+  name: string;
+  score: number;
+  grade: "strong" | "watch" | "normal";
+  breakdown: { identity: number; amount: number; ratio: number; count: number; recency: number };
+  tier: string;
+  identity: string;
+  people: number;
+  count: number;
+  total_amount: number;
+  latest_date: string;
+  period: string;
+  cumulative: boolean;
+  ongoing: boolean;
+  plan: HolderIncreasePlan | null;
+  records: HolderIncreaseRecord[];
+}
+
+export interface HolderIncreaseData {
+  window: string;
+  updated: string | null;
+  source: string;
+  total_records: number;
+  rows: HolderIncreaseRow[];
+  cache_state?: string;
+  cached_at?: string | null;
+  data_as_of?: string | null;
+  refresh_error?: string | null;
+}
+
+export type HolderIncreaseWindow = "1d" | "7d" | "30d" | "all";
+
 export const api = {
   health: () => get<{ ok: boolean }>("/health"),
   authConfig: () => get<{ registration_open: boolean }>("/auth/config"),
   sourceHealth: (refresh = false, source?: string) =>
     get<SourceHealthData>(`/source-health${refresh ? "?refresh=true" : ""}${source ? `${refresh ? "&" : "?"}source=${encodeURIComponent(source)}` : ""}`),
   indices: () => get<IndexQuote[]>("/indices"),
+  holderIncrease: (window: HolderIncreaseWindow, refresh = false) => {
+    const qs = new URLSearchParams({ window });
+    if (refresh) qs.set("refresh", "true");
+    return get<HolderIncreaseData>(`/event/holder-increase?${qs.toString()}`, SLOW_TIMEOUT_MS);
+  },
   marketOverview: () => get<MarketOverview>("/market/overview"),
   liquidity: (refresh = false) => get<LiquidityData>(`/market/liquidity${refresh ? "?refresh=true" : ""}`),
   macro: (refresh = false) => get<MacroData>(`/market/macro${refresh ? "?refresh=true" : ""}`),
@@ -1511,27 +1602,29 @@ export const api = {
   bondsOverview: (refresh = false) => get<BondsOverviewData>(`/bonds/overview${refresh ? "?refresh=true" : ""}`),
   allocation: (refresh = false) => get<AllocationData>(`/allocation${refresh ? "?refresh=true" : ""}`),
   allocationInsight: (refresh = false) =>
-    get<AllocationInsight | null>(`/allocation/insight${refresh ? "?refresh=true" : ""}`).then((d) => d ?? null),
+    get<AllocationInsight | null>(`/allocation/insight${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS).then((d) => d ?? null),
   bondsFramework: (refresh = false) => get<BondsFrameworkData>(`/bonds/framework${refresh ? "?refresh=true" : ""}`),
   bondsCalc: (refresh = false) => get<BondsCalcData>(`/bonds/calc${refresh ? "?refresh=true" : ""}`),
   bondsPositioning: (refresh = false) => get<BondsPositioningData>(`/bonds/positioning${refresh ? "?refresh=true" : ""}`),
   bondsSegments: (refresh = false) => get<BondsSegmentsData>(`/bonds/segments${refresh ? "?refresh=true" : ""}`),
+  bondsInsight: (refresh = false) =>
+    get<BondsInsight | null>(`/bonds/insight${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS).then((d) => d ?? null),
   goldScore: (refresh = false) => get<GoldScoreData>(`/gold/score${refresh ? "?refresh=true" : ""}`),
   goldInsight: (refresh = false) =>
-    get<GoldInsight | null>(`/gold/insight${refresh ? "?refresh=true" : ""}`).then((d) => d ?? null),
+    get<GoldInsight | null>(`/gold/insight${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS).then((d) => d ?? null),
   au0Hist: (days = 400) => get<Au0HistData>(`/gold/au0-hist?days=${days}`),
   goldSpot: () => get<GoldSpotData>("/gold/spot"),
   cnGoldSpot: () => get<CnGoldSpotData>("/gold/cn-spot"),
   paxgSpot: () => get<PaxgSpotData>("/gold/paxg"),
   oilScore: (refresh = false) => get<OilScoreData>(`/oil/score${refresh ? "?refresh=true" : ""}`),
   oilInsight: (refresh = false) =>
-    get<OilInsight | null>(`/oil/insight${refresh ? "?refresh=true" : ""}`).then((d) => d ?? null),
+    get<OilInsight | null>(`/oil/insight${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS).then((d) => d ?? null),
   oilSpot: () => get<OilSpotData>("/oil/spot"),
   brentHist: (days = 400) => get<BrentHistData>(`/oil/brent-hist?days=${days}`),
   pulseOverview: (refresh = false) => get<PulseOverview>(`/pulse/overview${refresh ? "?refresh=true" : ""}`),
   pulseInsight: (module: string) =>
-    get<PulseInsight | null>(`/pulse/insight?module=${encodeURIComponent(module)}`),
-  pulseStatus: () => get<string | null>("/pulse/insight?module=" + encodeURIComponent("现状")),
+    get<PulseInsight | null>(`/pulse/insight?module=${encodeURIComponent(module)}`, SLOW_TIMEOUT_MS),
+  pulseStatus: () => get<string | null>("/pulse/insight?module=" + encodeURIComponent("现状"), SLOW_TIMEOUT_MS),
   pulseHistory: (tokenId: string, interval = "1w") =>
     get<{ history: PulseHistoryPoint[] }>(`/pulse/history?token_id=${encodeURIComponent(tokenId)}&interval=${interval}`)
       .then((d) => d.history),
@@ -1545,7 +1638,7 @@ export const api = {
   globalStock: (symbol: string, refresh = false) => get<GlobalStock>(`/global/stock?symbol=${encodeURIComponent(symbol)}${refresh ? "&refresh=true" : ""}`),
   hkCashflow: (symbol: string) => get<HkCashflow>(`/global/hk/cashflow?symbol=${encodeURIComponent(symbol)}`),
   radar: () => get<RadarData>("/radar"),
-  radarRefresh: () => request<RadarData>("/radar/refresh", "POST"),
+  radarRefresh: () => request<RadarData>("/radar/refresh", "POST", undefined, SLOW_TIMEOUT_MS),
   publicNewsSearch: (q: string, count = 5) =>
     get<PublicNewsSearchData>(`/public-news-search?q=${encodeURIComponent(q)}&count=${count}`),
   portfolio: (fresh = false) => get<PortfolioData>(`/portfolio${fresh ? "?fresh=true" : ""}`),
@@ -1557,7 +1650,7 @@ export const api = {
   removeHolding: (code: string) => request<PortfolioData>(`/portfolio/holding?code=${code}`, "DELETE"),
   updateHolding: (code: string, shares: number, cost: number, boughtDate?: string) =>
     request<PortfolioData>("/portfolio/holding", "PUT", { code, shares, cost, ...(boughtDate ? { bought_date: boughtDate } : {}) }),
-  refreshPortfolio: () => request<PortfolioData>("/portfolio/refresh", "POST"),
+  refreshPortfolio: () => request<PortfolioData>("/portfolio/refresh", "POST", undefined, SLOW_TIMEOUT_MS),
   portfolioTiming: () => get<{ signals: Record<string, TimingSignal> }>("/portfolio/timing"),
   closePosition: (code: string, date: string, price: number, shares: number, cost?: number) =>
     request<PortfolioData>("/portfolio/close", "POST", { code, date, price, shares, ...(cost !== undefined ? { cost } : {}) }),
@@ -1638,7 +1731,7 @@ export const api = {
   factorLab: () => get<FactorLabStatus>("/factor/lab"),
   factorBuild: () => request<{ building: boolean; started: boolean }>("/factor/build", "POST"),
   factorEvaluate: (factor: string, start?: string, end?: string) =>
-    get<FactorEvaluateData>(`/factor/evaluate?factor=${encodeURIComponent(factor)}${start ? `&start=${start}` : ""}${end ? `&end=${end}` : ""}`),
+    get<FactorEvaluateData>(`/factor/evaluate?factor=${encodeURIComponent(factor)}${start ? `&start=${start}` : ""}${end ? `&end=${end}` : ""}`, 300_000),
   factorBacktest: (params: { factor: string; top_n?: number; freq?: string; cost?: number; start?: string; end?: string }) => {
     const qs = new URLSearchParams({ factor: params.factor });
     if (params.top_n) qs.set("top_n", String(params.top_n));
@@ -1646,7 +1739,7 @@ export const api = {
     if (params.cost !== undefined) qs.set("cost", String(params.cost));
     if (params.start) qs.set("start", params.start);
     if (params.end) qs.set("end", params.end);
-    return get<FactorBacktestData>(`/factor/backtest?${qs.toString()}`);
+    return get<FactorBacktestData>(`/factor/backtest?${qs.toString()}`, 300_000);
   },
   factorFields: () => get<FactorFieldsDoc>("/factor/fields"),
   factorValidate: (id: string, name: string, expr: string) =>

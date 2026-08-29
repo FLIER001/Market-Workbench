@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate } from "react-router-dom";
 import { Layout } from "@/components/layout/Layout";
 import { DailyReview } from "@/pages/DailyReview";
 import { Intel } from "@/pages/Intel";
+import { EventAnalysis } from "@/pages/EventAnalysis";
 import { SectorHub } from "@/pages/SectorHub";
 import { SectorDetail } from "@/pages/SectorDetail";
 import { Portfolio } from "@/pages/Portfolio";
@@ -33,6 +34,7 @@ export const router = createBrowserRouter([
     children: [
       { path: "/", element: <Navigate to="/daily-review" replace /> },
       { path: "/daily-review", element: <DailyReview /> },
+      { path: "/event-analysis", element: <EventAnalysis /> },
       { path: "/intel", element: <Intel /> },
       { path: "/sectors", element: <SectorHub /> },
       { path: "/sectors/:key", element: <SectorDetail /> },

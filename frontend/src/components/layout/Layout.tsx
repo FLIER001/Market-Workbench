@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import {
   Activity, Radar, LayoutGrid, Wallet, Settings, Search,
-  Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github, Globe,
+  Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github, Globe, Zap,
   Star, FileText, Droplets, Loader2, PieChart, Coins, Gauge, Landmark, Flame, Scale, FlaskConical,
   ChevronDown, HeartPulse, type LucideIcon,
 } from "lucide-react";
@@ -35,6 +35,7 @@ const NAV: NavNode[] = [
     ],
   },
   { to: "/pulse", icon: Gauge, label: "全球预期" },
+  { to: "/event-analysis", icon: Zap, label: "事件分析" },
   { to: "/intel", icon: Radar, label: "资讯" },
   { to: "/watchlist", icon: Star, label: "自选" },
   { to: "/portfolio", icon: Wallet, label: "持仓" },

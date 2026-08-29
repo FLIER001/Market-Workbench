@@ -1055,11 +1055,12 @@ def market_turnover_rank(n: int = 20) -> list[dict]:
 
 
 def eastmoney_datacenter(report_name: str, columns: str = "ALL", filter_str: str = "",
-                         page_size: int = 50, sort_columns: str = "", sort_types: str = "-1") -> list[dict]:
+                         page_size: int = 50, sort_columns: str = "", sort_types: str = "-1",
+                         page_number: int = 1) -> list[dict]:
     """东财数据中心统一查询 —— 龙虎榜/解禁/融资融券/大宗交易/股东户数/分红 共用（已内置限流）。"""
     params = {
         "reportName": report_name, "columns": columns, "filter": filter_str,
-        "pageNumber": "1", "pageSize": str(page_size),
+        "pageNumber": str(page_number), "pageSize": str(page_size),
         "sortColumns": sort_columns, "sortTypes": sort_types, "source": "WEB", "client": "WEB",
     }
     try:

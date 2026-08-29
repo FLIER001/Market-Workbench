@@ -94,7 +94,7 @@ const RADAR_RULES: Record<string, string[]> = {
 const KIND_LABEL: Record<EvidenceKind, string> = {
   announcement: "公告",
   news: "个股新闻",
-  "investment-news": "Investment News",
+  "investment-news": "市场新闻",
   "web-search": "联网核验",
 };
 
@@ -212,6 +212,29 @@ const radarWithFallback = async (): Promise<{ data: RadarData; stale: boolean }>
   }
 };
 
+// 事件研判快照的逐标的请求缓存：同一标的 10 分钟内的板块/公告/新闻直接复用，
+// 并发请求（多标的同刷、连点）用 inflight 去重——一次全量研判原本要打 3×N 个
+// 上游请求（20 只自选 = 60+），公告/新闻在分钟级不会变化，复用不损失研判质量。
+const FEED_TTL_MS = 10 * 60_000;
+const feedCache = new Map<string, { value: unknown; at: number }>();
+const feedInflight = new Map<string, Promise<unknown>>();
+
+async function cachedFeed<T>(kind: string, code: string, fetcher: () => Promise<T>): Promise<T> {
+  const key = `${kind}:${code}`;
+  const hit = feedCache.get(key);
+  if (hit && Date.now() - hit.at < FEED_TTL_MS) return hit.value as T;
+  const pending = feedInflight.get(key) as Promise<T> | undefined;
+  if (pending) return pending;
+  const p = fetcher()
+    .then((value) => {
+      feedCache.set(key, { value, at: Date.now() });
+      return value;
+    })
+    .finally(() => { feedInflight.delete(key); });
+  feedInflight.set(key, p);
+  return p;
+}
+
 async function gatherSnapshot(seeds: AssetSeed[]): Promise<EventSnapshot> {
   const codes = Array.from(new Set(seeds.map((asset) => asset.code)));
   const issues: string[] = [];
@@ -222,14 +245,14 @@ async function gatherSnapshot(seeds: AssetSeed[]): Promise<EventSnapshot> {
   });
   const blockPromise = Promise.all(
     seeds.map((asset) =>
-      api.blocks(asset.code)
+      cachedFeed("blocks", asset.code, () => api.blocks(asset.code))
         .then((blocks) => ({ key: `${asset.kind}:${asset.code}`, blocks }))
         .catch(() => ({ key: `${asset.kind}:${asset.code}`, blocks: null as Blocks | null })),
     ),
   );
   const announcementPromise = Promise.all(
     seeds.map((asset) =>
-      api.announcements(asset.code)
+      cachedFeed("announcements", asset.code, () => api.announcements(asset.code))
         .then((items) => ({ asset, items }))
         .catch(() => ({ asset, items: [] })),
     ),
@@ -237,7 +260,7 @@ async function gatherSnapshot(seeds: AssetSeed[]): Promise<EventSnapshot> {
   let newsUnavailable = false;
   const newsPromise = Promise.all(
     seeds.map((asset) =>
-      api.news(asset.code)
+      cachedFeed("news", asset.code, () => api.news(asset.code))
         .then((items) => ({ asset, items }))
         .catch((error) => {
           if (error instanceof ApiError && error.status === 501) newsUnavailable = true;
@@ -254,7 +277,7 @@ async function gatherSnapshot(seeds: AssetSeed[]): Promise<EventSnapshot> {
     radarWithFallback(),
   ]);
   if (newsUnavailable) issues.push("公开新闻数据源当前不可用");
-  if (radarResult.stale) issues.push("Investment News 刷新失败，使用最近缓存");
+  if (radarResult.stale) issues.push("市场新闻刷新失败，使用最近缓存");
 
   const blockByAsset = new Map(blockRows.map((row) => [row.key, row.blocks]));
   const radarNameByKey = new Map(radarResult.data.industries.map((industry) => [industry.key, industry.name]));
@@ -804,7 +827,7 @@ export function WatchlistEventJudgement() {
         </div>
       ) : !snapshot && !error ? (
         <div className="rounded-lg border border-dashed border-border/70 p-8 text-center text-sm text-muted-foreground/70">
-          点击“刷新研判”，汇总自选标的的板块、公告、新闻与 Investment News。
+          点击“刷新研判”，汇总自选标的的板块、公告、新闻与市场新闻。
         </div>
       ) : snapshot ? (
         <>
@@ -822,7 +845,7 @@ export function WatchlistEventJudgement() {
             </div>
             <div className="rounded-lg bg-muted/25 px-3 py-2">
               <p className="text-[10px] text-muted-foreground">板块层证据</p>
-              <p className="mt-0.5 text-sm font-medium">{snapshot.counts.investmentNews} 条 Investment News</p>
+              <p className="mt-0.5 text-sm font-medium">{snapshot.counts.investmentNews} 条市场新闻</p>
             </div>
           </div>
 

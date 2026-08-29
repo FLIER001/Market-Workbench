@@ -29,6 +29,7 @@ import gstock
 import fund
 import fund_pfs
 import fund_portfolio as fpf
+import holder_increase
 import newsradar
 import portfolio as pf
 import timing
@@ -866,6 +867,28 @@ def plate_scores_cache():
     return {"data": plate_scores_layer.get_cached_plate_scores()}
 
 
+# ---------------------------------------------------------------------------
+# 事件分析（/api/event/*）：事件驱动信号，第一个模块是高管/股东增持名单
+# ---------------------------------------------------------------------------
+
+_EVENT_WINDOWS = ("1d", "7d", "30d", "all")
+
+
+@app.get("/api/event/holder-increase")
+def event_holder_increase(window: str = Query("7d"), refresh: bool = Query(False)):
+    """高管/管理层/股东增持名单（东财，30 分钟缓存）。
+
+    window：1d 近1日（昨日 0:00 至今）/ 7d 过去7日 / 30d 过去30日 /
+    all 全部未增持结束（进行中计划）。refresh=true 强制后台重拉（先返回旧值）。
+    """
+    if window not in _EVENT_WINDOWS:
+        raise HTTPException(400, f"window 仅支持 {'/'.join(_EVENT_WINDOWS)}")
+    try:
+        return {"data": holder_increase.get_holder_increase(window, force=refresh)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"增持数据异常：{e}") from e
+
+
 @app.get("/api/industry-chains")
 def industry_chains():
     """产业链目录（静态主数据）：哪些板块已梳理产业链、环节与公司数量。"""
@@ -1053,7 +1076,7 @@ def _stock_cached(endpoint: str, code: str, ttl: int, fetch, force: bool = False
 
 @app.get("/api/valuation/percentile")
 def valuation_percentile(code: str = Query(...), refresh: bool = False):
-    """PE-TTM / PB 历史分位（近5年）。全站缓存 30 分钟/代码（历史序列日频、变化慢）。"""
+    """PE-TTM / PB 历史分位（近5年）。全站缓存 24 小时/代码（历史序列日频、变化慢）。"""
     code = _validate(code)
     try:
         return {"data": _stock_cached("valuation_percentile", code, 24 * 3600, lambda: astock.valuation_percentile(code), refresh, bool)}
@@ -1075,7 +1098,7 @@ def announcements(code: str = Query(...), refresh: bool = False):
 
 @app.get("/api/financials")
 def financials(code: str = Query(...), refresh: bool = False):
-    """财务关键指标（同花顺财务摘要，最新报告期）。缓存 30 分钟/代码。"""
+    """财务关键指标（同花顺财务摘要，最新报告期）。缓存 24 小时/代码。"""
     code = _validate(code)
     try:
         return {"data": _stock_cached("financials", code, 24 * 3600, lambda: astock.financials(code), refresh, bool)}
@@ -1575,9 +1598,18 @@ def bonds_segments(refresh: bool = False):
         raise HTTPException(502, f"债市分品种评分异常：{e}") from e
 
 
+@app.get("/api/bonds/insight")
+async def bonds_insight(refresh: bool = Query(False)):
+    """AI 通俗解读分品种评分（品种优先顺序 + 各品种简要解析）。refresh=true 重新生成并写回快照。"""
+    try:
+        return {"data": await bonds_layer.get_ai_insight(force=refresh) or ""}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"债市 AI 解读异常：{e}") from e
+
+
 @app.get("/api/gold/score")
 def gold_score(refresh: bool = False):
-    """黄金价格多维评分（方案 V2.1）。缓存 30 分钟，last-good 兜底。"""
+    """黄金价格多维评分（方案 V2.1）。缓存 1 小时，last-good 兜底。"""
     try:
         return {"data": gold_score_layer.get_gold_score(force=refresh)}
     except Exception as e:  # noqa: BLE001
