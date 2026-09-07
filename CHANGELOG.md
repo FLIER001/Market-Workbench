@@ -3,6 +3,17 @@
 本项目的版本号唯一来源是 `frontend/package.json`；后端 HTTP API、`/api/health`、
 前端界面与 MCP `serverInfo` 全部从它读取（见 `backend/version.py`）。
 
+## 未发布（2026-09-03 上游对账移植）
+
+- 资讯雷达移植条目层去重（investment-news v1.0.3）：URL 归一化剥 13 个白名单跟踪
+  参数（urlencode 重转义防误合并）+ 标题 48h 窗口去重（无时间戳不去重、基准时间随
+  保留条目刷新）；源清单去掉 Engadget / 少数派两个跨栏重复源（108→106）。
+- 内嵌 a-stock-data 副本对齐上游 v3.7.1（筹码分布 CYQ、估值历史等 54 端点文档）。
+- 上游对账：webapp 线遗留清零（v0.3.x 已于 2026-08-11 同步；GPU 租金信号页评估后
+  不引入——海外算力租金数据与 A 股主线关联弱，恢复路径已记录）。上游 v1.0.x 已重写为
+  Codex Harness Agent 产品并删除 backend/frontend，git merge 永久不可行。
+  对账文档：`docs/upstream-sync/2026-09-03-v1.0.x-对账-webapp遗留移植.md`
+
 ## v1.8.0 — 2026-08-18
 
 - 新增「因子研究」页：横截面选股因子的检验与探索性组合回测（研究型因子实验室，不做策略产品）。9 个价量因子（动量/反转/波动/下行波动/Amihud 非流动性/成交额稳定性），Alphalens 口径检验（RankIC/ICIR/IC 衰减/五分组收益/分组换手/因子秩自相关/分年表现）。

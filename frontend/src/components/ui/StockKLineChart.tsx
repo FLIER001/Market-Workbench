@@ -16,6 +16,9 @@ import { init, use, type ECharts, type EChartsCoreOption } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
 import { AlertCircle, ChartCandlestick, Loader2, RefreshCw } from "lucide-react";
 import { api, type KLineData, type KLineRow, type MinuteKline } from "@/lib/api";
+// 颜色统一走共享工具（rgba 数值形式）——hsl 空格语法在 echarts 6 悬停重绘时会被
+// zrender 解析成 undefined，见 lib/chartColor.ts 顶部根因说明。
+import { cssColor } from "@/lib/chartColor";
 import { isTradingHours } from "@/hooks/useLiveQuotes";
 import { cn } from "@/lib/utils";
 import { GlassCard } from "./GlassCard";
@@ -57,11 +60,6 @@ const compactVolume = (value: number) => {
   if (value >= 1e8) return `${(value / 1e8).toFixed(1)}亿`;
   if (value >= 1e4) return `${(value / 1e4).toFixed(1)}万`;
   return String(Math.round(value));
-};
-
-const cssColor = (name: string, alpha?: number) => {
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return alpha == null ? `hsl(${value})` : `hsl(${value} / ${alpha})`;
 };
 
 function chartOption(data: KLineData, visibleCount: number): EChartsCoreOption {

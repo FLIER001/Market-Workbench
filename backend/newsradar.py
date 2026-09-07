@@ -19,6 +19,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import cache_runtime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -32,6 +33,83 @@ TTL = 2 * 3600
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 BEIJING = timezone(timedelta(hours=8))
+
+# ——— 条目层去重（同步自上游 investment-news v1.0.3 的 fetch.py）———
+# 只剥公认的跟踪参数（白名单式保守剥）：有些站点用 query 区分文章 id，
+# 剥多了会把两篇不同文章归一化成同一个 key、被去重丢掉一篇——那正是
+# "去重做过头＝静默丢内容"。宁可少剥几个参数、偶尔重复显示一条，也不要丢文章。
+_TRACKING_PARAMS = {
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "utm_id",
+    "spm", "share_token",
+    "fbclid", "gclid", "msclkid", "mc_cid", "mc_eid", "_hsenc", "_hsmi",
+}
+# 同一条新闻被多家转载时，各家发布时间相近。标题去重限定在这个窗口内，
+# 「每周综述」这类跨周复用的固定栏目名就不会被误判成重复。
+_DUP_TITLE_WINDOW_S = 48 * 3600
+
+
+def _normalize_url(url: str) -> str:
+    """URL 归一化：剥跟踪参数 + 去锚点 + 去尾斜杠。解析失败退回原串小写，绝不抛——
+    一条畸形链接不该中断整次刷新。"""
+    if not url:
+        return ""
+    url = url.strip()
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url.lower()
+    kept = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+            if k.lower() not in _TRACKING_PARAMS]
+    # scheme/host 大小写不敏感，path 保持原样（部分服务器 path 区分大小写）。
+    # query 必须用 urlencode 重新转义：parse_qsl 已解码，手工拼接会让
+    # `?id=a%26b%3Dc` 与 `?id=a&b=c` 归一化成同一个 key、误合并两篇不同文章。
+    return urlunsplit((
+        parts.scheme.lower(), parts.netloc.lower(),
+        parts.path.rstrip("/") or "/",
+        urlencode(kept), ""))
+
+
+def _normalize_title(title: str) -> str:
+    """标题归一化：去空白、标点、大小写差异，用来识别转载。"""
+    return re.sub(r"[\W_]+", "", (title or "").lower())
+
+
+def _dedup(items: list[dict]) -> list[dict]:
+    """同栏内去重：同一 URL 只留一条；标题相同且发布时间相近的也只留一条。
+
+    传入的 items 需已按时间倒序，保留的即每组里最新的那条。
+    任一方没有发布时间（ts=0）就不做标题去重：无从判断是转载还是同名栏目的
+    不同期，判错的代价不对等——多显示一条只是冗余，判错删掉就是永久丢一篇。
+    """
+    seen_urls: set[str] = set()
+    seen_titles: dict[str, int] = {}
+    out = []
+    for it in items:
+        url_key = _normalize_url(it.get("url", ""))
+        title_key = _normalize_title(it.get("title", ""))
+        ts = it.get("ts", 0)
+
+        dup_by_url = bool(url_key) and url_key in seen_urls
+        prev_ts = seen_titles.get(title_key) if title_key else None
+        dup_by_title = (prev_ts is not None and bool(ts) and bool(prev_ts)
+                        and abs(prev_ts - ts) <= _DUP_TITLE_WINDOW_S)
+
+        # 被丢弃的条目也要登记它的两个 key，否则重复关系传递不下去：
+        # (标题A, url1) → (标题A, url2) → (标题B, url2) 三条同一新闻会漏成两张卡。
+        if url_key:
+            seen_urls.add(url_key)
+
+        if dup_by_url or dup_by_title:
+            if title_key and ts:
+                seen_titles.setdefault(title_key, ts)
+            continue
+        # 保留的条目要**刷新**标题基准时间（不能 setdefault）：倒序遍历下，
+        # 同名栏目在窗口外合法复现后，若基准仍停在最新那期，更旧的转载会因
+        # 与最新期时间差超窗而逃过去重——基准必须跟着「最近保留的那条」走。
+        if title_key and ts:
+            seen_titles[title_key] = ts
+        out.append(it)
+    return out
 
 
 def _strip_html(s: str) -> str:
@@ -147,6 +225,7 @@ def fetch_radar() -> dict:
         industries[idx]["items"].extend(items)
     for ind in industries:
         ind["items"].sort(key=lambda x: x.get("ts", 0), reverse=True)
+        ind["items"] = _dedup(ind["items"])  # 不同源转载同一条新闻只留最新一条
 
     data = {
         "generated_at": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M"),

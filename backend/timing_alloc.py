@@ -819,7 +819,11 @@ def _payload() -> dict:
     for r in rows:
         r.update(explanation.get(r["asset"]) or {})
 
-    as_of = max(d for d in (macro_date, liq_date) if d)
+    # as_of 取择时回放尾点（真实读数日，含当日盘后市场确认），而非输入序列里较旧的
+    # 日期轴——两融 T+1 披露会把流动性 hist 尾部拖在前一交易日，但择时读数实际已合成
+    # 当日市场确认分（replay_today 注入），两者脱节会让页面「数据时点」显示旧日期。
+    replay_date = str((timing.get("hist") or [{}])[-1].get("date") or "")[:10]
+    as_of = max(d for d in (macro_date, liq_date, replay_date) if d)
     payload = {
         "schema_version": _SCHEMA_VERSION,
         "model_version": _MODEL_VERSION,

@@ -7,6 +7,9 @@ import { init, use, type ECharts } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { api, type FundNavHistory } from "@/lib/api";
+// 颜色统一走共享工具（rgba 数值形式）——hsl 空格语法在 echarts 6 悬停重绘时会被
+// zrender 解析成 undefined 导致折线消失，见 lib/chartColor.ts 顶部根因说明。
+import { cssColor } from "@/lib/chartColor";
 
 use([LineChart, GridComponent, TooltipComponent, AxisPointerComponent, DataZoomComponent, AriaComponent, CanvasRenderer]);
 
@@ -19,11 +22,6 @@ const RANGES = [
 ] as const;
 
 const cache = new Map<string, FundNavHistory>();
-
-const cssColor = (name: string, alpha?: number) => {
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return alpha == null ? `hsl(${value})` : `hsl(${value} / ${alpha})`;
-};
 
 // 单位净值走势（等比刻度，归一化涨幅更直观）。浅色网格 + 面积渐变的终端风。
 export function FundNavChart({ code }: { code: string }) {

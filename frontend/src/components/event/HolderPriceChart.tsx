@@ -7,16 +7,12 @@ import { init, use, type ECharts } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
 import { AlertCircle, Loader2, TrendingUp } from "lucide-react";
 import { api, type HolderIncreaseRow, type KLineData } from "@/lib/api";
+import { cssColor } from "@/lib/chartColor";
 
 use([LineChart, ScatterChart, GridComponent, TooltipComponent, AxisPointerComponent, AriaComponent, CanvasRenderer]);
 
 const KLINE_COUNT = 120; // 约 6 个月交易日，覆盖 35 天增持回看窗口留足前后文
 const cache = new Map<string, KLineData>();
-
-const cssColor = (name: string, alpha?: number) => {
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return alpha == null ? `hsl(${value})` : `hsl(${value} / ${alpha})`;
-};
 
 const fmtAmount = (value: number | null | undefined) => {
   if (value == null) return "—";

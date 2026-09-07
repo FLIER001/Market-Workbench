@@ -13,16 +13,14 @@ import {
   api, type FactorBacktestData, type FactorEvaluateData, type FactorFieldsDoc,
   type FactorLabStatus,
 } from "@/lib/api";
+// 颜色统一走共享工具（rgba 数值形式），避免 hsl 空格语法在 echarts 6 悬停重绘时
+// 被 zrender 解析成 undefined，见 lib/chartColor.ts 顶部根因说明。
+import { cssColor } from "@/lib/chartColor";
 
 use([LineChart, BarChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer]);
 
 // 因子实验室：横截面选股因子的检验（Alphalens 口径）与探索性组合回测。
 // 数据为探索级（幸存者偏差/前复权/无 point-in-time 状态），结果仅作研究证据。
-
-const cssColor = (name: string, alpha?: string) => {
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return alpha == null ? `hsl(${v})` : `hsl(${v} / ${alpha})`;
-};
 
 function useChart(option: object | null, height = "h-56") {
   const boxRef = useRef<HTMLDivElement>(null);

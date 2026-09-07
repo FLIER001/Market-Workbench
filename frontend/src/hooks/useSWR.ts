@@ -132,11 +132,20 @@ export async function resolveRefreshing<T extends CachePayload>(first: T, fetche
 }
 
 // localStorage 持久化层：opts.persist=true 时启用。隐私模式 / 序列化失败静默降级。
+// 写入带时间戳；读取时超过 PERSIST_MAX_AGE_MS 的旧值直接丢弃——后端长期不可达时
+// persist 层会一直秒显旧数据（页面看似正常但时点是旧的），过期即回退 loading 态。
+const PERSIST_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
+
 function loadPersisted<T>(key: string): T | null {
   try {
     const raw = localStorage.getItem(STORE_PREFIX + key);
     if (!raw) return null;
-    return (JSON.parse(raw) as { v: T }).v;
+    const parsed = JSON.parse(raw) as { v: T; t?: number };
+    if (parsed.t != null && Date.now() - parsed.t > PERSIST_MAX_AGE_MS) {
+      localStorage.removeItem(STORE_PREFIX + key);
+      return null;
+    }
+    return parsed.v;
   } catch {
     return null;
   }
@@ -146,7 +155,7 @@ function writeCache<T>(key: string, v: T, persist?: boolean) {
   const cache = (useSWR as unknown as { _c?: Map<string, unknown> })._c;
   cache?.set(key, v);
   if (persist) {
-    try { localStorage.setItem(STORE_PREFIX + key, JSON.stringify({ v })); } catch { /* 配额满 / 隐私模式：跳过持久化 */ }
+    try { localStorage.setItem(STORE_PREFIX + key, JSON.stringify({ v, t: Date.now() })); } catch { /* 配额满 / 隐私模式：跳过持久化 */ }
   }
 }
 

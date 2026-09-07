@@ -5,6 +5,9 @@ import {
 } from "echarts/components";
 import { init, use, type ECharts } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
+// 颜色统一走共享工具（rgba 数值形式），避免 hsl 空格语法在 echarts 6 悬停重绘时
+// 被 zrender 解析成 undefined，见 lib/chartColor.ts 顶部根因说明。
+import { cssColor } from "@/lib/chartColor";
 
 use([LineChart, GridComponent, TooltipComponent, CanvasRenderer]);
 
@@ -17,11 +20,6 @@ interface Props {
   points: TrendPoint[];
   height?: number;
 }
-
-const cssColor = (name: string, alpha?: number) => {
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return alpha == null ? `hsl(${value})` : `hsl(${value} / ${alpha})`;
-};
 
 /** Yes 概率（%）随时间走势 —— 移植自 globalpercent（Apache-2.0），适配本主题。 */
 export function ProbabilityTrend({ points, height = 280 }: Props) {

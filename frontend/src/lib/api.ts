@@ -1540,6 +1540,7 @@ export interface HolderIncreaseRecord {
   market: string;
   ongoing: boolean;
   source: string;
+  url: string | null;
 }
 
 export interface HolderIncreasePlan {
@@ -1599,24 +1600,26 @@ export const api = {
   liquidity: (refresh = false) => get<LiquidityData>(`/market/liquidity${refresh ? "?refresh=true" : ""}`),
   macro: (refresh = false) => get<MacroData>(`/market/macro${refresh ? "?refresh=true" : ""}`),
   bondsCurve: (refresh = false) => get<BondsCurveData>(`/bonds/curve${refresh ? "?refresh=true" : ""}`),
-  bondsOverview: (refresh = false) => get<BondsOverviewData>(`/bonds/overview${refresh ? "?refresh=true" : ""}`),
-  allocation: (refresh = false) => get<AllocationData>(`/allocation${refresh ? "?refresh=true" : ""}`),
+  // 评分/债市系列接口后端可能同步冷构建（黄金评分要拉 8 个外源，分钟级），
+  // 30s 超时会让前端 persist 层旧值永远得不到替换（页面长期显示旧数据时点）。
+  bondsOverview: (refresh = false) => get<BondsOverviewData>(`/bonds/overview${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
+  allocation: (refresh = false) => get<AllocationData>(`/allocation${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
   allocationInsight: (refresh = false) =>
     get<AllocationInsight | null>(`/allocation/insight${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS).then((d) => d ?? null),
-  bondsFramework: (refresh = false) => get<BondsFrameworkData>(`/bonds/framework${refresh ? "?refresh=true" : ""}`),
-  bondsCalc: (refresh = false) => get<BondsCalcData>(`/bonds/calc${refresh ? "?refresh=true" : ""}`),
-  bondsPositioning: (refresh = false) => get<BondsPositioningData>(`/bonds/positioning${refresh ? "?refresh=true" : ""}`),
-  bondsSegments: (refresh = false) => get<BondsSegmentsData>(`/bonds/segments${refresh ? "?refresh=true" : ""}`),
+  bondsFramework: (refresh = false) => get<BondsFrameworkData>(`/bonds/framework${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
+  bondsCalc: (refresh = false) => get<BondsCalcData>(`/bonds/calc${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
+  bondsPositioning: (refresh = false) => get<BondsPositioningData>(`/bonds/positioning${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
+  bondsSegments: (refresh = false) => get<BondsSegmentsData>(`/bonds/segments${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
   bondsInsight: (refresh = false) =>
     get<BondsInsight | null>(`/bonds/insight${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS).then((d) => d ?? null),
-  goldScore: (refresh = false) => get<GoldScoreData>(`/gold/score${refresh ? "?refresh=true" : ""}`),
+  goldScore: (refresh = false) => get<GoldScoreData>(`/gold/score${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
   goldInsight: (refresh = false) =>
     get<GoldInsight | null>(`/gold/insight${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS).then((d) => d ?? null),
   au0Hist: (days = 400) => get<Au0HistData>(`/gold/au0-hist?days=${days}`),
   goldSpot: () => get<GoldSpotData>("/gold/spot"),
   cnGoldSpot: () => get<CnGoldSpotData>("/gold/cn-spot"),
   paxgSpot: () => get<PaxgSpotData>("/gold/paxg"),
-  oilScore: (refresh = false) => get<OilScoreData>(`/oil/score${refresh ? "?refresh=true" : ""}`),
+  oilScore: (refresh = false) => get<OilScoreData>(`/oil/score${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
   oilInsight: (refresh = false) =>
     get<OilInsight | null>(`/oil/insight${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS).then((d) => d ?? null),
   oilSpot: () => get<OilSpotData>("/oil/spot"),

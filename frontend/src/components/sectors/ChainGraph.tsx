@@ -4,13 +4,11 @@ import { LegendComponent, TooltipComponent } from "echarts/components";
 import { init, use, type ECharts } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
 import type { IndustryChainData } from "@/lib/api";
+// 颜色统一走共享工具（rgba 数值形式），避免 hsl 空格语法在 echarts 6 悬停重绘时
+// 被 zrender 解析成 undefined，见 lib/chartColor.ts 顶部根因说明。
+import { cssColor } from "@/lib/chartColor";
 
 use([GraphChart, TooltipComponent, LegendComponent, CanvasRenderer]);
-
-const cssColor = (name: string, alpha?: number) => {
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return alpha == null ? `hsl(${value})` : `hsl(${value} / ${alpha})`;
-};
 
 const STAGE_COLOR: Record<string, string> = { 上游: "#38bdf8", 中游: "#a78bfa", 下游: "#fbbf24" };
 

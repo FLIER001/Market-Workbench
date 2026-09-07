@@ -1,5 +1,5 @@
 import { Fragment, useState } from "react";
-import { AlertCircle, ChevronDown, ChevronUp, Loader2, RefreshCw, TrendingUp } from "lucide-react";
+import { AlertCircle, ChevronDown, ChevronUp, ExternalLink, Loader2, RefreshCw, TrendingUp } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
 import {
   api, ApiError,
@@ -190,11 +190,12 @@ export function HolderIncreasePanel() {
 }
 
 function RecordList({ row }: { row: HolderIncreaseRow }) {
+  const fallbackUrl = `https://data.eastmoney.com/notices/stock/${row.code}.html`;
   return (
     <div className="space-y-2">
       <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">增持明细（{row.records.length} 笔）</div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[720px] text-xs">
+        <table className="w-full min-w-[780px] text-xs">
           <thead>
             <tr className="border-b border-border/50 text-left text-muted-foreground">
               <th className="py-2 pr-3 font-medium">增持人</th>
@@ -203,11 +204,14 @@ function RecordList({ row }: { row: HolderIncreaseRow }) {
               <th className="py-2 pr-3 text-right font-medium">股数</th>
               <th className="py-2 pr-3 text-right font-medium">均价</th>
               <th className="py-2 pr-3 font-medium">日期 / 区间</th>
-              <th className="py-2 font-medium">方式</th>
+              <th className="py-2 pr-3 font-medium">方式</th>
+              <th className="py-2 font-medium">公告</th>
             </tr>
           </thead>
           <tbody>
-            {row.records.map((record, index) => <RecordRow key={`${record.person}-${record.activity_date}-${index}`} record={record} />)}
+            {row.records.map((record, index) => (
+              <RecordRow key={`${record.person}-${record.activity_date}-${index}`} record={record} fallbackUrl={fallbackUrl} />
+            ))}
           </tbody>
         </table>
       </div>
@@ -215,7 +219,7 @@ function RecordList({ row }: { row: HolderIncreaseRow }) {
   );
 }
 
-function RecordRow({ record }: { record: HolderIncreaseRecord }) {
+function RecordRow({ record, fallbackUrl }: { record: HolderIncreaseRecord; fallbackUrl: string }) {
   const dates = record.start_date && record.end_date
     ? `${fmtDate(record.start_date)} ~ ${fmtDate(record.end_date)}`
     : fmtDate(record.activity_date);
@@ -227,7 +231,14 @@ function RecordRow({ record }: { record: HolderIncreaseRecord }) {
       <td className="py-2 pr-3 text-right font-mono tabular-nums text-muted-foreground">{record.shares ? `${(record.shares / 1e4).toFixed(1)}万` : "—"}</td>
       <td className="py-2 pr-3 text-right font-mono tabular-nums text-muted-foreground">{record.price != null ? record.price.toFixed(2) : "—"}</td>
       <td className="py-2 pr-3 font-mono text-muted-foreground">{dates}</td>
-      <td className="py-2 text-muted-foreground">{record.reason || record.market || "—"}</td>
+      <td className="py-2 pr-3 text-muted-foreground">{record.reason || record.market || "—"}</td>
+      <td className="py-2">
+        <a href={record.url || fallbackUrl} target="_blank" rel="noreferrer"
+          className="inline-flex items-center gap-0.5 text-[11px] text-muted-foreground transition hover:text-primary"
+          title={record.url ? "打开对应披露公告" : "打开该股票的公告列表"}>
+          公告<ExternalLink className="h-3 w-3" />
+        </a>
+      </td>
     </tr>
   );
 }

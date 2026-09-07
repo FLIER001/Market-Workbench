@@ -6,7 +6,7 @@ const bonds = readFileSync(new URL("../src/pages/Bonds.tsx", import.meta.url), "
 const sector = readFileSync(new URL("../src/pages/SectorDetail.tsx", import.meta.url), "utf8");
 
 test("bonds persists all page snapshots and refreshes every block", () => {
-  assert.equal([...bonds.matchAll(/\{ persist: true \}/g)].length, 3);
+  assert.equal([...bonds.matchAll(/\{ persist: true \}/g)].length, 4);
   assert.match(bonds, /revalidateFw\(true\)/);
   assert.match(bonds, /revalidateSeg\(true\)/);
 });

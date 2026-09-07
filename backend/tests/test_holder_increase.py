@@ -256,13 +256,29 @@ def test_build_raw_includes_plans(monkeypatch):
     monkeypatch.setattr(hi, "_fetch_exec_increase", lambda today: recs)
     monkeypatch.setattr(hi, "_fetch_holder_increase", lambda today: [])
     fetched = []
-    def fake_plan(code, today):
+    def fake_anns(code, today):
         fetched.append(code)
         return {"done": False, "amount": None, "amount_label": "", "deadline": None,
-                "notice_date": "2026-08-01", "title": "t"}
-    monkeypatch.setattr(hi, "_fetch_plan", fake_plan)
+                "notice_date": "2026-08-01", "title": "t"}, \
+               [{"date": "2026-08-27", "title": "增持公告", "url": "https://x/1.html"}]
+    monkeypatch.setattr(hi, "_fetch_stock_anns", fake_anns)
     payload = hi._build_raw()
     assert set(payload["plans"]) == {"000021"} and fetched == ["000021"]
+    assert payload["anns"]["000021"][0]["url"] == "https://x/1.html"
+
+
+def test_match_ann_links_records():
+    anns = [
+        {"date": "2026-08-27", "title": "触及1%公告", "url": "https://x/a.html"},
+        {"date": "2026-08-20", "title": "计划公告", "url": "https://x/b.html"},
+    ]
+    exact = {"code": "000060", "activity_date": "2026-08-27", "notice_date": "2026-08-27"}
+    near = {"code": "000060", "activity_date": "2026-08-28", "notice_date": "2026-08-28"}
+    far = {"code": "000060", "activity_date": "2026-08-10", "notice_date": "2026-08-10"}
+    assert hi._match_ann(anns, exact) == "https://x/a.html"     # 精确命中
+    assert hi._match_ann(anns, near) == "https://x/a.html"      # 1 日内就近匹配
+    assert hi._match_ann(anns, far) is None                     # 超出 3 天不硬配
+    assert hi._match_ann([], exact) is None
 
 
 # —— 端点契约 ——

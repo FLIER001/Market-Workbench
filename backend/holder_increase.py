@@ -274,8 +274,16 @@ def _is_done_title(title: str) -> bool:
     return bool(re.search(r"增持", title or "")) and bool(re.search(r"实施完毕|实施完成|完成实施", title or ""))
 
 
-def _fetch_plan(code: str, today: date) -> dict | None:
-    """个股公告 → 增持计划信息。解析不到返回 None（不做排除）。"""
+def _is_disclosure_title(title: str) -> bool:
+    """增持相关的披露公告（用于明细记录匹配公开链接）。"""
+    return bool(re.search(r"增持|减持|权益变动|持股变动", title or ""))
+
+
+def _fetch_stock_anns(code: str, today: date) -> tuple[dict | None, list[dict]]:
+    """个股公告列表 → (增持计划信息, 披露公告链接列表)。
+
+    链接条目 {date, title, url}，按时间倒序，供明细记录按披露日匹配公开原文。
+    """
     import requests
 
     r = requests.get(
@@ -284,13 +292,21 @@ def _fetch_plan(code: str, today: date) -> dict | None:
                 "client_source": "web", "stock_list": code, "f_node": 0, "s_node": 0},
         headers={"User-Agent": astock.UA}, timeout=15)
     anns = (r.json().get("data") or {}).get("list") or []
-    recent_done = any(
-        _is_done_title(a.get("title") or "")
-        and _d(a.get("notice_date")) >= (today - timedelta(days=LOOKBACK_DAYS)).isoformat()
-        for a in anns)
+    links = [
+        {
+            "date": _d(a.get("notice_date")),
+            "title": a.get("title") or "",
+            "url": f"https://data.eastmoney.com/notices/detail/{code}/{a.get('art_code')}.html",
+        }
+        for a in anns if _is_disclosure_title(a.get("title") or "")
+    ][:8]
+
+    recent_done = any(_is_done_title(a.get("title") or "")
+                      and _d(a.get("notice_date")) >= (today - timedelta(days=LOOKBACK_DAYS)).isoformat()
+                      for a in anns)
     spec = next((a for a in anns if _is_plan_title(a.get("title") or "")), None)
     if not spec and not recent_done:
-        return None
+        return None, links
     plan: dict = {"title": "", "notice_date": "", "amount": None, "amount_label": "",
                   "deadline": None, "done": recent_done}
     if spec:
@@ -308,7 +324,7 @@ def _fetch_plan(code: str, today: date) -> dict | None:
         if parsed:
             plan["amount"], plan["amount_label"] = parsed
         plan["deadline"] = _parse_plan_deadline(body, plan["notice_date"])
-    return plan
+    return plan, links
 
 
 def _plan_candidates(records: list[dict], today: date) -> set[str]:
@@ -423,9 +439,11 @@ def _is_cumulative(rows: list[dict]) -> bool:
     return False
 
 
-def _aggregate(records: list[dict], window: str, plans: dict | None = None) -> list[dict]:
+def _aggregate(records: list[dict], window: str, plans: dict | None = None,
+               anns: dict | None = None) -> list[dict]:
     today = datetime.now(BEIJING).date()
     plans = plans or {}
+    anns = anns or {}
     if window == "all":
         codes = _plan_candidates(records, today)
         picked: set[str] = set()
@@ -454,6 +472,7 @@ def _aggregate(records: list[dict], window: str, plans: dict | None = None) -> l
     out: list[dict] = []
     for code, rows in groups.items():
         rows.sort(key=lambda x: x["activity_date"], reverse=True)
+        rows = [{**r, "url": _match_ann(anns.get(code) or [], r)} for r in rows]
         best = min(rows, key=lambda x: -TIER_WEIGHT[x["tier"]])
         score, breakdown = _score(rows, today)
         out.append({
@@ -488,13 +507,34 @@ def _plan_active(plan: dict | None, today: date) -> bool:
     return bool(notice) and notice >= (today - timedelta(days=200)).isoformat()
 
 
+def _match_ann(anns: list[dict], rec: dict) -> str | None:
+    """按披露日匹配公告链接：精确命中优先，其次 3 日内最近一条。"""
+    if not anns:
+        return None
+    target = rec.get("notice_date") or rec.get("activity_date")
+    if not target:
+        return None
+    for a in anns:
+        if a["date"] == target:
+            return a["url"]
+    best, best_gap = None, 4
+    for a in anns:
+        try:
+            gap = abs((date.fromisoformat(a["date"]) - date.fromisoformat(target)).days)
+        except ValueError:
+            continue
+        if gap < best_gap:
+            best, best_gap = a["url"], gap
+    return best
+
+
 def _build_raw() -> dict:
     today = datetime.now(BEIJING).date()
     records = _dedup(_fetch_exec_increase(today) + _fetch_holder_increase(today))
     if not records:
         raise ValueError("高管/股东增持数据为空")
     payload: dict = {"records": records, "updated": _now_stamp(),
-                     "source": "eastmoney", "plans": {}}
+                     "source": "eastmoney", "plans": {}, "anns": {}}
     candidates = _plan_candidates(records, today)
     # 计划解析量有限，优先覆盖最近仍有增持的股票
     ordered = sorted(
@@ -502,15 +542,19 @@ def _build_raw() -> dict:
         key=lambda c: max((r["activity_date"] for r in records if r["code"] == c), default=""),
         reverse=True)
     plans: dict[str, dict] = {}
+    anns: dict[str, list[dict]] = {}
     for code in ordered[:MAX_PLAN_FETCH]:
         try:
-            plan = _fetch_plan(code, today)
+            plan, links = _fetch_stock_anns(code, today)
         except Exception:  # noqa: BLE001 - 单只公告失败不影响整体
-            plan = None
+            plan, links = None, []
         if plan:
             plans[code] = plan
+        if links:
+            anns[code] = links
         time.sleep(0.3)
     payload["plans"] = plans
+    payload["anns"] = anns
     return payload
 
 
@@ -529,5 +573,5 @@ def get_holder_increase(window: str, force: bool = False) -> dict:
         "cache_state": raw.get("cache_state"), "cached_at": raw.get("cached_at"),
         "data_as_of": raw.get("data_as_of"), "refresh_error": raw.get("refresh_error"),
         "total_records": len(records),
-        "rows": _aggregate(records, window, raw.get("plans")),
+        "rows": _aggregate(records, window, raw.get("plans"), raw.get("anns")),
     }
