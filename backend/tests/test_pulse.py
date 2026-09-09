@@ -39,6 +39,55 @@ def test_taxonomy_kalshi_fallback():
     assert market_taxonomy.classify("Random title", None) == "其他"
 
 
+def test_polymarket_history_retries_flaky_clob(monkeypatch):
+    """CLOB prices-history 间歇性 HTTP 000（2026-09-09 复测仍在），首两次失败第三次
+    成功时必须返回数据而不是抛错。"""
+    from pulse import polymarket_signals
+
+    calls = {"n": 0}
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"history": [{"t": 1, "p": 0.5}]}
+
+    async def fake_get(client, url, params=None, headers=None):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise polymarket_signals.httpx.ConnectError("flaky edge")
+        return FakeResp()
+
+    monkeypatch.setattr(polymarket_signals.httpx.AsyncClient, "get", fake_get)
+    monkeypatch.setattr(polymarket_signals, "asyncio", _InstantAsyncio())
+
+    points = asyncio.run(polymarket_signals.fetch_history("tok", "1w"))
+    assert calls["n"] == 3
+    assert points == [{"t": 1, "p": 0.5}]
+
+
+class _InstantAsyncio:
+    """sleep() 直通 0：避免 monkeypatch 全局 asyncio 导致事件循环递归。"""
+
+    @staticmethod
+    def sleep(_: float):
+        return asyncio.sleep(0)
+
+
+def test_polymarket_history_raises_after_retries(monkeypatch):
+    from pulse import polymarket_signals
+
+    async def always_fail(client, url, params=None, headers=None):
+        raise polymarket_signals.httpx.ConnectError("down")
+
+    monkeypatch.setattr(polymarket_signals.httpx.AsyncClient, "get", always_fail)
+    monkeypatch.setattr(polymarket_signals, "asyncio", _InstantAsyncio())
+
+    with pytest.raises(polymarket_signals.httpx.ConnectError):
+        asyncio.run(polymarket_signals.fetch_history("tok", "1w", fidelity=1))
+
+
 def test_snapshot_dir_respects_vr_data_dir(monkeypatch, tmp_path):
     monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
     from pulse import market_pulse

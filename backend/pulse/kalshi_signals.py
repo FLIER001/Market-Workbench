@@ -12,7 +12,9 @@ Each event already carries a native ``category`` which seeds classification.
 Shapes every event into the same dict schema as ``polymarket_signals`` so the
 aggregator can merge the two sources transparently. ``source="kalshi"``.
 Verified against the live API on 2026-06-04 (note: price fields are ``*_dollars``,
-a 2026-06 rename from the old cents-based ``last_price``/``yes_bid``).
+a 2026-06 rename from the old cents-based ``last_price``/``yes_bid``), re-verified
+2026-09-09 (``*_dollars`` set + ``volume_fp``/``volume_24h_fp``/``open_interest_fp``
+all still in place; old cents fields still None).
 
 Ported from https://github.com/simonlin1212/globalpercent (Apache-2.0).
 """

@@ -7,7 +7,9 @@ topic. Probability time series (for the trend chart) comes from the CLOB
 prices-history endpoint.
 
 Everything here is public market data — nothing places trades.
-Verified against the live API on 2026-05-29.
+Verified against the live API on 2026-05-29, re-verified 2026-09-09 (Gamma markets
+field set and volume24hr server-side sort unchanged; CLOB prices-history flaky
+through some networks — retried in fetch_history).
 
 Ported from https://github.com/simonlin1212/globalpercent (Apache-2.0).
 """
@@ -302,16 +304,30 @@ async def fetch_markets(topics: list[str] | None = None, pages: int = 3, force: 
 
 
 async def fetch_history(token_id: str, interval: str = "1w", fidelity: int = 720) -> list[dict[str, Any]]:
-    """Probability time series for one outcome token (for the trend chart)."""
+    """Probability time series for one outcome token (for the trend chart).
+
+    CLOB prices-history is flaky through some networks — intermittent HTTP 000 /
+    connection resets that succeed on an immediate retry (re-verified 2026-09-09),
+    same pattern upstream globalpercent documents for Kalshi. One quick retry
+    before giving up keeps the trend chart from randomly failing to load.
+    """
     cache_key = f"history:{token_id}:{interval}:{fidelity}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
     params = {"market": token_id, "interval": interval, "fidelity": str(fidelity)}
+    data: dict[str, Any] | None = None
     async with httpx.AsyncClient(timeout=20.0) as client:
-        resp = await client.get(CLOB_HISTORY_URL, params=params, headers={"Accept": "application/json"})
-        resp.raise_for_status()
-        data = resp.json()
+        for attempt in range(3):
+            try:
+                resp = await client.get(CLOB_HISTORY_URL, params=params, headers={"Accept": "application/json"})
+                resp.raise_for_status()
+                data = resp.json()
+                break
+            except (httpx.HTTPError, ValueError):
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(1.5)
     history = data.get("history", []) if isinstance(data, dict) else []
     points = [{"t": p.get("t"), "p": _safe_float(p.get("p"))} for p in history]
     _cache_set(cache_key, points)
