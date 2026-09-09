@@ -173,12 +173,27 @@ def remove_holding(code: str, user_id: int | None = None) -> dict:
 
 
 def close_position(code: str, date: str, price: float, shares: float, cost: float | None = None,
-                   user_id: int | None = None) -> dict:
+                   user_id: int | None = None, name: str | None = None) -> dict:
     """记一笔已清仓：算已实现盈亏，存入 closed 列表，并同步从当前持仓扣减股数。
 
     cost 不传时自动取该代码当前持仓的加权成本——买入成本在添加持仓时已录入，
     清仓不该要求重填。持仓里没有该代码时必须显式给成本（会拿到明确的错误而不是按 0 算）。
+
+    股票名取用顺序：前端传入（持仓行本来就有，零网络）→ 上次响应缓存快照 →
+    锁外补拉一次行情 → 退回代码。取名的网络请求绝不进账本锁：单代码请求
+    撞不进批量行情缓存，锁内拉一次 0.3-3s 既拖慢清仓本身，又把轮询 GET 全堵在锁上。
     """
+    name = (name or "").strip()[:32]
+    if not name:
+        snap = _RESP_CACHE.get(_cache_key(user_id)) or {}
+        name = next((r.get("name") for r in
+                     list(snap.get("holdings", [])) + list(snap.get("closed", []))
+                     if r.get("code") == code), "") or ""
+    if not name:
+        try:
+            name = astock.tencent_quote([code]).get(code, {}).get("name", "")
+        except Exception:
+            name = ""
     with _LOCK:
         d = _load(user_id)
         holding = next((h for h in d["holdings"] if h["code"] == code), None)
@@ -188,12 +203,8 @@ def close_position(code: str, date: str, price: float, shares: float, cost: floa
             cost = holding["cost"]
         pnl = (price - cost) * shares
         d.setdefault("closed", [])
-        try:
-            name = astock.tencent_quote([code]).get(code, {}).get("name", code)
-        except Exception:
-            name = code
         d["closed"].append({
-            "code": code, "name": name, "date": date, "price": price,
+            "code": code, "name": name or code, "date": date, "price": price,
             "shares": shares, "cost": cost, "pnl": round(pnl, 2),
             "pnl_pct": round((price - cost) / cost * 100, 2) if cost else 0.0,
         })

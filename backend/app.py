@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time as _time
 from datetime import datetime
 from typing import Optional
@@ -67,6 +68,23 @@ score_scheduler.start(
     lambda: sw_level2_layer.get_level2_scores(force=True),
     lambda: plate_scores_layer.get_plate_scores(force=True),
 )
+
+
+def _warm_holder_increase() -> None:
+    """启动即预热增持原始层缓存。
+
+    冷启动时（后端重启/launchd 重拉）内存缓存为空：若快照文件比 TTL 旧，
+    第一个点开事件分析页的请求会同步走 _build_raw（东财翻页 + 公告计划
+    解析，实测约 80s），页面在「首次拉取中」卡满全程。这里在启动后立刻
+    用快照暖内存；快照过旧则后台重拉一次，让首个请求最多只等毫秒级聚合。
+    """
+    def run() -> None:
+        try:
+            holder_increase.get_holder_increase("7d")
+        except Exception:  # noqa: BLE001 - 预热失败留给真实请求再触发
+            pass
+
+    threading.Thread(target=run, daemon=True, name="warm:holder-increase").start()
 
 # CORS：默认放开（本地自托管友好）；公网部署时用 VR_ALLOW_ORIGINS 收紧成白名单。
 #   例：VR_ALLOW_ORIGINS="https://myhost"  （逗号分隔多个）
@@ -528,6 +546,8 @@ class CloseIn(BaseModel):
     shares: float
     # 可省：缺省时用当前持仓的加权成本（添加持仓时已录过成本，清仓不必重填）
     cost: Optional[float] = None
+    # 可省：股票名。前端持仓行本来就有，带上即零网络；缺省由后端补查
+    name: Optional[str] = None
 
 
 @app.post("/api/portfolio/close")
@@ -547,7 +567,8 @@ def portfolio_close(c: CloseIn, request: Request):
     except ValueError:
         raise HTTPException(400, "清仓日期格式应为 YYYY-MM-DD") from None
     try:
-        return {"data": pf.close_position(code, date, c.price, c.shares, c.cost, _portfolio_user_id(request))}
+        return {"data": pf.close_position(code, date, c.price, c.shares, c.cost,
+                                      _portfolio_user_id(request), (c.name or "").strip() or None)}
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
 

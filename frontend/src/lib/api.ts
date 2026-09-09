@@ -59,6 +59,9 @@ export async function downloadReport(id: string, name: string): Promise<void> {
 // 慢接口（AI 解读等待 LLM、RSS 全量重建、持仓重算等）在各自方法上传 SLOW_TIMEOUT_MS。
 const DEFAULT_TIMEOUT_MS = 30_000;
 const SLOW_TIMEOUT_MS = 150_000;
+// AI 解读类：命中后端快照秒回，冷生成走 LLM（数十秒）。过长超时只让
+// 「关页放弃写回 → persist 冻结在旧时点」更容易发生，45s 后回退占位更合理。
+const INSIGHT_TIMEOUT_MS = 45_000;
 
 function isTimeoutError(err: unknown): boolean {
   return err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError");
@@ -1604,24 +1607,27 @@ export const api = {
   // 30s 超时会让前端 persist 层旧值永远得不到替换（页面长期显示旧数据时点）。
   bondsOverview: (refresh = false) => get<BondsOverviewData>(`/bonds/overview${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
   allocation: (refresh = false) => get<AllocationData>(`/allocation${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
+  // AI 解读类接口命中后端快照即秒回，只有 LLM 冷生成才慢；150s 超时期间用户
+  // 关掉页面 = 写回被放弃，persist 层旧值原样留存。封顶 45s：宁可回退占位，
+  // 也不让一次冷生成把本地缓存「冻结」在旧时点。
   allocationInsight: (refresh = false) =>
-    get<AllocationInsight | null>(`/allocation/insight${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS).then((d) => d ?? null),
+    get<AllocationInsight | null>(`/allocation/insight${refresh ? "?refresh=true" : ""}`, INSIGHT_TIMEOUT_MS).then((d) => d ?? null),
   bondsFramework: (refresh = false) => get<BondsFrameworkData>(`/bonds/framework${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
   bondsCalc: (refresh = false) => get<BondsCalcData>(`/bonds/calc${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
   bondsPositioning: (refresh = false) => get<BondsPositioningData>(`/bonds/positioning${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
   bondsSegments: (refresh = false) => get<BondsSegmentsData>(`/bonds/segments${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
   bondsInsight: (refresh = false) =>
-    get<BondsInsight | null>(`/bonds/insight${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS).then((d) => d ?? null),
+    get<BondsInsight | null>(`/bonds/insight${refresh ? "?refresh=true" : ""}`, INSIGHT_TIMEOUT_MS).then((d) => d ?? null),
   goldScore: (refresh = false) => get<GoldScoreData>(`/gold/score${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
   goldInsight: (refresh = false) =>
-    get<GoldInsight | null>(`/gold/insight${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS).then((d) => d ?? null),
+    get<GoldInsight | null>(`/gold/insight${refresh ? "?refresh=true" : ""}`, INSIGHT_TIMEOUT_MS).then((d) => d ?? null),
   au0Hist: (days = 400) => get<Au0HistData>(`/gold/au0-hist?days=${days}`),
   goldSpot: () => get<GoldSpotData>("/gold/spot"),
   cnGoldSpot: () => get<CnGoldSpotData>("/gold/cn-spot"),
   paxgSpot: () => get<PaxgSpotData>("/gold/paxg"),
   oilScore: (refresh = false) => get<OilScoreData>(`/oil/score${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
   oilInsight: (refresh = false) =>
-    get<OilInsight | null>(`/oil/insight${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS).then((d) => d ?? null),
+    get<OilInsight | null>(`/oil/insight${refresh ? "?refresh=true" : ""}`, INSIGHT_TIMEOUT_MS).then((d) => d ?? null),
   oilSpot: () => get<OilSpotData>("/oil/spot"),
   brentHist: (days = 400) => get<BrentHistData>(`/oil/brent-hist?days=${days}`),
   pulseOverview: (refresh = false) => get<PulseOverview>(`/pulse/overview${refresh ? "?refresh=true" : ""}`),
@@ -1655,8 +1661,8 @@ export const api = {
     request<PortfolioData>("/portfolio/holding", "PUT", { code, shares, cost, ...(boughtDate ? { bought_date: boughtDate } : {}) }),
   refreshPortfolio: () => request<PortfolioData>("/portfolio/refresh", "POST", undefined, SLOW_TIMEOUT_MS),
   portfolioTiming: () => get<{ signals: Record<string, TimingSignal> }>("/portfolio/timing"),
-  closePosition: (code: string, date: string, price: number, shares: number, cost?: number) =>
-    request<PortfolioData>("/portfolio/close", "POST", { code, date, price, shares, ...(cost !== undefined ? { cost } : {}) }),
+  closePosition: (code: string, date: string, price: number, shares: number, cost?: number, name?: string) =>
+    request<PortfolioData>("/portfolio/close", "POST", { code, date, price, shares, ...(cost !== undefined ? { cost } : {}), ...(name ? { name } : {}) }),
   removeClosed: (index: number) => request<PortfolioData>(`/portfolio/close?index=${index}`, "DELETE"),
   valuation: (code: string, refresh = false) => get<Valuation>(`/valuation?code=${code}${refresh ? "&refresh=true" : ""}`),
   minuteKline: (code: string) => get<MinuteKline>(`/kline/minute?code=${encodeURIComponent(code)}`),

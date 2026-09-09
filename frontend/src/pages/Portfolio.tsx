@@ -239,8 +239,10 @@ export function Portfolio() {
     if (!(p > 0) || !(s > 0)) { setErr("清仓价 / 股数须大于 0"); return; }
     setClosing(true); setErr(null);
     try {
-      // 成本不传：后端用添加持仓时录入的成本计算已实现盈亏，并从当前持仓扣减股数
-      setData(await api.closePosition(c, cDate, p, s));
+      // 成本/名称不传：后端用添加持仓时录入的成本计算已实现盈亏（名称已随请求带上，
+      // 后端无需为取名再打一次行情网络请求）
+      setData(await api.closePosition(c, cDate, p, s, undefined,
+        data?.holdings.find((x) => x.code === c)?.name || data?.closed.find((x) => x.code === c)?.name));
       closeClose();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "添加清仓记录失败");

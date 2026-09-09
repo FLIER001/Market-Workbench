@@ -141,7 +141,9 @@ function loadPersisted<T>(key: string): T | null {
     const raw = localStorage.getItem(STORE_PREFIX + key);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { v: T; t?: number };
-    if (parsed.t != null && Date.now() - parsed.t > PERSIST_MAX_AGE_MS) {
+    // 旧格式（无 t）是 2026-09 前的遗留值：时点不可知，按最旧处理直接淘汰，
+    // 否则它会无限期秒显（曾导致油价页长期显示 8-14 的解读）。
+    if (parsed.t == null || Date.now() - parsed.t > PERSIST_MAX_AGE_MS) {
       localStorage.removeItem(STORE_PREFIX + key);
       return null;
     }

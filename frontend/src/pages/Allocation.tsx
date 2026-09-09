@@ -124,9 +124,10 @@ export function Allocation() {
   const load = () => { setErr(false); void revalidate(true); };
 
   // AI 解读（宏观/流动性/市场确认）：独立 SWR 持久缓存——切页面秒显，挂载后台
-  // 核对一跳（命中后端快照，不烧 LLM）；择时读数变化时跟进，按需重生成一次
+  // 核对一跳（命中后端快照，不烧 LLM）；择时读数变化时跟进，按需重生成一次。
+  // v2：v1 的 persist 值在部分浏览器冻结在旧时点，换 key 丢弃旧值（详见 Gold.tsx）。
   const { data: aiInsight, revalidating: insightLoading, revalidate: revalidateInsight } = useSWR<AllocationInsight | null>(
-    "allocation-insight:v1", (fresh) => api.allocationInsight(fresh).then((d) => d ?? null),
+    "allocation-insight:v2", (fresh) => api.allocationInsight(fresh).then((d) => d ?? null),
     [data?.timing?.score, data?.timing?.regime], undefined, { persist: true },
   );
 

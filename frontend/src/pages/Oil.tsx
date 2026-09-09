@@ -170,9 +170,11 @@ export function Oil() {
   }, []);
 
   // AI 解读（三段）：独立 SWR 持久缓存——切页面秒显，挂载后台核对一跳
-  // （命中后端快照，不烧 LLM）；评分日期变化时跟进，让后端按需重生成一次
+  // （命中后端快照，不烧 LLM）；评分日期变化时跟进，让后端按需重生成一次。
+  // v2：v1 的 persist 值在部分浏览器冻结在旧时点（写回链路未成功且无 t 戳可淘汰），
+  // 换 key 一次性丢弃旧值；配合 useSWR 新格式 7 天淘汰。
   const { data: aiInsight, revalidating: insightLoading, revalidate: revalidateInsight } = useSWR<OilInsight | null>(
-    "oil-insight:v1", (fresh) => api.oilInsight(fresh).then((d) => d ?? null), [score?.date], undefined, { persist: true },
+    "oil-insight:v2", (fresh) => api.oilInsight(fresh).then((d) => d ?? null), [score?.date], undefined, { persist: true },
   );
 
   // 手动重生成：只重调 LLM，不动评分数据

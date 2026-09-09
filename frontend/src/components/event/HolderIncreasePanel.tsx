@@ -105,7 +105,7 @@ export function HolderIncreasePanel() {
       <GlassCard className="overflow-x-auto p-0">
         {!data && loading ? (
           <div className="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-5 w-5 animate-spin" />首次拉取高管与股东增持记录…
+            <Loader2 className="h-5 w-5 animate-spin" />加载增持数据（本地有缓存会先显示上次结果，后台自动更新）…
           </div>
         ) : (
           <table className="w-full min-w-[960px] text-sm">

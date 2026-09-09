@@ -414,9 +414,10 @@ export function Bonds() {
     "bonds-segments", (fresh) => api.bondsSegments(fresh), [], undefined, { persist: true },
   );
   // AI 解读（品种优先顺序 + 逐品种解析）：独立 SWR 持久缓存——切页面秒显，
-  // 挂载后台核对一跳（命中后端快照，不烧 LLM）；手动重生成走 force 写回缓存
+  // 挂载后台核对一跳（命中后端快照，不烧 LLM）；手动重生成走 force 写回缓存。
+  // v2：v1 的 persist 值在部分浏览器冻结在旧时点，换 key 丢弃旧值（详见 Gold.tsx）。
   const { data: aiInsight, revalidating: insightLoading, revalidate: revalidateInsight } = useSWR<BondsInsight | null>(
-    "bonds-insight:v1", (fresh) => api.bondsInsight(fresh).then((d) => d ?? null), [], undefined, { persist: true },
+    "bonds-insight:v2", (fresh) => api.bondsInsight(fresh).then((d) => d ?? null), [], undefined, { persist: true },
   );
   const refreshing = revalidating || fwRefreshing || segRefreshing;
   const refresh = async () => {
