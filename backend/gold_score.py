@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo
 from xml.etree import ElementTree
 
 import ai_insight
+import cache_runtime
 import market
 
 BEIJING = timezone(timedelta(hours=8))
@@ -42,6 +43,15 @@ _ETF_VINTAGE_DIR = os.path.join(os.path.dirname(_SNAPSHOT), "gold_etf_vintages")
 _WGC_REFERENCE_SNAPSHOT = os.path.join(os.path.dirname(_SNAPSHOT), "gold_wgc_reference_v3.json")
 
 _GOLD_SERIES_TTL = 6 * 3600          # 外部日/周频序列 6h 内 0 外呼
+
+# payload 结构版本。只用于「关键字段能力探测」的降级判断，
+# 不再作为快照可用性的硬门槛（见 _load_gold_snapshot）。
+_SCHEMA_VERSION = 3
+# 历史序列下发点数上限。这些序列只喂前端 Sparkline，渲染宽度数百 px，
+# 500 点/指标纯属过采样：抽稀到 200 点后 payload 约 180KB → 60KB。
+# 而前端持久化层按 UTF-16 计费（180KB ≈ 360KB 配额占用），
+# payload 体积直接决定它能否写进 localStorage 配额。
+_HIST_MAX_POINTS = 200
 _TREASURY_REAL_YIELD = (
     "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml"
     "?data=daily_treasury_real_yield_curve&field_tdr_date_value={year}"
@@ -1129,6 +1139,22 @@ def _etf_surprise_signal(etf: list[tuple[str, float]],
     return _rolling_residuals(pairs)
 
 
+def _thin(points: list[dict], limit: int = _HIST_MAX_POINTS) -> list[dict]:
+    """点数超过 limit 时均匀抽稀，保留首尾与时点跨度。
+
+    这些序列仅供前端 Sparkline 作图，像素宽度远小于点数，抽稀不损失可读性；
+    但能把 payload 压掉约 2/3 —— 前端持久化层按 UTF-16 计费，体积直接
+    关系到 localStorage 配额能否写下（写不下就退回「每次打开都冷启动」）。
+    """
+    n = len(points)
+    if n <= limit or limit < 2:
+        return points
+    step = n / limit
+    out = [points[min(int(i * step), n - 1)] for i in range(limit)]
+    out[-1] = points[-1]        # 末点代表「最新」，必须保留
+    return out
+
+
 def _mk_indicator(key, hist, score, signal_val, note="", unit_hist=""):
     label, dim, weight, fmt = _META[key]
     latest = hist[-1] if hist else (None, None)
@@ -1141,7 +1167,7 @@ def _mk_indicator(key, hist, score, signal_val, note="", unit_hist=""):
         "chg": chg, "date": latest[0],
         "score": round(score, 1) if score is not None else None,
         "signal": round(signal_val, 4) if signal_val is not None else None,
-        "hist": [{"date": d, "v": round(v, 3)} for d, v in hist[-500:]],
+        "hist": _thin([{"date": d, "v": round(v, 3)} for d, v in hist[-500:]]),
         "note": note,
     }
 
@@ -1256,9 +1282,21 @@ async def get_ai_insight(force: bool = False) -> dict[str, str] | str:
     )
 
 
+# 快照兜底所需的最小字段集：只要这些在，就够渲染出一版可用的页面。
+_SNAPSHOT_REQUIRED = ("indicators", "dimensions", "source_status")
+
+
 def _load_gold_snapshot():
-    d = market._load_json(_SNAPSHOT)
-    return d if isinstance(d, dict) and d.get("schema_version") == 3 and d.get("indicators") else None
+    """冷启动兜底：关键字段齐全就先用起来，不要求 schema_version 严格相等。
+
+    旧写法用 `schema_version == 3` 做相等判断，等于把「快照可用」绑死在 payload
+    结构不变上：任何一次结构演进都会让整张快照被判废，cache_runtime 随即走
+    「无可用值 → 同步重建」分支，进程重启后首个请求要干等一次全量冷建
+    （实测 50s，前端整段显示「首次计算中」）。统一走 cache_runtime.usable_snapshot
+    的能力探测，结构演进只降级为兜底骨架（打 degraded 标记）而非作废。
+    """
+    return cache_runtime.usable_snapshot(
+        market._load_json(_SNAPSHOT), _SNAPSHOT_REQUIRED, schema_version=_SCHEMA_VERSION)
 
 
 def _build() -> dict:
@@ -1492,6 +1530,7 @@ def _build() -> dict:
     current_date = wall_date
     if total is not None:
         _append_current_score(total_hist, wall_date, total)
+    total_hist = _thin(total_hist)      # 均匀抽稀，保住「近 1 年」跨度，只减顶点
     dims: dict[str, dict] = {}
     for name, parts in _DIM_PARTS.items():
         got = [(scored_keys[k]["score"], scored_keys[k]["effective_weight"])
@@ -1504,7 +1543,7 @@ def _build() -> dict:
                                         {k: scored_keys[k]["effective_weight"] for k, _ in parts if k in scored_keys})
         _append_current_score(hist, wall_date, score)
         dims[name] = {"score": score, "weight": _DIM_WEIGHT[name],
-                      "effective_weight": round(w, 4), "hist": hist}
+                      "effective_weight": round(w, 4), "hist": _thin(hist)}
 
     # 主要贡献
     pos = [i["label"] for i in sorted(scored, key=lambda x: -x["score"]) if i["score"] >= 60][:3]
@@ -1540,7 +1579,7 @@ def _build() -> dict:
     quality.extend(notes)
     stale_times = [s["fetched_at"] for s in stale_sources if s.get("fetched_at")]
     payload = {
-        "schema_version": 3,
+        "schema_version": _SCHEMA_VERSION,
         "date": current_date,
         "gold_score": total,
         "hist": total_hist,

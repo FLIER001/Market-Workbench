@@ -996,10 +996,11 @@ def _load_cache() -> dict | None:
         try:
             with open(path, encoding="utf-8") as handle:
                 data = json.load(handle)
-            if data.get("schema_version") == _SCHEMA_VERSION:
-                candidates.append(data)
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             continue
+        usable = cache_runtime.usable_snapshot(data, ("industries",), schema_version=_SCHEMA_VERSION)
+        if usable:
+            candidates.append(usable)
     if not candidates:
         return None
     return max(candidates, key=lambda item: str(item.get("generated_at") or ""))

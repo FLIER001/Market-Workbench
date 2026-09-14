@@ -11,6 +11,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { ColdStartNotice, TableSkeleton } from "@/components/ui/PageSkeleton";
 import {
   api,
   type SectorScoreRow,
@@ -395,10 +396,14 @@ export function SectorScoresPanel() {
       )}
 
       {loading && !data ? (
-        <GlassCard className="py-16 text-center">
-          <RefreshCw className="mx-auto h-5 w-5 animate-spin text-primary" />
-          <p className="mt-3 text-sm text-muted-foreground">正在读取申万月度历史与最新交易日数据…</p>
-        </GlassCard>
+        <div>
+          <ColdStartNotice
+            title="首次计算中"
+            detail="正在读取申万一级行业月度历史与最新交易日数据并计算状态 / 锚分，仅首次需要。"
+            hint="算完会写入本地快照；之后打开先显示缓存，再后台静默刷新。"
+          />
+          <TableSkeleton rows={10} columns={6} />
+        </div>
       ) : data ? (
         <>
           {loading && (

@@ -156,9 +156,69 @@ function loadPersisted<T>(key: string): T | null {
 function writeCache<T>(key: string, v: T, persist?: boolean) {
   const cache = (useSWR as unknown as { _c?: Map<string, unknown> })._c;
   cache?.set(key, v);
-  if (persist) {
-    try { localStorage.setItem(STORE_PREFIX + key, JSON.stringify({ v, t: Date.now() })); } catch { /* 配额满 / 隐私模式：跳过持久化 */ }
+  if (!persist) return;
+  const slot = STORE_PREFIX + key;
+  const serialized = safeStringify({ v, t: Date.now() });
+  if (serialized == null) return;
+  if (putPersisted(slot, serialized)) return;
+  // 配额满：淘汰最旧的一批 persist 项后重试一次。仍失败说明不是配额问题
+  // （隐私模式 / storage 被禁用），记一笔便于排查——不再静默。
+  evictOldestPersisted(slot);
+  if (putPersisted(slot, serialized)) return;
+  warnPersistFailure(key);
+}
+
+// 配额是持久化层唯一真实的失效原因：全站 20+ 处 persist 共用同一个 ~5MB 池
+// （localStorage 按 UTF-16 计费，黄金单页 180KB payload 就吃掉约 360KB）。
+// 旧写法在 catch 里静默吞掉 QuotaExceededError，一旦写不进去就「永久」失效——
+// 现象正是「每次硬刷新都退回首次计算」，而且没有任何可观测信号。
+const persistWarned = new Set<string>();
+
+function safeStringify(value: unknown): string | null {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return null;
   }
+}
+
+function putPersisted(slot: string, serialized: string): boolean {
+  try {
+    localStorage.setItem(slot, serialized);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 按写入时间淘汰最旧的 25% persist 项（保留当前这次要写的 key）。 */
+function evictOldestPersisted(protectSlot: string): void {
+  try {
+    const entries: { slot: string; t: number }[] = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const slot = localStorage.key(i);
+      if (!slot || !slot.startsWith(STORE_PREFIX) || slot === protectSlot) continue;
+      let t = 0;
+      const raw = localStorage.getItem(slot);
+      if (raw) t = (JSON.parse(raw) as { t?: number }).t ?? 0;
+      entries.push({ slot, t });
+    }
+    entries.sort((a, b) => a.t - b.t);
+    for (const e of entries.slice(0, Math.max(1, Math.ceil(entries.length * 0.25)))) {
+      localStorage.removeItem(e.slot);
+    }
+  } catch {
+    /* storage 不可用：无物可淘汰 */
+  }
+}
+
+function warnPersistFailure(key: string): void {
+  if (persistWarned.has(key)) return;   // 轮询场景下只提示一次，避免刷屏
+  persistWarned.add(key);
+  console.warn(
+    `[swr] 持久化写入失败（配额满或 storage 被禁用）：${key}。` +
+    "该 key 将退化为每次访问都重新拉取后端。",
+  );
 }
 
 function clearPersisted(key: string) {

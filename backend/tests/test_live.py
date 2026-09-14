@@ -134,3 +134,42 @@ def test_wgc_real_gold_reference_shape():
     assert all(len(rows.get(key, [])) >= 200 for key in (
         "lbma_am_usd", "lbma_pm_usd", "sge_pm_cny"
     ))
+
+
+@pytest.mark.live
+def test_holder_increase_pipeline_shape():
+    """增持模块：两个东财数据集 + 公告正文解析的字段形状（升级后核对上游没变）。
+
+    断言偏形状：日期一律 YYYY-MM-DD（带年份），且"最新增持日期"确实取实际买入日
+    （股东类成交日/区间截止日）而非公告日——上游哪天不再给 TRADE_DATE，这条会先亮。
+    """
+    import re
+    from datetime import datetime
+    import holder_increase as hi
+
+    today = datetime.now(hi.BEIJING).date()
+    records = hi._dedup(hi._fetch_exec_increase(today) + hi._fetch_holder_increase(today))
+    assert records, "增持记录为空（可能被东财风控限流）"
+
+    required = {"code", "person", "tier", "amount", "shares", "activity_date",
+                "buy_date", "trade_date", "start_date", "end_date", "ongoing", "source"}
+    assert required <= set(records[0])
+    assert {r["source"] for r in records} <= {"exec", "holder"}
+    for r in records[:80]:
+        for field in ("activity_date", "buy_date"):
+            assert re.match(r"^\d{4}-\d{2}-\d{2}$", r[field]), (field, r[field])
+        for field in ("start_date", "end_date", "trade_date", "notice_date"):
+            value = r[field]
+            assert value in (None, "") or re.match(r"^\d{4}-\d{2}-\d{2}$", value), (field, value)
+
+    # 股东类：至少一条记录的买入日早于公告日（证明用的是成交日口径而非公告日）
+    dated = [r for r in records if r["source"] == "holder" and r["notice_date"] and r["trade_date"]]
+    assert any(r["buy_date"] < r["notice_date"] for r in dated), "成交日口径未生效（上游字段可能变了）"
+
+    # 计划公告正文：可解析出窗口字段（无计划公告的股票合法返回 None）
+    plan, links = hi._fetch_stock_anns(records[0]["code"], today)
+    assert isinstance(links, list)
+    if plan:
+        assert {"title", "notice_date", "start_date", "end_date", "window_parsed", "done"} <= set(plan)
+        assert plan["window_parsed"] is False or plan["end_date"] >= plan["notice_date"]
+        assert plan["start_date"] and plan["notice_url"].startswith("https://")

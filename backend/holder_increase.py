@@ -17,6 +17,21 @@
   已达成计划下限、已过计划期限且期限后无增持、或近期披露实施完毕。计划来自
   个股公告标题+正文解析（最近活跃优先，数量封顶），解析不到就不做排除。
 
+展示口径（页面列）：
+- 计划开始日期 / 计划结束日期 / 计划增持金额：来自增持计划公告正文解析。
+  窗口按「显式区间 → 自X日起N个月 → 自公告披露之日起N个月 → 期限N个月 →
+  单点结束日」依次尝试，均校验「结束日不早于公告日」，避免把正文里"截至某
+  历史日期持股…"错当成计划期限；正文完全没写起止日时，开始日按计划公告日
+  推定（plan.window_parsed=false，页面以虚线弱化标注）。
+- 最新增持日期：该股最近一笔增持的实际买入日（股东类取披露的交易截止日，
+  高管类取持股变动日；公告日只作兜底）。
+- 已增持金额：有计划时=计划开始日之后的增持金额合计（回看期之前的部分数据
+  层拿不到，此时 amount_done_partial=true，页面显示"≥"）；无计划时=窗口内
+  合计。计划增持金额只取公告写明的下限（"不低于/不少于"，"（含）"同样视作
+  下限），上限不作为达成依据。
+- 所有日期一律 YYYY-MM-DD（页面渲染为 YYYY/MM/DD），不带年份的残缺日期不进入
+  数据层（_d/_iso 统一校验）。
+
 缓存：原始记录+计划一份 last-good（TTL 30 分钟，快照落盘；计划缓存随原始层
 一起在后台重拉时刷新），窗口聚合每请求即时计算（纯内存、毫秒级），评分在
 同一窗口内按股票聚合。只呈现公开披露事实与透明评分，不做任何买卖建议。
@@ -36,15 +51,18 @@ import cache_runtime
 
 BEIJING = timezone(timedelta(hours=8))
 DATA_DIR = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
-SNAPSHOT = "holder_increase_raw.json"
-RAW_KEY = "holder_increase:raw"
+# v2：记录层新增 buy_date（最新增持日期口径）、计划层改为 start_date/end_date，
+# 旧快照结构不兼容，换 key/文件名让旧快照自然失效（不删旧文件）。
+SNAPSHOT = "holder_increase_raw_v2.json"
+RAW_KEY = "holder_increase:raw:v2"
 
 WINDOWS = {"1d": 1, "7d": 7, "30d": 30}  # all = 进行中，不按天数
 PAGE_SIZE = 500
 LOOKBACK_DAYS = 35        # 覆盖 30 日窗口留余量
 MAX_PAGES_EXEC = 24       # 高管明细量大（全市场日级变动），翻页封顶防拖死
 MAX_PAGES_HOLDER = 8
-MAX_PLAN_FETCH = 40       # 单次重建最多解析 N 只候选股的公告计划（按最近活跃优先）
+MAX_PLAN_FETCH = 90       # 单次重建最多解析 N 只候选股的公告计划（按最近活跃优先）
+PLAN_FETCH_BUDGET = 45.0  # 秒：取计划超预算即停，宁可少几行计划信息也不拖慢整体重拉
 
 # 身份分层权重（评分之身份分，0-40）。实控人/董事长信号最强，亲属弱于本人。
 TIER_WEIGHT = {"chairman": 40, "exec": 30, "big_holder": 25, "relative": 20, "holder": 15}
@@ -52,6 +70,22 @@ BIG_HOLDER_RATIO = 5.0    # HOLD_RATIO ≥ 5% 视作大股东
 
 ANN_LIST_URL = "https://np-anotice-stock.eastmoney.com/api/security/ann"
 ANN_CONTENT_URL = "https://np-cnotice-stock.eastmoney.com/api/content/ann"
+
+# 数据来源清单（随接口返回，页面「数据来源」区逐项展示；每条落到具体数据集/端点）
+SOURCES = [
+    {"key": "exec", "label": "高管持股变动明细", "dataset": "RPT_EXECUTIVE_HOLD_DETAILS",
+     "provider": "东方财富数据中心", "url": "https://data.eastmoney.com/executive/",
+     "fields": "增持人、职务、与董监高关系、股数、均价、金额、变动日",
+     "origin": "沪深北交易所董监高持股变动披露"},
+    {"key": "holder", "label": "股东增减持", "dataset": "RPT_SHARE_HOLDER_INCREASE",
+     "provider": "东方财富数据中心", "url": "https://data.eastmoney.com/gdzjc/",
+     "fields": "股东名称、增持股数、均价、金额、增持区间、持股比例、公告日",
+     "origin": "交易所股东持股变动披露（权益变动/增持公告）"},
+    {"key": "plan", "label": "增持计划公告（标题+正文解析）", "dataset": "np-anotice-stock / np-cnotice-stock",
+     "provider": "东方财富公告中心", "url": "https://data.eastmoney.com/notices/",
+     "fields": "计划开始日期、计划结束日期、计划增持金额下限",
+     "origin": "上市公司公告原文（沪深北交易所披露）"},
+]
 
 
 def _snapshot_path() -> str:
@@ -92,7 +126,21 @@ def _f(v) -> float | None:
 
 
 def _d(v) -> str:
-    return str(v or "")[:10]
+    """源数据日期 → YYYY-MM-DD。残缺/非法日期返回空串（页面显示"—"），
+    避免出现"12-09"这类丢年份的值。"""
+    text = str(v or "").strip().replace("/", "-")
+    m = re.match(r"(\d{4})-(\d{1,2})-(\d{1,2})", text)
+    if not m:
+        return ""
+    return _iso(m.group(1), m.group(2), m.group(3))
+
+
+def _iso(year, month, day) -> str:
+    """(年, 月, 日) → YYYY-MM-DD；非法返回空串。"""
+    try:
+        return date(int(year), int(month), int(day)).isoformat()
+    except (TypeError, ValueError):
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +200,8 @@ def _fetch_exec_increase(today: date) -> list[dict]:
             "shares": round(shares, 0),
             "price": price or None,
             "activity_date": _d(r.get("CHANGE_DATE")),
+            "trade_date": "",
+            "buy_date": _d(r.get("CHANGE_DATE")),   # 最新增持日期口径：实际变动日
             "notice_date": "",
             "start_date": None, "end_date": None,
             "ratio_pct": _f(r.get("CHANGE_RATIO")) or 0,
@@ -186,6 +236,7 @@ def _fetch_holder_increase(today: date) -> list[dict]:
         price = _f(r.get("TRADE_AVERAGE_PRICE")) or _f(r.get("REAL_PRICE")) or _f(r.get("CLOSE_PRICE")) or 0
         hold_ratio = _f(r.get("HOLD_RATIO")) or 0
         start, end = _d(r.get("START_DATE")), _d(r.get("END_DATE"))
+        trade = _d(r.get("TRADE_DATE"))
         notice = _d(r.get("NOTICE_DATE"))
         end_date = end or None
         is_ongoing = bool(end_date and end_date >= today.isoformat())
@@ -198,7 +249,10 @@ def _fetch_holder_increase(today: date) -> list[dict]:
             "amount": round(shares * price, 0),
             "shares": round(shares, 0),
             "price": price or None,
-            "activity_date": notice or _d(r.get("TRADE_DATE")),
+            "activity_date": notice or trade,
+            # 最新增持日期口径：实际买入日（交易截止日/成交日）优先，公告日兜底
+            "trade_date": trade,
+            "buy_date": trade or end or notice,
             "notice_date": notice,
             "start_date": start or None, "end_date": end_date,
             "ratio_pct": _f(r.get("CHANGE_RATE")) or _f(r.get("CHANGE_FREE_RATIO")) or 0,
@@ -224,8 +278,19 @@ def _dedup(rows: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# 增持计划解析（公告标题筛选 + 正文提取计划金额下限/期限；best-effort）
+# 增持计划解析（公告标题筛选 + 正文提取计划起止日/金额下限；best-effort）
 # ---------------------------------------------------------------------------
+
+_CN_DIGIT = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+             "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+_DATE1 = r"(?P<y1>\d{4})\s*年\s*(?P<m1>\d{1,2})\s*月\s*(?P<d1>\d{1,2})\s*日"
+_DATE2 = r"(?P<y2>\d{4})\s*年\s*(?P<m2>\d{1,2})\s*月\s*(?P<d2>\d{1,2})\s*日"
+_RANGE_SEP = r"\s*(?:起)?\s*(?:至|到|~|～|—|－|–)\s*(?:不超过)?\s*"
+_DUR_NUM = r"(?P<num>\d{1,3}|[一二三四五六七八九十两]{1,3})"
+_DUR_UNIT = r"\s*(?:个)?\s*(?P<unit>月|年)"
+# 计划窗口句里出现这些词说明讲的是别的事（锁定期/不减持承诺/前次计划期满）
+_NOT_PLAN = re.compile(r"减持|锁定|不得转让|期满|不主动")
+
 
 def _add_months(iso_date: str, months: int) -> str | None:
     try:
@@ -238,36 +303,136 @@ def _add_months(iso_date: str, months: int) -> str | None:
     return date(year, month, day).isoformat()
 
 
-def _parse_plan_amount(text: str) -> tuple[float, str] | None:
-    """正文里"不低于/不少于 X 亿元(万元)" → (元, 展示文案)。只要下限，上限不作达成依据。"""
-    if not text:
+def _cn_int(value: str) -> int | None:
+    """'6' / '六' / '十二' / '十八' → 整数。"""
+    text = (value or "").strip()
+    if text.isdigit():
+        return int(text)
+    if "十" in text:
+        tens, _, ones = text.partition("十")
+        return (_CN_DIGIT.get(tens, 1) if tens else 1) * 10 + (_CN_DIGIT.get(ones, 0) if ones else 0)
+    return _CN_DIGIT.get(text)
+
+
+def _months_of(value: str, unit: str) -> int | None:
+    """期限数值 → 月数（'六'个月→6，'1'年→12）。"""
+    count = _cn_int(value)
+    if not count or count <= 0:
         return None
-    m = re.search(r"(?:不低于|不少于)\s*(?:人民币)?\s*([\d,，]+(?:\.\d+)?)\s*(亿|万)\s*元", text)
+    return count * 12 if unit == "年" else count
+
+
+def _parse_plan_window(text: str, notice_date: str) -> tuple[str, str]:
+    """公告正文 → (计划开始日, 计划结束日)，取不到给空串。
+
+    依次尝试：显式起止区间 / 自(于)X年X月X日起N个月 / 自(本公告披露、首次增持等)
+    之日起N个月 / 实施期限N个月 / 单点结束日。所有候选都要求【结束日不早于公告日】，
+    以排除正文里"截至X年X月X日持股…"这类与计划期限无关的历史日期；多个候选时取
+    起点最贴近公告日的一条（老计划的续做公告常把前次计划一并写进正文）。
+    """
+    raw = re.sub(r"\s+", "", text or "")
+    if not raw or not notice_date:
+        return "", ""
+    notice = date.fromisoformat(notice_date)
+
+    def _window(start: str, months: int) -> tuple[str, str] | None:
+        end = _add_months(start, months)
+        return (start, end) if end else None
+
+    # 1) 显式起止区间（"本次增持计划实施期间2026年7月20日～2027年1月19日"）
+    ranged: list[tuple[int, str, str]] = []
+    for m in re.finditer(_DATE1 + _RANGE_SEP + _DATE2, raw):
+        start, end = _iso(m.group("y1"), m.group("m1"), m.group("d1")), \
+            _iso(m.group("y2"), m.group("m2"), m.group("d2"))
+        if not start or not end or end < start:
+            continue
+        around = raw[max(0, m.start() - 16):m.end() + 16]
+        if _NOT_PLAN.search(around) and "增持" not in around:
+            continue
+        if not re.search(r"增持|计划|期限|期间|实施", around):
+            continue
+        if end < notice_date or (notice - date.fromisoformat(start)).days > 400:
+            continue
+        ranged.append((abs((date.fromisoformat(start) - notice).days), start, end))
+    if ranged:
+        ranged.sort()
+        return ranged[0][1], ranged[0][2]
+
+    # 2) 自 / 于 / 从 X年X月X日起 N 个月（含中文数字与"起"后的"的"）
+    dated: list[tuple[int, str, str]] = []
+    for m in re.finditer(
+            r"(?:自|于|从)" + _DATE1 + r"\s*起[^。；]{0,12}?" + _DUR_NUM + _DUR_UNIT, raw):
+        span = m.group(0)
+        if _NOT_PLAN.search(span):
+            continue
+        months = _months_of(m.group("num"), m.group("unit"))
+        start = _iso(m.group("y1"), m.group("m1"), m.group("d1"))
+        if not start or not months:
+            continue
+        pair = _window(start, months)
+        if not pair or pair[1] < notice_date:
+            continue
+        if abs((date.fromisoformat(start) - notice).days) > 400:
+            continue
+        dated.append((abs((date.fromisoformat(start) - notice).days), pair[0], pair[1]))
+    if dated:
+        dated.sort()
+        return dated[0][1], dated[0][2]
+
+    # 3) 自（本公告披露 / 首次增持 / 计划公告）之日起 N 个月 → 起点=公告日
+    for m in re.finditer(r"自[^。；]{0,16}?之?起[^。；]{0,6}?" + _DUR_NUM + _DUR_UNIT, raw):
+        span = m.group(0)
+        if _NOT_PLAN.search(span):
+            continue
+        months = _months_of(m.group("num"), m.group("unit"))
+        pair = _window(notice_date, months) if months else None
+        if pair:
+            return pair
+
+    # 4) 实施期限 / 增持期限 … N 个月
+    for m in re.finditer(r"(?:实施期|增持期|计划期)[限间][^。；]{0,16}?" + _DUR_NUM + _DUR_UNIT, raw):
+        span = m.group(0)
+        if _NOT_PLAN.search(span):
+            continue
+        months = _months_of(m.group("num"), m.group("unit"))
+        pair = _window(notice_date, months) if months else None
+        if pair:
+            return pair
+
+    # 5) 单点结束日（"至2026年12月8日止"）
+    for m in re.finditer(r"(?:至|到|截至|截止于|截止|期限至)" + _DATE1 + r"(?:前|止|之前)?", raw):
+        end = _iso(m.group("y1"), m.group("m1"), m.group("d1"))
+        if end and end >= notice_date:
+            return notice_date, end
+    return "", ""
+
+
+_AMT_UNIT = r"(?:人民币)?\s*(?P<num>[\d,，]+(?:\.\d+)?)\s*(?P<unit>亿|万)\s*元"
+
+
+def _parse_plan_amount(text: str) -> tuple[float, str] | None:
+    """正文里计划增持金额的【下限】 → (元, 展示文案)。
+
+    覆盖"不低于/不少于/至少 X亿元"、"合计增持金额人民币1.5亿元（含）"等写法；
+    只取下限——"不超过/上限"不作达成依据，"（含）"视作下限。
+    """
+    raw = re.sub(r"\s+", "", text or "")
+    if not raw:
+        return None
+    m = (re.search(r"(?:不低于|不少于|至少)" + _AMT_UNIT, raw)
+         or re.search(r"增持(?:总)?金额(?:合计)?(?:为|不低于|不少于)?" + _AMT_UNIT + r"[（(]含[）)]", raw))
     if not m:
         return None
-    value = float(m.group(1).replace(",", "").replace("，", ""))
-    unit = 1e8 if m.group(2) == "亿" else 1e4
-    return value * unit, f"≥{m.group(1)}{m.group(2)}元"
-
-
-def _parse_plan_deadline(text: str, notice_date: str) -> str | None:
-    if text:
-        m = (re.search(r"(?:至|到|截至|截止(?:于)?)[^。；\n]{0,10}?(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:前|止)?", text)
-             or re.search(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:前|止)", text))
-        if m:
-            try:
-                return date(int(m.group(1)), int(m.group(2)), int(m.group(3))).isoformat()
-            except ValueError:
-                pass
-        m = re.search(r"(\d+)\s*个月", text)
-        if m and notice_date:
-            return _add_months(notice_date, int(m.group(1)))
-    return None
+    value = float(m.group("num").replace(",", "").replace("，", ""))
+    unit = 1e8 if m.group("unit") == "亿" else 1e4
+    return value * unit, f"≥{m.group('num')}{m.group('unit')}元"
 
 
 def _is_plan_title(title: str) -> bool:
-    return bool(re.search(r"增持", title or "")) and bool(re.search(r"计划|拟", title or "")) \
-        and not re.search(r"进展|完成|完毕|结果", title or "")
+    """计划【设立】公告（排除进展/结果/时间过半等后续披露）。"""
+    text = title or ""
+    return bool(re.search(r"增持", text)) and bool(re.search(r"计划|拟", text)) \
+        and not re.search(r"进展|完成|完毕|结果|过半|取消|终止|延期|更正|补充|澄清|实施情况", text)
 
 
 def _is_done_title(title: str) -> bool:
@@ -307,11 +472,13 @@ def _fetch_stock_anns(code: str, today: date) -> tuple[dict | None, list[dict]]:
     spec = next((a for a in anns if _is_plan_title(a.get("title") or "")), None)
     if not spec and not recent_done:
         return None, links
-    plan: dict = {"title": "", "notice_date": "", "amount": None, "amount_label": "",
-                  "deadline": None, "done": recent_done}
+    plan: dict = {"title": "", "notice_date": "", "notice_url": "",
+                  "start_date": "", "end_date": "", "window_parsed": False,
+                  "amount": None, "amount_label": "", "done": recent_done}
     if spec:
         plan["title"] = spec.get("title") or ""
         plan["notice_date"] = _d(spec.get("notice_date"))
+        plan["notice_url"] = f"https://data.eastmoney.com/notices/detail/{code}/{spec.get('art_code')}.html"
         try:
             body_r = requests.get(
                 ANN_CONTENT_URL,
@@ -323,7 +490,12 @@ def _fetch_stock_anns(code: str, today: date) -> tuple[dict | None, list[dict]]:
         parsed = _parse_plan_amount(body)
         if parsed:
             plan["amount"], plan["amount_label"] = parsed
-        plan["deadline"] = _parse_plan_deadline(body, plan["notice_date"])
+        start, end = _parse_plan_window(body, plan["notice_date"])
+        plan["start_date"], plan["end_date"] = start, end
+        plan["window_parsed"] = bool(start or end)
+    if not plan["start_date"]:
+        # 正文没写明确起始日 → 按计划公告日推定（页面以虚线弱化标注）
+        plan["start_date"] = plan["notice_date"]
     return plan, links
 
 
@@ -342,8 +514,8 @@ def _plan_ended(plan: dict | None, cum_amount: float, last_buy: str, today: date
     today_iso = today.isoformat()
     if plan.get("done"):
         return True
-    deadline = plan.get("deadline")
-    if deadline and today_iso > deadline and last_buy <= deadline:
+    end_date = plan.get("end_date")
+    if end_date and today_iso > end_date and (not last_buy or last_buy <= end_date):
         return True   # 已过期限且期限后再无增持
     amount = plan.get("amount")
     if amount and cum_amount >= amount:
@@ -391,7 +563,7 @@ def _score(rows: list[dict], today: date) -> tuple[int, dict]:
     if any(r["ongoing"] for r in rows):
         recency = 10
     else:
-        latest = max(r["activity_date"] for r in rows)
+        latest = max(_buy_date(r) for r in rows)
         days = (today - date.fromisoformat(latest)).days
         recency = 8 if days <= 1 else 6 if days <= 3 else 3 if days <= 7 else 1
     score = identity + amount + ratio + count + recency
@@ -403,6 +575,12 @@ def _grade(score: int) -> str:
     return "strong" if score >= 70 else "watch" if score >= 55 else "normal"
 
 
+def _buy_date(r: dict) -> str:
+    """最新增持日期口径：实际买入日（股东类=披露区间截止/成交日，高管类=变动日），
+    兼容旧快照缺字段时退回披露日。"""
+    return r.get("buy_date") or r.get("activity_date") or ""
+
+
 def _anchor_date(r: dict) -> str:
     """窗口筛选锚点：增持开始日（区间起点）优先，无区间则用首次披露日。"""
     return r["start_date"] or r["activity_date"]
@@ -411,7 +589,7 @@ def _anchor_date(r: dict) -> str:
 def _period_text(rows: list[dict]) -> str:
     """区间展示取披露的 START~END。数据集混着两种行：批次行（触刻度披露的
     实际买入区间）与累计行（整轮增持一条，起点≈计划/窗口起点、金额累计）。
-    跨年区间带全年份，避免"12-09 ~ 08-22"式的年份歧义。"""
+    所有日期统一带全年份，避免"12-09 ~ 08-22"式的年份歧义。"""
     starts = [r["start_date"] for r in rows if r["start_date"]]
     ends = [r["end_date"] for r in rows if r["end_date"]]
     fmt = lambda d: d.replace("-", "/")  # noqa: E731
@@ -419,11 +597,9 @@ def _period_text(rows: list[dict]) -> str:
         lo = min(starts) if starts else None
         hi = max(ends) if ends else None
         if lo and hi:
-            if lo[:4] != hi[:4]:
-                return f"{fmt(lo)} ~ {fmt(hi)}"
-            return f"{fmt(lo)[5:]} ~ {fmt(hi)[5:]}" if lo != hi else fmt(lo)[5:]
-        return fmt(lo or hi)[5:] if (lo or hi)[:4] == str(datetime.now(BEIJING).year) else fmt(lo or hi)
-    return max(r["activity_date"] for r in rows)[5:].replace("-", "/")
+            return f"{fmt(lo)} ~ {fmt(hi)}" if lo != hi else fmt(lo)
+        return fmt(lo or hi)
+    return fmt(max(_buy_date(r) for r in rows))
 
 
 def _is_cumulative(rows: list[dict]) -> bool:
@@ -451,10 +627,10 @@ def _aggregate(records: list[dict], window: str, plans: dict | None = None,
             rows_of_code = [r for r in records if r["code"] == code]
             plan = plans.get(code)
             if _plan_active(plan, today):
-                notice = (plan.get("notice_date") or "") if plan else ""
+                start = (plan.get("start_date") or plan.get("notice_date") or "") if plan else ""
                 cum = sum(r["amount"] or 0 for r in rows_of_code
-                          if not notice or r["activity_date"] >= notice)
-                last_buy = max(r["activity_date"] for r in rows_of_code)
+                          if not start or r["buy_date"] >= start)
+                last_buy = max((r["buy_date"] for r in rows_of_code if r["buy_date"]), default="")
                 if _plan_ended(plan, cum, last_buy, today):
                     continue
             picked.add(code)
@@ -469,23 +645,32 @@ def _aggregate(records: list[dict], window: str, plans: dict | None = None,
         if not r["code"]:
             continue
         groups.setdefault(r["code"], []).append(r)
+    lookback_start = (today - timedelta(days=LOOKBACK_DAYS)).isoformat()
     out: list[dict] = []
     for code, rows in groups.items():
-        rows.sort(key=lambda x: x["activity_date"], reverse=True)
+        rows.sort(key=lambda x: (x["buy_date"] or x["activity_date"]), reverse=True)
         rows = [{**r, "url": _match_ann(anns.get(code) or [], r)} for r in rows]
         best = min(rows, key=lambda x: -TIER_WEIGHT[x["tier"]])
         score, breakdown = _score(rows, today)
+        plan = plans.get(code)
+        # 已增持金额：有计划按计划开始日之后累计（起始日早于回看期时金额不完整 →
+        # amount_done_partial，页面显示"≥"）；无计划即窗口内合计。
+        start = (plan.get("start_date") or "") if plan else ""
+        done_rows = [r for r in rows if not start or (r["buy_date"] or r["activity_date"]) >= start]
+        amount_done = sum(r["amount"] or 0 for r in done_rows) if done_rows else 0
         out.append({
             "code": code, "name": rows[0]["name"] or code,
             "score": score, "grade": _grade(score), "breakdown": breakdown,
             "tier": best["tier"], "identity": best["identity"],
             "people": len({r["person"] for r in rows}), "count": len(rows),
             "total_amount": sum(r["amount"] or 0 for r in rows),
-            "latest_date": rows[0]["activity_date"],
+            "amount_done": amount_done,
+            "amount_done_partial": bool(start and start < lookback_start),
+            "latest_date": max((r["buy_date"] or r["activity_date"]) for r in rows),
             "period": _period_text(rows),
             "cumulative": _is_cumulative(rows),
             "ongoing": any(r["ongoing"] for r in rows),
-            "plan": plans.get(code),
+            "plan": plan,
             "records": rows[:12],
         })
     out.sort(key=lambda x: x["latest_date"], reverse=True)  # 先按新近度，稳定排序保证同分内日期优先
@@ -500,8 +685,8 @@ def _plan_active(plan: dict | None, today: date) -> bool:
         return False
     if plan.get("done"):
         return True
-    deadline = plan.get("deadline")
-    if deadline and deadline >= today.isoformat():
+    end_date = plan.get("end_date")
+    if end_date and end_date >= today.isoformat():
         return True
     notice = plan.get("notice_date") or ""
     return bool(notice) and notice >= (today - timedelta(days=200)).isoformat()
@@ -539,11 +724,16 @@ def _build_raw() -> dict:
     # 计划解析量有限，优先覆盖最近仍有增持的股票
     ordered = sorted(
         candidates,
-        key=lambda c: max((r["activity_date"] for r in records if r["code"] == c), default=""),
+        key=lambda c: max((_buy_date(r) for r in records if r["code"] == c), default=""),
         reverse=True)
     plans: dict[str, dict] = {}
     anns: dict[str, list[dict]] = {}
+    # 计划覆盖越全，「计划开始/结束日期 + 计划增持金额」列越完整；用时间预算兜住最坏情况
+    # （单只公告接口偶发慢响应时不让整个重拉被拖住）。
+    deadline = time.monotonic() + PLAN_FETCH_BUDGET
     for code in ordered[:MAX_PLAN_FETCH]:
+        if time.monotonic() >= deadline:
+            break
         try:
             plan, links = _fetch_stock_anns(code, today)
         except Exception:  # noqa: BLE001 - 单只公告失败不影响整体
@@ -559,7 +749,10 @@ def _build_raw() -> dict:
 
 
 def _valid_raw(value) -> bool:
-    return isinstance(value, dict) and bool(value.get("records"))
+    if not isinstance(value, dict) or not value.get("records"):
+        return False
+    # v1 快照没有 buy_date（最新增持日期口径），视为无效触发重拉
+    return all("buy_date" in r for r in value["records"])
 
 
 def get_holder_increase(window: str, force: bool = False) -> dict:
@@ -572,6 +765,8 @@ def get_holder_increase(window: str, force: bool = False) -> dict:
         "window": window, "updated": raw.get("updated"), "source": raw.get("source", "eastmoney"),
         "cache_state": raw.get("cache_state"), "cached_at": raw.get("cached_at"),
         "data_as_of": raw.get("data_as_of"), "refresh_error": raw.get("refresh_error"),
+        "lookback_days": LOOKBACK_DAYS,
+        "sources": SOURCES,
         "total_records": len(records),
         "rows": _aggregate(records, window, raw.get("plans"), raw.get("anns")),
     }

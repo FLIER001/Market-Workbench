@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { Sparkline } from "@/components/ui/Sparkline";
 import { api, type MacroData, type MacroIndicator, type MacroModule, type MacroSubModule, type MacroComposite, type MacroCompositePart, type HistPoint } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -450,6 +451,16 @@ export function Macro() {
           </button>
         }
       />
+
+      {loading && !data && !err && (
+        <PageSkeleton
+          title="首次计算中"
+          detail="正在拉取八模块宏观指标与历史分位并合成宏观总分，仅首次需要。"
+          hint="算完会写入本地快照；之后打开先显示缓存，再后台静默刷新。"
+          cards={8}
+          cardHeight="h-32"
+        />
+      )}
 
       {err && !data && (
         <GlassCard className="mb-6 p-6 text-center text-sm text-muted-foreground">

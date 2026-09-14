@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -16,7 +17,7 @@ import time as _time
 from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -85,6 +86,93 @@ def _warm_holder_increase() -> None:
             pass
 
     threading.Thread(target=run, daemon=True, name="warm:holder-increase").start()
+
+
+# 各页面重数据集的冷建成本差异很大：黄金实测约 50s、油价前端文案标注 1-2 分钟、
+# 板块/申万评分数十秒。一次性并发拉起会同时打爆多个上游，所以按下述编排预热。
+_WARM_HEAVY = (
+    ("gold-score", gold_score_layer.get_gold_score),
+    ("oil-score", oil_layer.get_oil_score),
+)
+_WARM_SCORING = (
+    ("allocation", timing_alloc.get_timing_allocation),
+    ("sector-scores", sector_scores_layer.get_sector_scores),
+    ("level2-scores", sw_level2_layer.get_level2_scores),
+    ("plate-scores", plate_scores_layer.get_plate_scores),
+)
+
+
+def _warm_expensive_datasets(gap_seconds: float = 5.0) -> None:
+    """启动预热编排：把冷建代价从「用户请求路径」挪到「服务启动路径」。
+
+    分两条泳道，理由是上游重叠度不同：
+
+    * 重数据（黄金 / 油价）**并行**起 —— 上游互不重叠（FRED·Treasury·WGC·CFTC
+      对 EIA·CFTC·GPR），并发不会互相限流，还能让最慢的两个同时开跑；
+    * 评分族（择时配置 / 申万行业 / 二级 / 板块）**串行 + 间隔** —— 它们共享
+      akshare / 东财上游，并发只会在启动瞬间把自己打限流。
+
+    每一步都是「先读缓存」：快照可用时只花毫秒级，只有过期或缺失才真的重建，
+    因此这套预热的稳态开销约等于零。
+    """
+    def run_step(name: str, load) -> None:
+        try:
+            load()
+        except Exception:  # noqa: BLE001 - 预热失败留给真实请求再触发
+            pass
+
+    def heavy_lane() -> None:
+        for name, load in _WARM_HEAVY:
+            threading.Thread(target=run_step, args=(name, load), daemon=True,
+                             name=f"warm:{name}").start()
+
+    def scoring_lane() -> None:
+        for name, load in _WARM_SCORING:
+            run_step(name, load)
+            _time.sleep(gap_seconds)
+
+    threading.Thread(target=heavy_lane, daemon=True, name="warm:heavy").start()
+    threading.Thread(target=scoring_lane, daemon=True, name="warm:scoring").start()
+
+
+# 注意：下面几个预热此前「只有函数定义、没有调用点」——等于从未执行过。
+# 增持预热是本文件原有意图（见其 docstring），调用点缺失属实现遗漏，这里补回。
+_warm_holder_increase()
+_warm_expensive_datasets()
+
+
+# ---------------------------------------------------------------------------
+# 条件请求（ETag/304）：大 payload 端点数据未变时让前端复用本地副本，
+# 省掉一次「传输 + gzip 解压 + JSON.parse」。bonds/curve 解压后 321KB，
+# 每次进页面都重新解析一遍是纯浪费。
+# ---------------------------------------------------------------------------
+
+# 指纹候选字段：cached_at / cache_state 由 cache_runtime._decorate 注入，
+# 其余是各模块自带的数据时点。缺失的字段不参与比较，因此同一套候选可以
+# 覆盖所有 cache_runtime 托管端点。
+_ETAG_FINGERPRINT_KEYS = ("cached_at", "cache_state", "updated", "updated_at",
+                          "generated_at", "data_as_of", "as_of", "date")
+
+
+def _conditional_json(data, request: Request, response: Response):
+    """给 JSON 端点加 ETag/304，返回可直接被 FastAPI 回写的对象。
+
+    指纹取「构建时点 + 缓存状态 + 数据时点」而不是全量内容哈希：
+    这些端点都由 cache_runtime 托管，载荷只在重建时变化，而 cached_at 每次
+    成功重建都会变，等价于精确版本号，且省掉一次 json.dumps。
+
+    **必须包含 cache_state**：前端会轮询到 cache_state 由 refreshing 变 fresh
+    为止，若把它排除在指纹外，轮询会一直命中 304 拿到旧状态而永久转圈。
+    """
+    fingerprint = "|".join(str(data.get(k)) if isinstance(data, dict) else ""
+                           for k in _ETAG_FINGERPRINT_KEYS)
+    etag = '"%s"' % hashlib.md5(fingerprint.encode()).hexdigest()
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}   # 每次回源校验，未变只回 304
+    response.headers.update(headers)
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return {"data": data}
+
 
 # CORS：默认放开（本地自托管友好）；公网部署时用 VR_ALLOW_ORIGINS 收紧成白名单。
 #   例：VR_ALLOW_ORIGINS="https://myhost"  （逗号分隔多个）
@@ -830,7 +918,7 @@ def market_overview():
 
 
 @app.get("/api/sector-scores")
-def sector_scores(refresh: bool = Query(False)):
+def sector_scores(request: Request, response: Response, refresh: bool = Query(False)):
     """行业评分：申万一级行业的估值、盈利景气、资本活跃和集中风险。
 
     首次构建读取申万 2021 版分类启用后的月报，并以申万成分分类叠加
@@ -838,7 +926,7 @@ def sector_scores(refresh: bool = Query(False)):
     申万日频只作备用，refresh=true 会强制刷新当前评分。
     """
     try:
-        return {"data": sector_scores_layer.get_sector_scores(force=refresh)}
+        return _conditional_json(sector_scores_layer.get_sector_scores(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"板块评分异常：{e}") from e
 
@@ -850,14 +938,14 @@ def sector_scores_cache():
 
 
 @app.get("/api/sector-scores/level2")
-def sector_scores_level2(refresh: bool = Query(False)):
+def sector_scores_level2(request: Request, response: Response, refresh: bool = Query(False)):
     """申万二级行业（2021 版 131 个）指标与一级映射。
 
     当前值取申万二级行业最近交易日日频，历史分位锚取申万月报（约 60 个月）。
     盘中缓存 5 分钟、其他时段 1 小时；refresh=true 强制刷新。
     """
     try:
-        return {"data": sw_level2_layer.get_level2_scores(force=refresh)}
+        return _conditional_json(sw_level2_layer.get_level2_scores(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"二级行业指标异常：{e}") from e
 
@@ -869,7 +957,7 @@ def sector_scores_level2_cache():
 
 
 @app.get("/api/plate-scores")
-def plate_scores(refresh: bool = Query(False)):
+def plate_scores(request: Request, response: Response, refresh: bool = Query(False)):
     """板块双评分：30 个主题板块的强度分 + 机会分（防追涨体系）。
 
     成分股来自人工维护的板块主数据（sectorResearch 代表企业 + 公开龙头），
@@ -877,7 +965,7 @@ def plate_scores(refresh: bool = Query(False)):
     refresh=true 强制刷新。
     """
     try:
-        return {"data": plate_scores_layer.get_plate_scores(force=refresh)}
+        return _conditional_json(plate_scores_layer.get_plate_scores(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"板块评分异常：{e}") from e
 
@@ -1566,28 +1654,28 @@ def market_macro(refresh: bool = False):
 
 
 @app.get("/api/bonds/curve")
-def bonds_curve(refresh: bool = False):
+def bonds_curve(request: Request, response: Response, refresh: bool = False):
     """中债收益率曲线 + 期限/信用利差序列。缓存 6 小时，last-good 兜底。"""
     try:
-        return {"data": bonds_layer.get_curve(force=refresh)}
+        return _conditional_json(bonds_layer.get_curve(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"债市曲线异常：{e}") from e
 
 
 @app.get("/api/bonds/overview")
-def bonds_overview(refresh: bool = False):
+def bonds_overview(request: Request, response: Response, refresh: bool = False):
     """债市页聚合：曲线 / 资金利率 / 政策利率锚 / 中债指数 / 中美对照。各块独立降级。"""
     try:
-        return {"data": bonds_layer.get_overview(force=refresh)}
+        return _conditional_json(bonds_layer.get_overview(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"债市总览异常：{e}") from e
 
 
 @app.get("/api/bonds/framework")
-def bonds_framework(refresh: bool = False):
+def bonds_framework(request: Request, response: Response, refresh: bool = False):
     """研究框架八状态仪表盘（Macro/Policy/Funding/SupplyDemand/CurveTP/Credit/Positioning/Global）。"""
     try:
-        return {"data": bonds_layer.get_framework(force=refresh)}
+        return _conditional_json(bonds_layer.get_framework(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"债市框架异常：{e}") from e
 
@@ -1602,19 +1690,19 @@ def bonds_calc(refresh: bool = False):
 
 
 @app.get("/api/bonds/positioning")
-def bonds_positioning(refresh: bool = False):
+def bonds_positioning(request: Request, response: Response, refresh: bool = False):
     """仓位与拥挤度：国债期货四品种主力持仓/成交及近一年分位。"""
     try:
-        return {"data": bonds_layer.get_positioning(force=refresh)}
+        return _conditional_json(bonds_layer.get_positioning(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"债市仓位异常：{e}") from e
 
 
 @app.get("/api/bonds/segments")
-def bonds_segments(refresh: bool = False):
+def bonds_segments(request: Request, response: Response, refresh: bool = False):
     """分品种评分：短债/中短/长债/超长/信用/杠杆套息，八状态加权 + carry 锚 + 失效条件。"""
     try:
-        return {"data": bonds_layer.get_segments(force=refresh)}
+        return _conditional_json(bonds_layer.get_segments(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"债市分品种评分异常：{e}") from e
 
@@ -1629,12 +1717,13 @@ async def bonds_insight(refresh: bool = Query(False)):
 
 
 @app.get("/api/gold/score")
-def gold_score(refresh: bool = False):
+def gold_score(request: Request, response: Response, refresh: bool = False):
     """黄金价格多维评分（方案 V2.1）。缓存 1 小时，last-good 兜底。"""
     try:
-        return {"data": gold_score_layer.get_gold_score(force=refresh)}
+        data = gold_score_layer.get_gold_score(force=refresh)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"黄金评分异常：{e}") from e
+    return _conditional_json(data, request, response)
 
 
 @app.get("/api/gold/insight")
@@ -1683,10 +1772,10 @@ def gold_paxg():
 
 
 @app.get("/api/oil/score")
-def oil_score(refresh: bool = False):
+def oil_score(request: Request, response: Response, refresh: bool = False):
     """油价多维评分（框架 V1.0）：物理稀缺/供给/炼化/仓位/溢价/美元/动量。缓存 1 小时。"""
     try:
-        return {"data": oil_layer.get_oil_score(force=refresh)}
+        return _conditional_json(oil_layer.get_oil_score(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"油价评分异常：{e}") from e
 
@@ -1719,10 +1808,10 @@ def oil_brent_hist(days: int = Query(400, ge=60, le=1000)):
 
 
 @app.get("/api/allocation")
-def allocation(refresh: bool = False):
+def allocation(request: Request, response: Response, refresh: bool = False):
     """择时 + 大类资产配置：市场环境研判（5 档风险等级）→ 股/债/商品/现金目标权重。缓存 1 小时。"""
     try:
-        return {"data": timing_alloc.get_timing_allocation(force=refresh)}
+        return _conditional_json(timing_alloc.get_timing_allocation(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"择时配置异常：{e}") from e
 

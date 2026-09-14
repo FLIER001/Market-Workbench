@@ -117,6 +117,40 @@ def invalidate(key: str) -> None:
         _entries.pop(key, None)
 
 
+def usable_snapshot(
+    value: Any,
+    required: tuple[str, ...],
+    schema_version: Any | None = None,
+) -> Any:
+    """快照能力探测：关键字段齐全即可用作冷启动兜底，不要求 schema_version 相等。
+
+    各模块的 warm() 原先普遍写成 `payload.get("schema_version") == N`，等于把
+    「快照可用」绑死在 payload 结构不变上：任何一次结构演进都会让整张快照被判废，
+    调用方随即走「无可用值 → 同步重建」分支，进程重启后首个请求要干等一次全量
+    冷建（黄金实测 50s、油价 1-2 分钟），前端整段停在「首次计算中」。
+
+    改为能力探测后，结构演进只让快照降级为兜底骨架（打 degraded 标记，由调用方
+    后台刷新覆盖），而不是直接作废。required 支持点号嵌套路径（如 "timing.regime"）；
+    建议直接复用调用方 cache_runtime.get(valid=...) 的那份判定条件，保持契约一致。
+
+    注意：本函数只适用于「整张快照兜底」的单载荷缓存。按天追加的历史序列库
+    （sector_scores / sw_level2_scores 的 snapshots 归档）不适用——那里版本门是
+    正确语义，放宽会把不兼容的旧行合并进历史。
+    """
+    if not isinstance(value, dict):
+        return None
+    for path in required:
+        node: Any = value
+        for part in path.split("."):
+            node = node.get(part) if isinstance(node, dict) else None
+        if not node:
+            return None
+    if schema_version is not None and value.get("schema_version") != schema_version:
+        value = dict(value)
+        value["degraded"] = True
+    return value
+
+
 def _refresh(
     key: str,
     build: Callable[[], Any],

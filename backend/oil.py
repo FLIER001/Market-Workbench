@@ -1089,8 +1089,9 @@ def _signal_label(total: float) -> str:
 
 
 def _warm():
-    d = _load_json(_SNAPSHOT)
-    return d if isinstance(d, dict) and d.get("schema_version") == 1 and d.get("indicators") else None
+    """冷启动兜底：走能力探测，schema_version 不符只降级、不作废（详见 cache_runtime）。"""
+    return cache_runtime.usable_snapshot(
+        _load_json(_SNAPSHOT), ("indicators",), schema_version=1)
 
 
 def get_oil_score(force: bool = False) -> dict:

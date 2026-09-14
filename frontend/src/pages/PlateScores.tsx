@@ -11,6 +11,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { ColdStartNotice, TableSkeleton } from "@/components/ui/PageSkeleton";
 import { api, type PlateScoreRow, type PlateScoresData } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { resolveRefreshing } from "@/hooks/useSWR";
@@ -370,10 +371,14 @@ export function PlateScoresPanel() {
       )}
 
       {loading && !data ? (
-        <GlassCard className="py-16 text-center">
-          <RefreshCw className="mx-auto h-5 w-5 animate-spin text-primary" />
-          <p className="mt-3 text-sm text-muted-foreground">正在拉取板块行情与基本面数据…</p>
-        </GlassCard>
+        <div>
+          <ColdStartNotice
+            title="首次计算中"
+            detail="正在拉取 30 个主题板块的行情与基本面数据并计算强度分 / 机会分，仅首次需要。"
+            hint="算完会写入本地快照；之后打开先显示缓存，再后台静默刷新。"
+          />
+          <TableSkeleton rows={10} columns={5} />
+        </div>
       ) : data ? (
         <>
           {loading && (

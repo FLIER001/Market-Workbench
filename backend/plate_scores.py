@@ -1078,10 +1078,11 @@ def _load_cache() -> dict | None:
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
-            if data.get("schema_version") == _SCHEMA_VERSION and data.get("boards"):
-                return data
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             continue
+        usable = cache_runtime.usable_snapshot(data, ("boards",), schema_version=_SCHEMA_VERSION)
+        if usable:
+            return usable
     return None
 
 

@@ -1015,9 +1015,10 @@ def _load_snapshot() -> dict | None:
     try:
         with open(_SNAPSHOT_FILE, encoding="utf-8") as handle:
             value = json.load(handle)
-        return value if value.get("schema_version") == _SCHEMA_VERSION and value.get("timing", {}).get("regime") else None
     except (OSError, json.JSONDecodeError, AttributeError):
         return None
+    return cache_runtime.usable_snapshot(
+        value, ("timing.regime",), schema_version=_SCHEMA_VERSION)
 
 
 def _save_snapshot(value: dict) -> None:

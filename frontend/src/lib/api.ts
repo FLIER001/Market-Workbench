@@ -67,6 +67,22 @@ function isTimeoutError(err: unknown): boolean {
   return err instanceof DOMException && (err.name === "TimeoutError" || err.name === "AbortError");
 }
 
+// 条件请求（ETag/304）本地副本。仅对后端下发了 ETag 的 GET 生效——
+// 服务端没给 ETag 就不入表，其他端点行为完全不变。
+// 容量刻意压小：存的是解析后的完整对象，全量留存会白占数 MB 内存。
+const CONDITIONAL_MAX = 12;
+const conditionalCache = new Map<string, { etag: string; data: unknown }>();
+
+function rememberConditional(path: string, etag: string, data: unknown): void {
+  conditionalCache.delete(path);
+  conditionalCache.set(path, { etag, data });
+  while (conditionalCache.size > CONDITIONAL_MAX) {
+    const oldest = conditionalCache.keys().next().value;
+    if (oldest === undefined) break;
+    conditionalCache.delete(oldest);
+  }
+}
+
 async function request<T>(
   path: string,
   method: "GET" | "POST" | "PUT" | "DELETE" = "GET",
@@ -76,6 +92,8 @@ async function request<T>(
   let resp: Response;
   const headers: Record<string, string> = { ...authHeaders() };
   const opts: RequestInit = { method };
+  const cached = method === "GET" ? conditionalCache.get(path) : undefined;
+  if (cached) headers["If-None-Match"] = cached.etag;
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body);
@@ -88,6 +106,11 @@ async function request<T>(
       throw new ApiError(`请求超时（${Math.round(timeoutMs / 1000)}s）：后端可能正在重建数据，稍后重试`, 504);
     }
     throw new ApiError("连接不到后端，请先启动 backend（uvicorn app:app --port 8900）", 0);
+  }
+  // 304 无响应体，必须挡在 resp.json() 之前（否则会被当成解析失败再落到 !resp.ok 分支）
+  if (resp.status === 304) {
+    if (cached) return cached.data as T;
+    throw new ApiError("后端判定内容未变，但本地副本已淘汰，请重新加载", 304);
   }
   let payload: any = null;
   try {
@@ -105,7 +128,12 @@ async function request<T>(
     }
     throw new ApiError(payload?.detail || `HTTP ${resp.status}`, resp.status);
   }
-  return (payload?.data ?? payload) as T;
+  const data = (payload?.data ?? payload) as T;
+  if (method === "GET") {
+    const etag = resp.headers.get("ETag");
+    if (etag) rememberConditional(path, etag, data);
+  }
+  return data;
 }
 
 const get = <T>(path: string, timeoutMs?: number) => request<T>(path, "GET", undefined, timeoutMs);
@@ -1008,6 +1036,11 @@ export interface GoldScoreData {
   top_positive_drivers: string[]; top_negative_drivers: string[];
   data_quality: string; updated: string;
   stale?: boolean; stale_since?: string;
+  // 后端分层缓存元信息（cache_runtime._decorate 注入）
+  cache_state?: "fresh" | "stale" | "refreshing" | "error";
+  cached_at?: string | null;
+  // 快照能力探测降级标记：结构演进后旧快照兜底，字段可能不全
+  degraded?: boolean;
   source_status?: Array<{
     key: string; label: string; status: "fresh" | "stale" | "missing";
     fetched_at: string | null; latest_period: string | null;
@@ -1536,6 +1569,8 @@ export interface HolderIncreaseRecord {
   price: number | null;
   activity_date: string;
   notice_date: string;
+  trade_date: string;
+  buy_date: string;
   start_date: string | null;
   end_date: string | null;
   ratio_pct: number;
@@ -1549,10 +1584,23 @@ export interface HolderIncreaseRecord {
 export interface HolderIncreasePlan {
   title: string;
   notice_date: string;
+  notice_url: string;
+  start_date: string;
+  end_date: string;
+  window_parsed: boolean;
   amount: number | null;
   amount_label: string;
-  deadline: string | null;
   done: boolean;
+}
+
+export interface HolderIncreaseSource {
+  key: string;
+  label: string;
+  dataset: string;
+  provider: string;
+  url: string;
+  fields: string;
+  origin: string;
 }
 
 export interface HolderIncreaseRow {
@@ -1566,6 +1614,8 @@ export interface HolderIncreaseRow {
   people: number;
   count: number;
   total_amount: number;
+  amount_done: number;
+  amount_done_partial: boolean;
   latest_date: string;
   period: string;
   cumulative: boolean;
@@ -1579,6 +1629,8 @@ export interface HolderIncreaseData {
   updated: string | null;
   source: string;
   total_records: number;
+  lookback_days?: number;
+  sources?: HolderIncreaseSource[];
   rows: HolderIncreaseRow[];
   cache_state?: string;
   cached_at?: string | null;

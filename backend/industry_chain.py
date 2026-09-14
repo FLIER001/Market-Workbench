@@ -289,10 +289,12 @@ def _load_chain_cache(chain: dict) -> dict | None:
         try:
             with open(path, encoding="utf-8") as handle:
                 payload = json.load(handle)
-            if payload.get("schema_version") == _SCHEMA_VERSION:
-                return payload
         except (OSError, json.JSONDecodeError):
             continue
+        usable = cache_runtime.usable_snapshot(
+            payload, ("structure.nodes",), schema_version=_SCHEMA_VERSION)
+        if usable:
+            return usable
     return None
 
 

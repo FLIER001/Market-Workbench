@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>冷启动骨架屏对照预览 · Market-Workbench</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --panel:#ffffff; --border:#e5e7eb; --fg:#111827; --muted:#6b7280;
+    --muted2:#9ca3af; --primary:#2563eb; --danger:#dc2626; --success:#16a34a;
+    --skel:rgba(156,163,175,.28);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1180px;margin:0 auto;padding:32px 24px 64px}
+  h1{font-size:20px;margin:0 0 6px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:28px}
+  h2{font-size:14px;margin:0 0 4px;letter-spacing:.01em}
+  .h2note{color:var(--muted2);font-size:12px;margin:0 0 12px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;
+    padding:16px;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+  .grid{display:grid;gap:16px}
+  .gl3{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .gl2{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .block{animation:pulse 1.6s ease-in-out infinite;background:var(--skel);border-radius:8px}
+  .block.glow{animation:pulse 1.6s ease-in-out infinite,glow 1.6s ease-in-out infinite;
+    background:rgba(37,99,235,.10)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+  @keyframes glow{0%,100%{box-shadow:0 0 0 0 rgba(37,99,235,0)}50%{box-shadow:0 0 0 6px rgba(37,99,235,.06)}}
+  .notice{display:flex;align-items:flex-start;gap:10px;padding:14px;margin-bottom:16px;
+    border:1px solid var(--border);border-radius:12px;background:var(--panel)}
+  .notice .txt{font-size:12px;line-height:1.65}
+  .notice b{color:rgba(17,24,39,.8);font-weight:600}
+  .notice .d{color:var(--muted)}
+  .notice .h{color:var(--muted2);font-size:12px}
+  .spin{width:16px;height:16px;flex:0 0 16px;margin-top:2px;color:var(--muted);
+    animation:rot 1s linear infinite}
+  @keyframes rot{to{transform:rotate(360deg)}}
+  .hero{display:grid;grid-template-columns:minmax(220px,1fr) auto minmax(220px,1fr);gap:16px;margin-bottom:20px}
+  .hero-mid{display:flex;align-items:center;gap:20px;min-width:280px;padding:20px}
+  .circle{width:128px;height:128px;border-radius:9999px;flex:0 0 128px}
+  .section{margin-bottom:20px}
+  .dimhead{display:flex;justify-content:space-between;gap:8px}
+  .rows>*+*{margin-top:10px}
+  .tight>*+*{margin-top:8px}
+  .mini{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}
+  .tbl{display:grid;gap:12px}
+  .tbl .r{display:grid;gap:12px}
+  .tbl .r .block{height:20px}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:9999px;
+    font-size:11px;font-weight:600}
+  .pill.old{background:rgba(220,38,38,.08);color:var(--danger);border:1px solid rgba(220,38,38,.2)}
+  .pill.new{background:rgba(22,163,74,.08);color:var(--success);border:1px solid rgba(22,163,74,.2)}
+  .oldbox{display:flex;align-items:center;justify-content:center;gap:8px;height:120px;
+    border:1px solid var(--border);border-radius:12px;background:var(--panel);
+    color:var(--muted);font-size:13px}
+  section{margin-bottom:40px}
+  .foot{color:var(--muted2);font-size:12px;border-top:1px solid var(--border);padding-top:16px}
+  table.chg{width:100%;border-collapse:collapse;font-size:12.5px}
+  table.chg th,table.chg td{border:1px solid var(--border);padding:7px 10px;text-align:left;vertical-align:top}
+  table.chg th{background:#f3f4f6;font-weight:600;color:#374151}
+  table.chg code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-size:11.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>冷启动骨架屏对照预览</h1>
+  <p class="sub">
+    Market-Workbench · <code>frontend/src/components/ui/PageSkeleton.tsx</code> 落地效果。
+    这些骨架<b>只在三层缓存（内存 / 本地持久化 / 后端磁盘快照）全部落空时</b>出现，正常情况下看不到。
+  </p>
+
+  <section>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <h2>对照：旧版 vs 新版（黄金 / 油价这类评分页）</h2>
+    </div>
+    <p class="h2note">旧版整页空白 + 一行转圈文字，用户无法判断是卡死还是真的在算；新版铺出真实布局并交代实测耗时。</p>
+    <div class="grid gl2">
+      <div>
+        <span class="pill old">旧版</span>
+        <div class="oldbox" style="margin-top:10px">
+          <svg class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg>
+          首次计算中（需拉取 5 年历史数据，约 30 秒）…
+        </div>
+      </div>
+      <div>
+        <span class="pill new">新版</span>
+        <div style="margin-top:10px">
+          <div class="notice">
+            <svg class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg>
+            <div class="txt">
+              <b>首次计算中</b><span class="d">正在拉取 5 年历史数据并计算历史分位，实测约 50 秒，仅首次需要。</span>
+              <div class="h">算完会写入本地快照，之后打开直接秒开，不会再等。</div>
+            </div>
+          </div>
+          <div class="grid gl3" style="gap:10px">
+            <div class="block" style="height:56px"></div>
+            <div class="block" style="height:56px"></div>
+            <div class="block" style="height:56px"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>1 · PageSkeleton — 评分页三栏骨架</h2>
+    <p class="h2note">用于 <code>Gold.tsx</code> / <code>Oil.tsx</code> / <code>Macro.tsx</code> / <code>Liquidity.tsx</code>。左栏指标、中间分数盘、右栏结论 + 维度区 + 指标卡网格。</p>
+    <div class="card">
+      <div class="notice">
+        <svg class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg>
+        <div class="txt">
+          <b>首次计算中</b><span class="d">正在拉取 EIA 周度库存、CFTC 持仓与 GPR 地缘风险历史并计算 5 年分位，实测约 1-2 分钟，仅首次需要。</span>
+          <div class="h">算完会写入本地快照，之后打开直接秒开，不会再等。</div>
+        </div>
+      </div>
+
+      <div class="hero">
+        <div class="card">
+          <div class="block" style="height:12px;width:40%"></div>
+          <div class="block" style="height:160px;margin-top:12px"></div>
+        </div>
+        <div class="card hero-mid">
+          <div class="block circle"></div>
+          <div class="rows tight">
+            <div class="block" style="height:24px;width:96px"></div>
+            <div class="block" style="height:12px;width:80px"></div>
+            <div class="block" style="height:40px;width:192px"></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="block" style="height:12px;width:33%"></div>
+          <div class="rows" style="margin-top:12px">
+            <div class="block" style="height:16px"></div>
+            <div class="block" style="height:16px;width:80%"></div>
+            <div class="block" style="height:16px;width:60%"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card section">
+        <div class="block" style="height:12px;width:80px"></div>
+        <div class="grid gl3" style="gap:12px;margin-top:12px">
+          <div class="block" style="height:96px"></div><div class="block" style="height:96px"></div>
+          <div class="block" style="height:96px"></div><div class="block" style="height:96px"></div>
+          <div class="block" style="height:96px"></div><div class="block" style="height:96px"></div>
+        </div>
+      </div>
+
+      <div class="grid gl3">
+        <div class="block" style="height:160px"></div><div class="block" style="height:160px"></div>
+        <div class="block" style="height:160px"></div><div class="block" style="height:160px"></div>
+        <div class="block" style="height:160px"></div><div class="block" style="height:160px"></div>
+        <div class="block" style="height:160px"></div><div class="block" style="height:160px"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>2 · TableSkeleton — 列表页骨架</h2>
+    <p class="h2note">用于 <code>PlateScores.tsx</code>(10×5) / <code>SectorScores.tsx</code>(10×6) / <code>FundScreenPanel.tsx</code>(10×8)。通知卡作为 children 传入。</p>
+    <div class="card">
+      <div class="notice" style="margin-bottom:0">
+        <svg class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg>
+        <div class="txt">
+          <b>首次构建中</b><span class="d">正在汇总全市场基金经理任职期、在管规模与风险指标并聚类分层，仅首次需要，之后打开直接读快照。</span>
+          <div class="h">构建完成后 PFS 分层与筛选会立即就绪。</div>
+        </div>
+      </div>
+      <div class="tbl" style="margin-top:12px">
+        <div class="r" style="grid-template-columns:repeat(8,minmax(0,1fr))">
+          <div class="block"></div><div class="block"></div><div class="block"></div><div class="block"></div>
+          <div class="block"></div><div class="block"></div><div class="block"></div><div class="block"></div>
+        </div>
+        <div class="r" style="grid-template-columns:repeat(8,minmax(0,1fr))">
+          <div class="block"></div><div class="block"></div><div class="block"></div><div class="block"></div>
+          <div class="block"></div><div class="block"></div><div class="block"></div><div class="block"></div>
+        </div>
+        <div class="r" style="grid-template-columns:repeat(8,minmax(0,1fr))">
+          <div class="block"></div><div class="block"></div><div class="block"></div><div class="block"></div>
+          <div class="block"></div><div class="block"></div><div class="block"></div><div class="block"></div>
+        </div>
+        <div class="r" style="grid-template-columns:repeat(8,minmax(0,1fr))">
+          <div class="block"></div><div class="block"></div><div class="block"></div><div class="block"></div>
+          <div class="block"></div><div class="block"></div><div class="block"></div><div class="block"></div>
+        </div>
+        <div class="r" style="grid-template-columns:repeat(8,minmax(0,1fr))">
+          <div class="block"></div><div class="block"></div><div class="block"></div><div class="block"></div>
+          <div class="block"></div><div class="block"></div><div class="block"></div><div class="block"></div>
+        </div>
+        <p style="color:var(--muted2);font-size:11.5px;margin:2px 0 0">… 实际渲染 10 行</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>3 · ColdStartNotice + SkeletonBlock — 非标准布局</h2>
+    <p class="h2note">用于 <code>Allocation.tsx</code>（择时配置页是宽结论卡 + 仓位表，不是三栏 hero，用整页 hero 骨架会与实际布局错位）。<code>Bonds.tsx</code> 同理。</p>
+    <div class="card">
+      <div class="notice">
+        <svg class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg>
+        <div class="txt">
+          <b>首次计算中</b><span class="d">正在汇总宏观、流动性与市场确认信号，测算择时分、风险预算与目标仓位，仅首次需要。</span>
+          <div class="h">算完会写入本地快照；之后打开先显示缓存，再后台静默刷新。</div>
+        </div>
+      </div>
+      <div class="rows tight">
+        <div class="block" style="height:144px"></div>
+        <div class="block" style="height:96px"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>附 · 本次全站改动清单</h2>
+    <p class="h2note">Task 1-4 的落点与验证结果。</p>
+    <table class="chg">
+      <thead><tr><th style="width:64px">Task</th><th style="width:190px">改动</th><th>文件</th><th style="width:230px">要点</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>T1</td><td>快照软兼容下沉</td>
+          <td><code>cache_runtime.py</code> + oil / timing_alloc / plate_scores / sector_scores / sw_level2_scores / industry_chain / fund_pfs</td>
+          <td>新增 <code>usable_snapshot()</code>；7 个 loader 由版本相等判断改能力探测；追加型历史归档<b>刻意不动</b></td>
+        </tr>
+        <tr>
+          <td>T2</td><td>启动预热扩容</td>
+          <td><code>app.py</code></td>
+          <td><code>_warm_expensive_datasets()</code> 双车道：重车道并发，评分车道串行 + 5s gap</td>
+        </tr>
+        <tr>
+          <td>T3</td><td>ETag / 304</td>
+          <td><code>app.py</code> + <code>lib/api.ts</code></td>
+          <td>共享 <code>_conditional_json()</code> 铺到 11 个接口；指纹<b>必须含</b> <code>cache_state</code>，否则永久转圈</td>
+        </tr>
+        <tr>
+          <td>T4</td><td>骨架屏统一</td>
+          <td><code>components/ui/PageSkeleton.tsx</code>（新增）+ 8 个页面/面板</td>
+          <td>Macro / Liquidity 此前<b>完全没有</b>冷启动占位，本次补齐</td>
+        </tr>
+        <tr>
+          <td colspan="2">验证</td>
+          <td colspan="2"><code>npx tsc -b</code> 零错误 · <code>npm run build</code> 通过（2503 模块 / 4.39s）· 后端 326 passed / 1 failed（唯一失败属未提交 WIP，HEAD 基线同样失败）</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <p class="foot">
+    离线对照页，仅用于肉眼验收加载态视觉。真实骨架由 Tailwind + <code>GlassCard</code> 渲染，此处为等价静态复刻，不参与构建产物。
+  </p>
+</div>
+</body>
+</html>

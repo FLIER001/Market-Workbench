@@ -1,6 +1,7 @@
 import { Fragment, useMemo, useState } from "react";
-import { AlertCircle, ChevronDown, ChevronUp, Database, Loader2, RefreshCw, Search, ShieldCheck, Star } from "lucide-react";
+import { AlertCircle, ChevronDown, ChevronUp, Database, RefreshCw, Search, ShieldCheck, Star } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { ColdStartNotice, TableSkeleton } from "@/components/ui/PageSkeleton";
 import { api, ApiError, type PFSCandidate, type PFSData, type PFSTier } from "@/lib/api";
 import { loadFundWatch, toggleFundWatch } from "@/lib/fundWatch";
 import { cn } from "@/lib/utils";
@@ -110,7 +111,13 @@ export function FundScreenPanel() {
       </GlassCard>
 
       <GlassCard className="overflow-x-auto p-0">
-        {!data ? <div className="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" />首次构建需汇总经理任期与风险数据…</div> : <>
+        {!data ? <TableSkeleton rows={10} columns={8}>
+          <ColdStartNotice
+            title="首次构建中"
+            detail="正在汇总全市场基金经理任职期、在管规模与风险指标并聚类分层，仅首次需要，之后打开直接读快照。"
+            hint="构建完成后 PFS 分层与筛选会立即就绪。"
+          />
+        </TableSkeleton> : <>
           <table className="w-full min-w-[1040px] text-sm">
             <thead><tr className="border-b border-border/60 text-left text-xs text-muted-foreground">
               <th className="px-4 py-3 font-medium">基金 / 现任团队</th><th className="px-3 py-3 font-medium">真实策略初标</th><th className="px-3 py-3 font-medium">PFS</th>

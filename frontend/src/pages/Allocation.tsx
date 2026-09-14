@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { RefreshCw, Scale, TrendingUp, Droplets, Zap, AlertTriangle, ChevronDown, Target } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { ColdStartNotice, SkeletonBlock } from "@/components/ui/PageSkeleton";
 import { Sparkline } from "@/components/ui/Sparkline";
 import { api, type AllocationData, type AllocationInsight, type TimingPart, type HistPoint } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -172,9 +173,16 @@ export function Allocation() {
       )}
 
       {loading && !data && (
-        <div className="mb-6 space-y-2">
-          <div className="h-36 animate-pulse rounded-xl bg-muted/40" />
-          <div className="h-24 animate-pulse rounded-xl bg-muted/30" />
+        <div className="mb-6">
+          <ColdStartNotice
+            title="首次计算中"
+            detail="正在汇总宏观、流动性与市场确认信号，测算择时分、风险预算与目标仓位，仅首次需要。"
+            hint="算完会写入本地快照；之后打开先显示缓存，再后台静默刷新。"
+          />
+          <div className="space-y-2">
+            <SkeletonBlock className="h-36" />
+            <SkeletonBlock className="h-24" />
+          </div>
         </div>
       )}
 

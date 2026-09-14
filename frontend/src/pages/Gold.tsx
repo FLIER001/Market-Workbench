@@ -5,6 +5,7 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { MinuteChart } from "@/components/ui/MinuteChart";
 import { Sparkline } from "@/components/ui/Sparkline";
 import { AskAiButton } from "@/components/ui/AskAiButton";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { api, type GoldScoreData, type GoldIndicator, type HistPoint, type PaxgSpotData, type MinuteKline, type Au0HistData, type GoldInsight } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useSWR } from "@/hooks/useSWR";
@@ -13,9 +14,13 @@ const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFin
 const isHist = (v: unknown): v is HistPoint[] =>
   Array.isArray(v) && v.every((p) => p != null && isNum((p as HistPoint).v) && typeof (p as HistPoint).date === "string");
 
+// 能力探测代替版本号相等（与后端 _load_gold_snapshot 同一原则）：
+// payload 结构演进、schema_version 提升，不应让整页变成「数据格式异常」——
+// 只要关键字段还在就照常渲染，缺失字段各自降级。hist 的逐点校验保留，
+// 它是真正会影响作图的安全检查。
 function isValid(d: GoldScoreData | null): d is GoldScoreData {
   if (!d || typeof d !== "object") return false;
-  if (d.schema_version !== 3 || !Array.isArray(d.indicators)) return false;
+  if (typeof d.schema_version !== "number" || !Array.isArray(d.indicators)) return false;
   for (const i of d.indicators) {
     if (!i || typeof i.key !== "string" || !isHist(i.hist)) return false;
   }
@@ -220,6 +225,9 @@ function ScoreBandTable() {
   );
 }
 
+// 首屏骨架：仅在「内存 / 本地持久化 / 后端磁盘快照」三层全部落空（真·首次冷启动）
+// 时出现。这类情形实测全量重建约 50 秒，此前这里只有一行文字、整页空白。
+// 骨架与文案统一由 components/ui/PageSkeleton 提供。
 export function Gold() {
   const [err, setErr] = useState<string | null>(null);
   const [paxg, setPaxg] = useState<PaxgSpotData | null>(null);
@@ -361,6 +369,25 @@ export function Gold() {
 
       {spot && (
         <>
+          {/* 有数据就立刻渲染，后台刷新状态只作为一行提示 —— 而不是让整页回到 loading。
+              这是「秒开 + 静默追新」的关键：旧值可用时永远不阻塞首屏。 */}
+          {spot.cache_state && spot.cache_state !== "fresh" && (
+            <div className="mb-3 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <RefreshCw className="h-3 w-3 animate-spin" />
+              {spot.cache_state === "refreshing"
+                ? `正在后台刷新（当前为 ${spot.cached_at ? spot.cached_at.slice(0, 16).replace("T", " ") : spot.updated} 的数据）…`
+                : spot.cache_state === "error"
+                  ? "后台刷新失败，当前展示最近一次成功结果"
+                  : "当前为缓存结果，后台正在更新"}
+            </div>
+          )}
+
+          {spot.degraded && (
+            <div className="mb-3 text-[11px] text-warning">
+              当前为旧结构快照兜底（字段可能不全），后台正在按新结构重建。
+            </div>
+          )}
+
           {unavailableSources.length > 0 && (
             <div className="mb-3 text-[11px] text-warning">
               数据源异常：{unavailableSources.map((s) => `${s.label}${s.status === "stale"
@@ -536,9 +563,13 @@ export function Gold() {
       )}
 
       {!spot && !err && (
-        <GlassCard className="flex items-center justify-center p-16 text-sm text-muted-foreground">
-          <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> 首次计算中（需拉取 5 年历史数据，约 30 秒）…
-        </GlassCard>
+        <PageSkeleton
+          title="首次计算中"
+          detail="正在拉取 5 年历史数据并计算历史分位，实测约 50 秒，仅首次需要。"
+          hint="算完会写入本地快照，之后打开直接秒开，不会再等。"
+          cards={6}
+          cardHeight="h-36"
+        />
       )}
     </div>
   );

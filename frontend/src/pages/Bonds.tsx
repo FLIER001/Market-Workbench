@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Activity, AlertCircle, Calculator, Coins, Gauge, Globe2, Landmark, Layers, Percent, PieChart, RefreshCw, Scale, Sparkles } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { ColdStartNotice, SkeletonBlock } from "@/components/ui/PageSkeleton";
 import { Sparkline } from "@/components/ui/Sparkline";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import {
@@ -510,9 +511,20 @@ export function Bonds() {
       } />
 
       {loading && !data ? (
-        <GlassCard className="flex items-center justify-center p-16 text-sm text-muted-foreground">
-          正在加载债市数据…
-        </GlassCard>
+        <div>
+          <ColdStartNotice
+            title="首次计算中"
+            detail="正在拉取国债收益率曲线、分品种评分与八状态框架数据，仅首次需要。"
+            hint="算完会写入本地快照；之后打开先显示缓存，再后台静默刷新。"
+          />
+          <div className="space-y-3">
+            <SkeletonBlock className="h-40" />
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+              {Array.from({ length: 6 }).map((_, i) => <SkeletonBlock key={i} className="h-24" />)}
+            </div>
+            <SkeletonBlock className="h-72" />
+          </div>
+        </div>
       ) : !hasAny ? (
         <GlassCard className="flex items-center justify-center p-16 text-sm text-muted-foreground">
           债市数据暂不可用（数据源无返回），稍后刷新重试

@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { Sparkline } from "@/components/ui/Sparkline";
 import { AskAiButton } from "@/components/ui/AskAiButton";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { api, type OilScoreData, type OilIndicator, type OilSpotData, type OilSpotQuote, type BrentHistData, type HistPoint, type OilInsight } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useSWR } from "@/hooks/useSWR";
@@ -484,9 +485,13 @@ export function Oil() {
       )}
 
       {!score && !err && (
-        <GlassCard className="flex items-center justify-center p-16 text-sm text-muted-foreground">
-          <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> 首次计算中（需拉取 EIA/CFTC/GPR 历史，约 1-2 分钟）…
-        </GlassCard>
+        <PageSkeleton
+          title="首次计算中"
+          detail="正在拉取 EIA 周度库存、CFTC 持仓与 GPR 地缘风险历史并计算 5 年分位，实测约 1-2 分钟，仅首次需要。"
+          hint="算完会写入本地快照，之后打开直接秒开，不会再等。"
+          cards={8}
+          cardHeight="h-40"
+        />
       )}
     </div>
   );

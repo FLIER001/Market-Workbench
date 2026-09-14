@@ -4,6 +4,8 @@ import base64
 import json
 import zlib
 
+import pytest
+
 import astock
 
 
@@ -445,7 +447,13 @@ def test_parse_wgc_global_etf_weekly_holdings():
 
     rows = gold_score._parse_wgc_etf_holdings(raw)
 
-    assert rows == [("2026-07-24", 4062.58), ("2026-07-31", 4067.96)]
+    # 解析结果是若干浮点相加，二进制表示不可能精确等于十进制字面量
+    # （实测 4067.9599999999996 vs 4067.96），必须按容差比较。
+    expected = [("2026-07-24", 4062.58), ("2026-07-31", 4067.96)]
+    assert len(rows) == len(expected)
+    for (got_date, got_v), (want_date, want_v) in zip(rows, expected):
+        assert got_date == want_date
+        assert got_v == pytest.approx(want_v, abs=1e-6)
 
 
 def test_parse_wgc_real_lbma_and_sge_reference_prices():

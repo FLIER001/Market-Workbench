@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { RefreshCw, Droplets, Landmark, TrendingUp, TrendingDown, Activity, Gauge, ChevronDown } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { Sparkline } from "@/components/ui/Sparkline";
 import { api, type LiquidityData, type LiquidityUsItem, type HistPoint, type IndexFlow, type CompositeIndex, type LiquidityComposite } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -365,6 +366,16 @@ export function Liquidity() {
           </button>
         }
       />
+
+      {loading && !data && !err && (
+        <PageSkeleton
+          title="首次计算中"
+          detail="正在拉取中美资金面指标（美联储资产负债表、TGA/RRP、国内指数资金流）并计算历史分位，仅首次需要。"
+          hint="算完会写入本地快照；之后打开先显示缓存，再后台静默刷新。"
+          cards={6}
+          cardHeight="h-32"
+        />
+      )}
 
       {err && (
         <GlassCard className="mb-6 p-6 text-center text-sm text-muted-foreground">

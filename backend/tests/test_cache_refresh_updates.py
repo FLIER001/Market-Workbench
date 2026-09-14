@@ -67,18 +67,34 @@ def test_update_value_mutates_cached_payload_in_place():
 def test_warm_snapshot_age_capped_by_data_timestamp():
     """launchd 高频重启场景：磁盘快照 mtime 恒新，但数据时点可能很旧。
     warm 锚定数据时点（updated/as_of）后，旧快照在重启后立即判 stale 触发后台重建，
-    而不是按「刚写入的文件」再 fresh 一个 TTL。"""
+    而不是按「刚写入的文件」再 fresh 一个 TTL。
+
+    后台重建跑在独立线程里，所以用 Event 把 build 卡住：否则断言会与线程赛跑
+    （曾出现同一测试连跑 8 次挂 6 次的随机红），断言就不再可信。
+    """
     cache_runtime.reset_for_tests()
     built = []
-    cache_runtime.get(
-        "warm_old", lambda: (built.append(1), {"v": 2})[1], ttl=3600,
+    release = threading.Event()
+
+    def build():
+        built.append(1)
+        release.wait(2)     # 卡住后台线程，让下面的断言确定性可复现
+        return {"v": 2}
+
+    out = cache_runtime.get(
+        "warm_old", build, ttl=3600,
         warm=lambda: {"v": 1, "updated": "2026-08-18 09:00"},
     )
-    # 快照时点 08-18 早于 TTL 起点 → 读到的就是 stale 且已开后台刷新
-    assert built == [1], "旧数据时点的快照必须立刻触发后台重建"
-    state = cache_runtime.get("warm_old", lambda: {"v": 3}, ttl=3600)
-    assert state["cache_state"] in ("refreshing", "fresh", "stale")
-    assert state["v"] == 1  # 后台重建完成前，先返回快照值
+    # 快照时点 08-18 早于 TTL 起点 → 立刻判 stale、派发后台重建，但先返回快照值
+    assert out["v"] == 1, "后台重建完成前，必须先返回快照值"
+    assert out["cache_state"] == "refreshing"
+
+    release.set()
+    deadline = time.time() + 2
+    while time.time() < deadline and cache_runtime.peek("warm_old") != {"v": 2}:
+        time.sleep(0.01)
+    assert built == [1], "旧数据时点的快照必须触发一次后台重建"
+    assert cache_runtime.peek("warm_old") == {"v": 2}, "后台重建结果应替换快照值"
 
 
 def test_warm_snapshot_fresh_data_stays_fresh():

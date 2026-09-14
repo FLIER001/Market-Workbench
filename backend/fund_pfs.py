@@ -884,9 +884,9 @@ def _load_cache() -> dict | None:
     try:
         with open(_CACHE_FILE, encoding="utf-8") as handle:
             data = json.load(handle)
-        return data if data.get("schema_version") == _SCHEMA_VERSION and data.get("rows") else None
     except (OSError, json.JSONDecodeError, AttributeError):
         return None
+    return cache_runtime.usable_snapshot(data, ("rows",), schema_version=_SCHEMA_VERSION)
 
 
 def _save_cache(data: dict) -> None:

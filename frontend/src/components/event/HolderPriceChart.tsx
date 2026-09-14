@@ -20,7 +20,11 @@ const fmtAmount = (value: number | null | undefined) => {
   if (value >= 1e4) return `${(value / 1e4).toFixed(0)}万`;
   return value.toLocaleString("zh-CN");
 };
-const fmtDate = (value: string) => (value ? value.slice(5).replace("-", "/") : "—");
+// 日期一律 YYYY/MM/DD（带全年份）；残缺日期不显示，避免出现丢年份的"09/11"式值。
+const fmtDate = (value: string) => {
+  const iso = (value || "").slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso.split("-").join("/") : "—";
+};
 
 // 把披露/买入日期吸附到 K 线轴上最近的交易日（披露日可能落在周末/停牌日）
 const snapDate = (target: string, dates: string[]) => {
