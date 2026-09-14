@@ -187,6 +187,26 @@ def _probe_binance() -> str | None:
         return f"异常：{type(e).__name__}"
 
 
+def _probe_hyperliquid() -> str | None:
+    """Hyperliquid 公共 info 端点（油价页 WTI 暗盘永续主源）。"""
+    import subprocess as _sp
+
+    try:
+        r = _sp.run(
+            ["curl", "-s", "-X", "POST", "https://api.hyperliquid.xyz/info",
+             "-H", "Content-Type: application/json", "--max-time", "8",
+             "-d", '{"type":"allMids","dex":"xyz"}'],
+            capture_output=True, text=True, timeout=12,
+        )
+        if r.returncode != 0 or not r.stdout:
+            return "无数据返回"
+        import json as _json
+
+        return None if _json.loads(r.stdout).get("xyz:CL") else "返回体无 WTI 暗盘报价"
+    except Exception as e:  # noqa: BLE001
+        return f"异常：{type(e).__name__}"
+
+
 def _probe_kalshi() -> str | None:
     """Kalshi 交易 API（全球预期页双源之一；挂了只剩 Polymarket）。"""
     import subprocess as _sp
@@ -220,6 +240,7 @@ _PROBES: list[tuple[str, str, str, object]] = [
     ("eia",       "EIA 石油数据",    "油价页周度数据", _probe_eia),
     ("polymarket", "Polymarket",     "全球预期页", _probe_polymarket),
     ("binance",   "Binance 镜像",    "黄金页 PAXG 折算", _probe_binance),
+    ("hyperliquid", "Hyperliquid",   "油价页 WTI 暗盘", _probe_hyperliquid),
     ("kalshi",    "Kalshi",         "全球预期页", _probe_kalshi),
 ]
 

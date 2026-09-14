@@ -1798,6 +1798,24 @@ def oil_spot():
         raise HTTPException(502, f"实时油价异常：{e}") from e
 
 
+@app.get("/api/oil/wti")
+def oil_wti():
+    """WTI 暗盘现货：Hyperliquid 永续 7×24 实时行情 + 当日分时，20 秒缓存。"""
+    try:
+        return {"data": oil_layer.wti_hyper_spot()}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"WTI 暗盘异常：{e}") from e
+
+
+@app.get("/api/oil/futures-hist")
+def oil_futures_hist(days: int = Query(250, ge=30, le=1000)):
+    """三个外盘连续合约（布伦特/纽约原油/天然气）日K：实时行情卡迷你走势图，1 小时缓存。"""
+    try:
+        return {"data": oil_layer.futures_daily_history(days)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"外盘日K异常：{e}") from e
+
+
 @app.get("/api/oil/brent-hist")
 def oil_brent_hist(days: int = Query(400, ge=60, le=1000)):
     """布伦特连续（OIL）日K收盘序列：评分卡旁油价近1年走势，1 小时缓存。"""

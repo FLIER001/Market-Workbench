@@ -47,11 +47,17 @@ export function MinuteChart({
   height = 460,
   volRatio,
   compact = false,
+  minHeight,
 }: {
   data: MinuteKline;
   height?: number;
   volRatio?: number;
   compact?: boolean;
+  /** 普通模式的容器高度下限，默认 320（终端式可读性）。被塞进 1/3 窄栏、需要把卡片压矮时
+   *  显式调小（如 200）：此时 svg 与价格区/量柱区的下限会一起按可用高度放宽，
+   *  否则内部固定的 180/42/260 会把 svg 撑爆、量柱和 x 轴刻度被裁掉。
+   *  不传 = 老行为，其他页面不受影响。 */
+  minHeight?: number;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
@@ -64,14 +70,15 @@ export function MinuteChart({
     if (!element) return;
     const update = () => {
       const rect = element.getBoundingClientRect();
-      // compact 模式贴合容器实际高度；普通模式保留 320 下限（header+量柱）。
-      setSize({ width: Math.max(rect.width, 320), height: compact ? Math.max(rect.height, 60) : Math.max(rect.height, 320) });
+      // compact 模式贴合容器实际高度；普通模式默认保留 320 下限（header+量柱）。
+      const floor = compact ? 60 : minHeight ?? 320;
+      setSize({ width: Math.max(rect.width, 320), height: Math.max(rect.height, floor) });
     };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [compact]);
+  }, [compact, minHeight]);
 
   useEffect(() => {
     const observer = new MutationObserver(() => setThemeTick((tick) => tick + 1));
@@ -127,15 +134,24 @@ export function MinuteChart({
     return { totalMinutes: Math.max(A_SHARE_MINUTES, Math.min(span, 24 * 60)), slotOffset: minMod, slotRanges: null };
   }, [points, data.market_minutes]);
   const headerH = compact ? COMPACT_HEADER_HEIGHT : HEADER_HEIGHT;
-  // compact 模式：图表贴合容器高度（无 header）；普通模式保留 260 下限。
-  const svgHeight = compact ? size.height : Math.max(size.height - headerH, 260);
+  // compact 模式：图表贴合容器高度（无 header）。
+  // 普通模式默认保留 260 下限（终端式可读性）；显式调小 minHeight 时下限跟着让位，
+  // 否则 svg 会比容器高、量柱与 x 轴刻度被 overflow-hidden 裁掉。
+  const svgFloor = minHeight == null ? 260 : Math.max(minHeight - headerH, 80);
+  const svgHeight = compact ? size.height : Math.max(size.height - headerH, svgFloor);
   const leftAxis = size.width < 560 ? 46 : 56;
   const rightAxis = size.width < 560 ? 48 : 58;
   const chartWidth = Math.max(size.width - leftAxis - rightAxis, 180);
   // compact：价格区占满全高、不画量柱；普通：价格 76% + 量柱 24%。
-  const priceHeight = compact ? svgHeight : Math.max(180, Math.round((svgHeight - 48) * 0.76));
+  // 价格区/量柱区的固定下限 180/42 只在「没显式压矮」时沿用——不传 minHeight 的调用方
+  // （黄金页等）结果与改动前逐像素一致；显式传了 minHeight 才按下限放宽，
+  // 否则矮图会被 180/42 撑爆容器、量柱与 x 轴刻度被 overflow-hidden 裁掉。
+  const relaxed = minHeight != null;
+  const priceFloor = relaxed ? Math.min(180, Math.round(svgHeight * 0.5)) : 180;
+  const volumeFloor = relaxed ? Math.min(42, Math.round(svgHeight * 0.12)) : 42;
+  const priceHeight = compact ? svgHeight : Math.max(priceFloor, Math.round((svgHeight - 48) * 0.76));
   const volumeTop = compact ? svgHeight : priceHeight + 16;
-  const volumeHeight = compact ? 0 : Math.max(svgHeight - volumeTop - 28, 42);
+  const volumeHeight = compact ? 0 : Math.max(svgHeight - volumeTop - 28, volumeFloor);
   const panelBottom = volumeTop + volumeHeight;
   const xAt = (index: number) => leftAxis + (index / (totalMinutes - 1)) * chartWidth;
 
@@ -339,6 +355,12 @@ export function MinuteChart({
   const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0;
   const trend = change > 0 ? "up" : change < 0 ? "down" : "flat";
 
+  // header 右侧的「今开/最高/最低/总量」与「截至」按**容器实际宽度**收敛。
+  // 该图可能被放进 1/3 窄栏（≈330–380px），此时视口仍是 md+ ——
+  // 若沿用 md: 视口断点，标题行会被右侧这组数字挤爆并横向溢出（外层 overflow-hidden 会直接裁掉）。
+  const showHeaderStats = size.width >= 640;
+  const showHeaderAside = size.width >= 500;
+
   const priceColor = document.documentElement.classList.contains("light") ? "#2563eb" : "#62a8ff";
   const averageColor = "#f2b84b";
   const upColor = hsl("--danger");
@@ -364,9 +386,12 @@ export function MinuteChart({
         }
         acc += r.end - r.start;
       }
-      // 超出所有交易时段（保底放大的空槽）：钳制到最后一个交易时段的收盘时刻
+      // 超出所有交易时段（保底放大的空槽）：钳制到最后一个交易时段的收盘时刻。
+      // 7×24 市场（跨度恰为整天）的收盘即次日 00:00，标 24:00 以区别于坐标起点。
       const lastR = slotRanges[slotRanges.length - 1];
-      return clockLabel((slotOffset + lastR.end) % (24 * 60));
+      const endMod = slotOffset + lastR.end;
+      if (endMod > 0 && endMod % (24 * 60) === 0) return "24:00";
+      return clockLabel(endMod % (24 * 60));
     }
     return clockLabel((firstMod + index) % (24 * 60));
   };
@@ -448,22 +473,26 @@ export function MinuteChart({
                 {changePct.toFixed(2)}%
               </span>
             </span>
-            <span className="hidden text-[10px] text-muted-foreground/50 sm:inline">截至 {clockAt(lastIdx)}</span>
-          </div>
-          <div className="hidden items-center gap-4 text-[10px] md:flex">
-            <span className="text-muted-foreground">今开 <b className="ml-1 font-mono font-medium text-foreground">{openPrice.toFixed(2)}</b></span>
-            <span className="text-muted-foreground">最高 <b className="ml-1 font-mono font-medium text-danger">{highPrice.toFixed(2)}</b></span>
-            <span className="text-muted-foreground">最低 <b className="ml-1 font-mono font-medium text-success">{lowPrice.toFixed(2)}</b></span>
-            {hasVolume && <span className="text-muted-foreground">总量 <b className="ml-1 font-mono font-medium text-foreground">{compactVolume(totalVolume)}</b></span>}
-            {volRatio != null && (
-              <span className="text-muted-foreground">
-                量比{" "}
-                <b className={volRatio > 1.5 ? "font-mono text-danger" : volRatio < 0.8 ? "font-mono text-success" : "font-mono text-foreground"}>
-                  {volRatio.toFixed(2)}
-                </b>
-              </span>
+            {showHeaderAside && (
+              <span className="text-[10px] text-muted-foreground/50">截至 {clockAt(lastIdx)}</span>
             )}
           </div>
+          {showHeaderStats && (
+            <div className="flex items-center gap-3 text-[10px]">
+              <span className="text-muted-foreground">今开 <b className="ml-1 font-mono font-medium text-foreground">{openPrice.toFixed(2)}</b></span>
+              <span className="text-muted-foreground">最高 <b className="ml-1 font-mono font-medium text-danger">{highPrice.toFixed(2)}</b></span>
+              <span className="text-muted-foreground">最低 <b className="ml-1 font-mono font-medium text-success">{lowPrice.toFixed(2)}</b></span>
+              {hasVolume && <span className="text-muted-foreground">总量 <b className="ml-1 font-mono font-medium text-foreground">{compactVolume(totalVolume)}</b></span>}
+              {volRatio != null && (
+                <span className="text-muted-foreground">
+                  量比{" "}
+                  <b className={volRatio > 1.5 ? "font-mono text-danger" : volRatio < 0.8 ? "font-mono text-success" : "font-mono text-foreground"}>
+                    {volRatio.toFixed(2)}
+                  </b>
+                </span>
+              )}
+            </div>
+          )}
         </div>
       )}
 

@@ -1,5 +1,6 @@
 """油价评分层纯函数测试（不触网）。"""
 
+import json as _json
 import math
 
 import oil
@@ -167,3 +168,130 @@ def test_structure_tail_alignment(tmp_path):
     assert len(st["brent_wti"]) == 5
     # 末位配对：各取最后一根，价差 = Brent末 - WTI末
     assert st["brent_wti"][-1]["v"] == round(89.0 - 83.0, 2)
+
+
+# ---------------------------------------------------------------------------
+# WTI 暗盘（Hyperliquid xyz:CL 永续，7×24）
+# ---------------------------------------------------------------------------
+
+# 1789315200000 = 北京 2026-09-14 00:00；前一根 1789315140000 = 前一日 23:59
+_HL_PREV = _json.dumps([{
+    "t": 1789315140000, "T": 1789315199999, "s": "xyz:CL", "i": "1m",
+    "o": "96.70", "c": "96.794", "h": "96.80", "l": "96.65", "v": "120", "n": 10,
+}]).encode()
+_HL_DAY = _json.dumps([
+    {"t": 1789315200000, "T": 1789315259999, "s": "xyz:CL", "i": "1m",
+     "o": "96.806", "c": "96.758", "h": "96.85", "l": "96.48", "v": "1000", "n": 50},
+    {"t": 1789315260000, "T": 1789315319999, "s": "xyz:CL", "i": "1m",
+     "o": "96.758", "c": "97.100", "h": "97.20", "l": "96.70", "v": "1500", "n": 60},
+]).encode()
+# metaAndAssetCtxs 返回 [meta, ctxs]；prevDayPx 故意与「午夜前最后一根」不同，
+# 用于确认昨收优先取北京午夜口径而非 UTC 日界
+_HL_CTX = _json.dumps([
+    {"universe": [{"name": "xyz:CL", "maxLeverage": 20}]},
+    [{"midPx": "99.092", "markPx": "99.122", "oraclePx": "99.453", "prevDayPx": "95.758",
+      "dayBaseVlm": "1836486.8", "dayNtlVlm": "179207899.6", "openInterest": "2432722.4",
+      "funding": "-0.0001889771"}],
+]).encode()
+
+
+def test_parse_hl_candles():
+    """Hyperliquid candleSnapshot → 北京时钟分时点；收盘为 price，成交量为单根量。"""
+    pts = oil._parse_hl_candles(_HL_DAY)
+    assert len(pts) == 2
+    assert pts[0]["time"] == "00:00" and math.isclose(pts[0]["price"], 96.758)
+    assert pts[0]["ot"] == 1789315200000
+    assert math.isclose(pts[0]["open"], 96.806) and math.isclose(pts[0]["high"], 96.85)
+    assert math.isclose(pts[0]["low"], 96.48) and math.isclose(pts[0]["volume"], 1000.0)
+    assert pts[1]["time"] == "00:01" and math.isclose(pts[1]["price"], 97.100)
+    # 乱序输入按 openTime 升序归一（跨日：前一日 23:59 → 当日 00:00 → 00:01）
+    merged = _json.dumps(_json.loads(_HL_PREV) + _json.loads(_HL_DAY)).encode()
+    assert [p["time"] for p in oil._parse_hl_candles(merged)] == ["23:59", "00:00", "00:01"]
+    # 非法/空输入 → []
+    assert oil._parse_hl_candles(b"") == []
+    assert oil._parse_hl_candles(b"[]") == []
+    assert oil._parse_hl_candles(b'{"error":"x"}') == []
+
+
+def test_wti_hyper_spot_aligns_and_accumulates(monkeypatch):
+    """昨收取北京午夜前最后一根；末点用实时中间价覆盖；成交量累加为当日累计。"""
+    calls: list[str] = []
+    monkeypatch.setattr(oil, "_WTI_CACHE", {})
+    monkeypatch.setattr(oil, "_WTI_CHART_CACHE", {})
+
+    def fake_post(payload: dict, timeout: int = 15) -> bytes:
+        kind = payload.get("type")
+        calls.append(kind)
+        if kind == "candleSnapshot":
+            return _HL_PREV if payload["req"]["endTime"] < 1789315200000 else _HL_DAY
+        if kind == "metaAndAssetCtxs":
+            return _HL_CTX
+        return b""
+
+    monkeypatch.setattr(oil, "_hl_post", fake_post)
+
+    d = oil.wti_hyper_spot()
+    assert d["price"] == 99.092                    # midPx 优先
+    assert d["prev_close"] == 96.794               # 北京午夜前最后一根，而非 prevDayPx
+    assert d["change"] == 2.3
+    # 涨跌幅口径与黄金页一致：用取整后的涨跌额 / 昨收，保证两页数字可比
+    assert d["change_pct"] == 2.38
+    assert d["open"] == 96.806                     # 当日首根开盘
+    assert d["high"] == 97.2 and d["low"] == 96.48
+    assert d["funding_annual"] == -165.54          # 小时费率 × 24 × 365
+    assert d["open_interest"] == 2432722.4
+
+    minute = d["minute"]
+    assert minute["market_minutes"] == [[0, 1440]]  # 7×24：x 轴铺满当日
+    pts = minute["points"]
+    assert [p["volume"] for p in pts] == [1000.0, 2500.0]   # 累计量（MinuteChart 差分画柱）
+    assert pts[-1]["price"] == 99.092                        # 图尾与卡片同价
+
+    # 20 秒 TTL 内命中内存缓存，不再打上游
+    before = len(calls)
+    assert oil.wti_hyper_spot()["price"] == 99.092
+    assert len(calls) == before
+
+
+def test_wti_hyper_spot_stale_fallback(monkeypatch):
+    """上游全挂时回退最近一次成功结果并打 stale 标，不抛异常。"""
+    monkeypatch.setattr(oil, "_WTI_CACHE", {"wti": (0.0, {
+        "name": "WTI 暗盘（Hyperliquid 永续）", "price": 99.0, "minute": None,
+    })})
+    monkeypatch.setattr(oil, "_WTI_CHART_CACHE", {})
+    monkeypatch.setattr(oil, "_hl_post", lambda payload, timeout=15: b"")
+
+    d = oil.wti_hyper_spot()
+    assert d["price"] == 99.0 and d["stale"] is True
+
+
+def test_wti_hyper_spot_empty_when_no_history(monkeypatch):
+    """无缓存且上游不可用 → 返回空骨架（前端据此显示「暂不可用」）。"""
+    monkeypatch.setattr(oil, "_WTI_CACHE", {})
+    monkeypatch.setattr(oil, "_WTI_CHART_CACHE", {})
+    monkeypatch.setattr(oil, "_hl_post", lambda payload, timeout=15: b"")
+
+    d = oil.wti_hyper_spot()
+    assert d["price"] is None and d["minute"] is None and d["stale"] is True
+
+
+def test_futures_daily_history_batches_three_symbols(monkeypatch):
+    """三个外盘品种日K：各按天数截取末尾；个别品种取数失败只让该条为空，不拖累其余。"""
+    def fake_kline(sym: str, cn: bool = False) -> list[dict]:
+        if sym == "CL":
+            return []
+        return [{"date": f"2026-01-{i % 28 + 1:02d}", "v": float(i)} for i in range(300)]
+
+    monkeypatch.setattr(oil, "_daily_kline", fake_kline)
+    d = oil.futures_daily_history(days=250)
+
+    assert set(d["series"]) == {"brent", "wti", "ng"}
+    assert d["series"]["brent"]["symbol"] == "OIL"
+    assert d["series"]["ng"]["symbol"] == "NG"
+    # 截取末尾 250 根（保留最新，不是最早）
+    assert len(d["series"]["brent"]["points"]) == 250
+    assert d["series"]["brent"]["points"][-1]["v"] == 299.0
+    assert d["series"]["brent"]["stale"] is False
+    # 单品种失败 → 该条空 + stale，其余不受影响
+    assert d["series"]["wti"]["points"] == [] and d["series"]["wti"]["stale"] is True
+    assert d["series"]["ng"]["stale"] is False

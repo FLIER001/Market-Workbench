@@ -1189,6 +1189,44 @@ export interface OilSpotData {
   fetched_at: string | null;
   stale?: boolean;
 }
+// 三个外盘连续合约日K（新浪全球期货）：实时行情卡里各品种的迷你走势图
+export interface FuturesHistSeries {
+  symbol: string;
+  points: HistPoint[];
+  stale?: boolean;
+}
+export interface FuturesHistData {
+  series: Record<"brent" | "wti" | "ng", FuturesHistSeries>;
+  fetched_at: string | null;
+}
+// WTI 暗盘现货（Hyperliquid xyz:CL 永续，7×24 含周末连续报价）
+// 与传统 Brent/WTI 外盘互补：休市时段的预期变化也能看到，不必等开盘跳空
+export interface OilHyperSpotData {
+  name: string | null;
+  symbol: string | null;
+  price: number | null;
+  prev_close: number | null;
+  change: number | null;
+  change_pct: number | null;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  volume: number | null;          // 24h 成交量（桶）
+  notional: number | null;        // 24h 名义成交额（USD）
+  open_interest: number | null;   // 持仓量（桶）
+  funding: number | null;         // 小时资金费率（小数）
+  funding_annual: number | null;  // 年化资金费率（%）
+  oracle_px: number | null;
+  time: string | null;
+  date: string | null;
+  fetched_at: string | null;
+  stale?: boolean;
+  minute: {
+    date: string;
+    prev_close: number;
+    points: (MinutePoint & { price: number | null })[];
+  } | null;
+}
 
 // ---- 全球预期概率（Polymarket + Kalshi 双源，globalpercent 移植） ----
 export interface PulseMarket {
@@ -1681,6 +1719,8 @@ export const api = {
   oilInsight: (refresh = false) =>
     get<OilInsight | null>(`/oil/insight${refresh ? "?refresh=true" : ""}`, INSIGHT_TIMEOUT_MS).then((d) => d ?? null),
   oilSpot: () => get<OilSpotData>("/oil/spot"),
+  oilWtiHyper: () => get<OilHyperSpotData>("/oil/wti"),
+  futuresHist: (days = 250) => get<FuturesHistData>(`/oil/futures-hist?days=${days}`),
   brentHist: (days = 400) => get<BrentHistData>(`/oil/brent-hist?days=${days}`),
   pulseOverview: (refresh = false) => get<PulseOverview>(`/pulse/overview${refresh ? "?refresh=true" : ""}`),
   pulseInsight: (module: string) =>

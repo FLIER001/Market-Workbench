@@ -456,6 +456,208 @@ def oil_spot() -> dict:
         return {"brent": None, "wti": None, "ng": None, "fetched_at": None, "stale": True}
 
 
+# ---------------------------------------------------------------------------
+# WTI 暗盘：Hyperliquid HIP-3 永续（trade.xyz 部署，7×24 含周末连续报价）
+# ---------------------------------------------------------------------------
+# 传统 WTI（腾讯 hf_CL / NYMEX）有休市空档：周末、每日结算窗口、假期都无报价，
+# 而油价的地缘冲击（OPEC+ 临时表态、中东局势）恰恰常在周末发酵——开盘跳空即已定价。
+# Hyperliquid 上的永续 xyz:CL 追踪 WTI 美元/桶、24/7 连续出价，暗盘时段也有价格与
+# 成交，与黄金页 PAXG-USD 是同一范式：用连续市场补上休市时段的市场预期。
+_HL_INFO = "https://api.hyperliquid.xyz/info"
+_HL_DEX = "xyz"           # builder-deployed perp 场所（trade.xyz）
+_HL_WTI = "xyz:CL"        # WTI 原油永续，1 张 = 1 桶
+
+_WTI_TTL = 20             # 秒；与现货行情节奏对齐
+_WTI_CHART_TTL = 60       # 分钟线无需跟随 20 秒 ticker 重拉全天数据
+_WTI_CACHE: dict[str, tuple[float, dict]] = {}
+_WTI_CHART_CACHE: dict[str, tuple[float, dict]] = {}
+_WTI_LOCK = threading.Lock()
+
+
+def _hl_post(payload: dict, timeout: int = 15) -> bytes:
+    """Hyperliquid 公共 info 端点 POST（仅标准库 + curl）。失败返回空字节。"""
+    try:
+        r = subprocess.run(
+            ["curl", "-s", "-X", "POST", _HL_INFO,
+             "-H", "Content-Type: application/json",
+             "--max-time", str(timeout), "-d", json.dumps(payload)],
+            capture_output=True, timeout=timeout + 5,
+        )
+        return r.stdout if r.returncode == 0 and r.stdout else b""
+    except Exception:  # noqa: BLE001
+        return b""
+
+
+def _parse_hl_candles(raw: bytes) -> list[dict]:
+    """Hyperliquid candleSnapshot → [{time, price, open, high, low, volume, ot}]。
+
+    price 取该分钟收盘；time 为北京时间时钟分（与 MinuteChart 口径一致）；
+    volume 为该分钟成交量（桶，非累计，累计化由调用方处理）。
+    """
+    try:
+        rows = json.loads(raw.decode("utf-8", "ignore"))
+    except (ValueError, json.JSONDecodeError):
+        return []
+    if not isinstance(rows, list):
+        return []
+    points: list[dict] = []
+    for k in rows:
+        if not isinstance(k, dict):
+            continue
+
+        def num(key: str) -> float | None:
+            try:
+                v = float(k[key])
+                return v if math.isfinite(v) else None
+            except (KeyError, TypeError, ValueError):
+                return None
+
+        close = num("c")
+        try:
+            ot = int(k["t"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if close is None or close <= 0 or not math.isfinite(close):
+            continue
+        bj = datetime.fromtimestamp(ot / 1000, BEIJING)
+        points.append({
+            "time": bj.strftime("%H:%M"),
+            "price": close,
+            "open": num("o"),
+            "high": num("h"),
+            "low": num("l"),
+            "volume": num("v") or 0.0,
+            "ot": ot,
+        })
+    points.sort(key=lambda p: p["ot"])
+    return points
+
+
+def _hl_ctx() -> dict:
+    """xyz:CL 永续实时上下文：中间价/标记价/24h 量/资金费率/持仓量。"""
+    try:
+        data = json.loads(_hl_post({"type": "metaAndAssetCtxs", "dex": _HL_DEX}).decode("utf-8", "ignore"))
+        universe, ctxs = data[0]["universe"], data[1]
+        for i, u in enumerate(universe):
+            if u.get("name") == _HL_WTI and i < len(ctxs):
+                return ctxs[i] or {}
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
+def wti_hyper_spot() -> dict:
+    """WTI 暗盘现货：Hyperliquid xyz:CL 永续 7×24 实时行情 + 当日分时。
+
+    口径与黄金页 paxg_usd_spot 对齐：昨收取北京午夜前最后一根 1m K 线收盘，
+    分时为当日 00:00 起的 1m 序列（24h 共 1440 根，单次请求即可覆盖），
+    x 轴按 00:00–24:00 固定铺设。资金费率为**小时**费率，年化 = 费率 × 24 × 365。
+    失败回退最近一次成功结果（stale 标记）。
+    """
+    now = time.time()
+    with _WTI_LOCK:
+        hit = _WTI_CACHE.get("wti")
+        if hit and now - hit[0] < _WTI_TTL:
+            return hit[1]
+        try:
+            mid_ms = int(datetime.now(BEIJING)
+                         .replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
+            now_ms = int(datetime.now(BEIJING).timestamp() * 1000)
+            today = datetime.now(BEIJING).strftime("%Y-%m-%d")
+            chart_hit = _WTI_CHART_CACHE.get("minute")
+            chart = chart_hit[1] if chart_hit and now - chart_hit[0] < _WTI_CHART_TTL \
+                and chart_hit[1]["date"] == today else None
+            if chart is None:
+                # 昨日收盘：北京午夜前最后一根 1m K 线收盘（当日分时基准）
+                prev_rows = _parse_hl_candles(_hl_post({
+                    "type": "candleSnapshot",
+                    "req": {"coin": _HL_WTI, "interval": "1m",
+                            "startTime": mid_ms - 3_600_000, "endTime": mid_ms - 1},
+                }))
+                prev_close = prev_rows[-1]["price"] if prev_rows else None
+                rows = _parse_hl_candles(_hl_post({
+                    "type": "candleSnapshot",
+                    "req": {"coin": _HL_WTI, "interval": "1m",
+                            "startTime": mid_ms, "endTime": now_ms},
+                }))
+                if rows:
+                    chart = {"date": today, "prev_close": prev_close, "rows": rows}
+                    _WTI_CHART_CACHE["minute"] = (now, chart)
+                elif chart_hit and chart_hit[1]["date"] == today:
+                    chart = chart_hit[1]
+            rows = list(chart.get("rows") or []) if chart else []
+            prev_close = chart.get("prev_close") if chart else None
+
+            ctx = _hl_ctx()
+
+            def fnum(key: str) -> float | None:
+                try:
+                    v = float(ctx[key])
+                    return v if math.isfinite(v) else None
+                except (KeyError, TypeError, ValueError):
+                    return None
+
+            last_price = fnum("midPx") or (rows[-1]["price"] if rows else None)
+            if last_price is None:
+                raise ValueError("无实时价格")
+            if prev_close is None:
+                prev_close = fnum("prevDayPx")  # 兜底：UTC 日界前收
+            change = round(last_price - prev_close, 2) if prev_close else None
+            change_pct = round(change / prev_close * 100, 2) \
+                if change is not None and prev_close else None
+
+            # 分时累计量：MinuteChart 以累计量做差分画量柱，故此处累加成当日累计（桶）
+            points: list[dict] = []
+            cumulative = 0.0
+            for r in rows:
+                cumulative += r["volume"]
+                points.append({"time": r["time"], "price": r["price"],
+                               "volume": round(cumulative, 2)})
+            if points:
+                # 用实时中间价覆盖分时末点，保证图尾与卡片数字一致
+                points[-1] = {**points[-1], "price": last_price}
+
+            highs = [r["high"] for r in rows if r["high"] is not None]
+            lows = [r["low"] for r in rows if r["low"] is not None]
+            funding = fnum("funding")
+            payload = {
+                "name": "WTI 暗盘（Hyperliquid 永续）",
+                "symbol": _HL_WTI,
+                "price": last_price,
+                "prev_close": prev_close,
+                "change": change,
+                "change_pct": change_pct,
+                "open": rows[0]["open"] if rows else None,
+                "high": max(highs) if highs else None,
+                "low": min(lows) if lows else None,
+                "volume": fnum("dayBaseVlm"),      # 24h 成交量（桶）
+                "notional": fnum("dayNtlVlm"),     # 24h 名义成交额（USD）
+                "open_interest": fnum("openInterest"),   # 持仓量（桶）
+                "funding": funding,                        # 小时资金费率（小数）
+                "funding_annual": round(funding * 24 * 365 * 100, 2) if funding is not None else None,
+                "oracle_px": fnum("oraclePx"),
+                "time": points[-1]["time"] if points else datetime.now(BEIJING).strftime("%H:%M"),
+                "date": today,
+                "fetched_at": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M"),
+                "minute": {
+                    "date": today,
+                    "prev_close": prev_close or 0.0,
+                    "points": points,
+                    # 7×24：x 轴固定覆盖当日 00:00–24:00（北京时钟分钟）
+                    "market_minutes": [[0, 1440]],
+                },
+            }
+            _WTI_CACHE["wti"] = (now, payload)
+            return payload
+        except Exception:  # noqa: BLE001 — 网络/解析异常统一回退
+            pass
+        if hit:
+            payload = dict(hit[1])
+            payload["stale"] = True
+            return payload
+        return {"name": None, "price": None, "fetched_at": None, "minute": None, "stale": True}
+
+
 _BRENT_HIST_TTL = 3600  # 日K盘中仅收盘价变动，1 小时足够
 _BRENT_HIST_CACHE: tuple[float, dict] | None = None
 _BRENT_HIST_LOCK = threading.Lock()
@@ -493,6 +695,30 @@ def brent_daily_history(days: int = 400) -> dict:
 _KLINE_TTL = 3600
 _KLINE_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _KLINE_LOCK = threading.Lock()
+
+# 外盘连续合约（新浪全球期货）：实时行情卡三个品种的迷你走势图
+_FUT_CONTINUOUS = [("brent", "OIL"), ("wti", "CL"), ("ng", "NG")]
+
+
+def futures_daily_history(days: int = 250) -> dict:
+    """三个外盘连续合约的日K收盘序列：布伦特 / 纽约原油 / 美国天然气。
+
+    与 brent_daily_history 同源（走 _daily_kline，内部 1 小时 TTL），这里只做
+    批量打包与按天数截取，供实时行情卡里三个外盘品种各画一条迷你折线。
+    单个品种取数失败时该条为空序列（前端该卡不画图），不影响其余两条。
+    """
+    series: dict[str, dict] = {}
+    for key, sym in _FUT_CONTINUOUS:
+        pts = _daily_kline(sym)
+        series[key] = {
+            "symbol": sym,
+            "points": pts[-days:] if pts else [],
+            "stale": not pts,
+        }
+    return {
+        "series": series,
+        "fetched_at": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M"),
+    }
 
 
 def _parse_daily_kline(raw: str) -> list[dict]:

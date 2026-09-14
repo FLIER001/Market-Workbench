@@ -2,10 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { RefreshCw, Flame, TrendingUp, TrendingDown, Minus, AlertTriangle } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { MinuteChart } from "@/components/ui/MinuteChart";
 import { Sparkline } from "@/components/ui/Sparkline";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { PageSkeleton } from "@/components/ui/PageSkeleton";
-import { api, type OilScoreData, type OilIndicator, type OilSpotData, type OilSpotQuote, type BrentHistData, type HistPoint, type OilInsight } from "@/lib/api";
+import { api, type OilScoreData, type OilIndicator, type OilSpotData, type OilSpotQuote, type BrentHistData, type HistPoint, type OilInsight, type OilHyperSpotData, type MinuteKline, type FuturesHistData } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useSWR } from "@/hooks/useSWR";
 
@@ -33,28 +34,6 @@ function signalTone(score: number | null) {
 }
 
 const SPOT_REFRESH_MS = 20_000;
-
-function SpotQuote({ q, unit }: { q: OilSpotQuote | null; unit: string }) {
-  const up = q?.change_pct != null && q.change_pct > 0;
-  const down = q?.change_pct != null && q.change_pct < 0;
-  return (
-    <div className="min-w-0">
-      <div className="truncate text-xs text-muted-foreground">{q?.name ?? "—"}</div>
-      <div className="mt-0.5 text-lg font-bold tabular-nums leading-none">
-        {q?.price != null ? q.price.toFixed(2) : "—"}
-        <span className="ml-1 text-[10px] font-normal text-muted-foreground">{unit}</span>
-      </div>
-      <div className={cn("mt-0.5 flex items-center gap-1 text-[11px] font-semibold tabular-nums",
-        up ? "text-danger" : down ? "text-success" : "text-muted-foreground")}>
-        {up ? <TrendingUp className="h-3 w-3" /> : down ? <TrendingDown className="h-3 w-3" /> : null}
-        <span>{q?.change_pct != null ? `${q.change_pct > 0 ? "+" : ""}${q.change_pct.toFixed(2)}%` : "—"}</span>
-      </div>
-      <div className="mt-0.5 text-[10px] tabular-nums text-muted-foreground/60">
-        {q ? `${q.date} ${q.time}` : ""}
-      </div>
-    </div>
-  );
-}
 
 function IndicatorCard({ ind }: { ind: OilIndicator }) {
   const tone = signalTone(ind.score);
@@ -115,10 +94,225 @@ function StructureSparkline({ title, data, color, unit, note }: {
   );
 }
 
+// 实时行情可切换的四个标的：默认 WTI 暗盘，另可切到三个外盘品种。
+type OilTabKey = "hyper" | "brent" | "ny" | "gas";
+
+const OIL_TABS: { key: OilTabKey; label: string; note: string; unit: string }[] = [
+  { key: "hyper", label: "WTI 暗盘", note: "Hyperliquid 永续 · 7×24", unit: "USD/桶" },
+  { key: "brent", label: "布伦特原油", note: "腾讯财经 · 外盘连续", unit: "USD/桶" },
+  { key: "ny", label: "纽约原油", note: "腾讯财经 · 外盘连续", unit: "USD/桶" },
+  { key: "gas", label: "美国天然气", note: "腾讯财经 · 外盘连续", unit: "USD/MMBtu" },
+];
+
+// 外盘品种聚焦视图：腾讯外盘连续合约只有单点实时报价（没有分时序列），
+// 所以配一条新浪全球期货的日K折线（近 250 个交易日），把「当前价处在中期走势的什么位置」补上。
+// 高度刻意压扁：本卡是顶部三列里最左的 1/3 栏，要跟右侧评分卡 / AI 解读卡保持齐平。
+function SpotTabView({ label, q, hist, unit }: {
+  label: string;
+  q: OilSpotQuote | null;
+  hist: HistPoint[];
+  unit: string;
+}) {
+  const up = q?.change_pct != null && q.change_pct > 0;
+  const down = q?.change_pct != null && q.change_pct < 0;
+  const tone = up ? "text-danger" : down ? "text-success" : "text-muted-foreground";
+  const price = q?.price ?? null;
+  const low = q?.low ?? null;
+  const high = q?.high ?? null;
+  const prev = q?.prev_close ?? null;
+  const pos = low != null && high != null && price != null && high > low
+    ? Math.max(0, Math.min(1, (price - low) / (high - low)))
+    : null;
+  const amplitude = high != null && low != null && prev != null && prev > 0
+    ? ((high - low) / prev) * 100
+    : null;
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <span className="text-xs text-muted-foreground">{label}</span>
+        <span className={cn("text-3xl font-bold tabular-nums leading-none", tone)}>
+          {price != null ? price.toFixed(2) : "—"}
+        </span>
+        <span className={cn("flex items-center gap-0.5 text-sm font-semibold tabular-nums", tone)}>
+          {up ? <TrendingUp className="h-3.5 w-3.5" /> : down ? <TrendingDown className="h-3.5 w-3.5" /> : null}
+          {q?.change_pct != null ? `${q.change_pct > 0 ? "+" : ""}${q.change_pct.toFixed(2)}%` : "—"}
+        </span>
+        <span className="ml-auto text-[10px] text-muted-foreground/60">{unit}</span>
+      </div>
+
+      <div className="mt-2.5">
+        {hist.length > 1 ? (
+          <Sparkline data={hist} height={88} color="--primary" showLatest />
+        ) : (
+          <div className="flex h-[88px] items-center justify-center text-[10px] text-muted-foreground/50">
+            走势暂不可用
+          </div>
+        )}
+      </div>
+
+      {pos != null && (
+        <div className="mt-2.5">
+          <div className="relative h-1 rounded-full bg-muted/40">
+            <div
+              className="absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-background bg-primary"
+              style={{ left: `${pos * 100}%` }}
+            />
+          </div>
+          <div className="mt-1 flex items-baseline justify-between text-[9px] text-muted-foreground/70">
+            <span>低 <b className="font-mono font-medium text-success">{low!.toFixed(2)}</b></span>
+            <span className="text-muted-foreground/45">当日区间位置</span>
+            <span>高 <b className="font-mono font-medium text-danger">{high!.toFixed(2)}</b></span>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-2.5 grid grid-cols-4 gap-1 border-t border-border/30 pt-2 text-[10px] text-muted-foreground">
+        <span>昨收 <b className="font-mono font-medium text-foreground">
+          {prev != null ? prev.toFixed(2) : "—"}</b></span>
+        <span>最高 <b className="font-mono font-medium text-danger">
+          {high != null ? high.toFixed(2) : "—"}</b></span>
+        <span>最低 <b className="font-mono font-medium text-success">
+          {low != null ? low.toFixed(2) : "—"}</b></span>
+        <span>振幅 <b className="font-mono font-medium text-foreground">
+          {amplitude != null ? `${amplitude.toFixed(2)}%` : "—"}</b></span>
+      </div>
+    </div>
+  );
+}
+
+// 实时行情面板（tab 切换）：默认 WTI 暗盘（Hyperliquid 7×24 分时），
+// 也可切到三个外盘品种（腾讯实时报价 + 新浪日K折线）。
+// 整卡放在油价页顶部三列网格的最左栏（1/3 宽），右侧依次是评分卡与 AI 解读。
+// 两者口径互补——外盘看实时报价，暗盘补休市时段（周末 / 假期 / 每日结算窗口）的那一段。
+function LiveOilPanel({ hyper, spot, futures }: {
+  hyper: OilHyperSpotData | null;
+  spot: OilSpotData | null;
+  futures: FuturesHistData | null;
+}) {
+  const [tab, setTab] = useState<OilTabKey>("hyper");
+
+  const chart: MinuteKline | null = useMemo(() => {
+    if (!hyper?.minute || hyper.minute.points.length < 2) return null;
+    return {
+      date: hyper.minute.date,
+      prev_close: hyper.minute.prev_close,
+      points: hyper.minute.points.map((p) => ({ ...p, price: p.price ?? 0 })),
+      // 7×24 连续市场：x 轴固定铺满当日 00:00–24:00
+      market_minutes: [[0, 1440]],
+    };
+  }, [hyper]);
+
+  const short = (v: number | null | undefined, unit: string) => {
+    if (v == null) return "—";
+    const a = Math.abs(v);
+    if (a >= 1e8) return `${(v / 1e8).toFixed(2)}亿${unit}`;
+    if (a >= 1e4) return `${(v / 1e4).toFixed(1)}万${unit}`;
+    return `${v.toFixed(0)}${unit}`;
+  };
+
+  // tab → 外盘取数键（后端 series 用 brent/wti/ng，tab 用更直白的 ny/gas）
+  const extKey = tab === "hyper" ? null : tab;
+  const seriesKey = extKey === "brent" ? "brent" : extKey === "ny" ? "wti" : extKey === "gas" ? "ng" : null;
+  const extQuote = extKey === "brent" ? spot?.brent : extKey === "ny" ? spot?.wti : extKey === "gas" ? spot?.ng : null;
+  const extHist = seriesKey ? futures?.series?.[seriesKey]?.points ?? [] : [];
+  const stale = extKey ? Boolean(seriesKey && futures?.series?.[seriesKey]?.stale) : Boolean(hyper?.stale);
+  const active = OIL_TABS.find((t) => t.key === tab)!;
+  const isHyper = extKey === null;
+  // 报价时间戳并到「口径行」右侧，省掉视图区里单独一行（卡要压矮）
+  const stampLabel = isHyper
+    ? (hyper ? `${hyper.date} ${hyper.time}` : "")
+    : (extQuote ? `${extQuote.date} ${extQuote.time}` : "");
+
+  return (
+    <GlassCard className="p-3.5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+          <Flame className="h-3.5 w-3.5" /> 实时行情
+        </span>
+      </div>
+
+      {/* 分段控件（项目无 Tabs 组件，用朴素按钮实现）。aria-pressed 供无头浏览器断言定位 */}
+      <div className="mt-2.5 inline-flex flex-wrap gap-0.5 rounded-lg border border-border/50 bg-muted/20 p-0.5">
+        {OIL_TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            aria-pressed={tab === t.key}
+            onClick={() => setTab(t.key)}
+            className={cn(
+              "rounded-md px-2 py-0.5 text-[11px] transition-colors",
+              tab === t.key
+                ? "bg-background font-medium text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-1 flex items-baseline justify-between gap-2 text-[10px] text-muted-foreground/60">
+        <span className="truncate">{active.note} · {active.unit}{stale ? " · 缓存" : ""}</span>
+        <span className="shrink-0 tabular-nums text-muted-foreground/45">{stampLabel}</span>
+      </div>
+
+      {/* 视图区固定最小高度：四个 tab 内容长短不一，切换时卡片高度不跳。
+          下限 203 是两边实测后取齐的结果——暗盘 tab 152 图 + 8 外边距 + 43 统计行 = 203，
+          外盘 tab「报价 + 88 折线 + 区间条 + 四列统计」= 195，取 203 让两边一样高。 */}
+      <div className="mt-2 min-h-[203px]">
+        {isHyper ? (
+          <>
+            {chart ? (
+              <MinuteChart data={chart} height={152} minHeight={152} />
+            ) : (
+              <div className="flex h-40 items-center justify-center text-[11px] text-muted-foreground">
+                暗盘分时暂不可用
+              </div>
+            )}
+
+            {/* 1/3 窄栏里 MinuteChart 标题行放不下这几个数（按容器宽自动隐藏），挪到此处补回。
+                刻意只留 6 组、收成两行——多一行就把卡片顶高，跟右侧两卡不齐了。 */}
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/30 pt-2 text-[10px] text-muted-foreground/70">
+              <span>今开 <b className="font-mono font-medium text-foreground">{hyper?.open != null ? hyper.open.toFixed(2) : "—"}</b></span>
+              <span>最高 <b className="font-mono font-medium text-danger">{hyper?.high != null ? hyper.high.toFixed(2) : "—"}</b></span>
+              <span>最低 <b className="font-mono font-medium text-success">{hyper?.low != null ? hyper.low.toFixed(2) : "—"}</b></span>
+              <span>总量 <b className="font-mono font-medium text-foreground">{hyper?.volume != null ? short(hyper.volume, "桶") : "—"}</b></span>
+              <span>持仓 <b className="font-mono font-medium text-foreground">{short(hyper?.open_interest, "桶")}</b></span>
+              <span>
+                费率(1h){" "}
+                <b className={cn("font-mono font-medium",
+                  (hyper?.funding ?? 0) > 0 ? "text-danger" : (hyper?.funding ?? 0) < 0 ? "text-success" : "text-foreground")}>
+                  {hyper?.funding != null ? `${(hyper.funding * 100).toFixed(4)}%` : "—"}
+                </b>
+                <span className="text-muted-foreground/60">
+                  {" "}年化 {hyper?.funding_annual != null ? `${hyper.funding_annual.toFixed(1)}%` : "—"}
+                </span>
+              </span>
+            </div>
+          </>
+        ) : (
+          <SpotTabView label={active.label} q={extQuote ?? null} hist={extHist} unit={active.unit} />
+        )}
+      </div>
+
+      {/* 脚注区固定高度：暗盘 tab 不显示口径说明但仍占位——切 tab 时卡片高度不变。
+          17px = 外盘那一行（10px × leading-relaxed）的实测高度。 */}
+      <div className="mt-1 min-h-[17px] text-[10px] leading-relaxed text-muted-foreground/50">
+        {!isHyper && (
+          <>外盘＝腾讯报价＋新浪 250 日线；周末/结算窗口看暗盘补齐。</>
+        )}
+      </div>
+    </GlassCard>
+  );
+}
+
 export function Oil() {
   const [err, setErr] = useState<string | null>(null);
   const [spot, setSpot] = useState<OilSpotData | null>(null);
   const [brent, setBrent] = useState<BrentHistData | null>(null);
+  const [wtiHyper, setWtiHyper] = useState<OilHyperSpotData | null>(null);
+  const [futures, setFutures] = useState<FuturesHistData | null>(null);
 
   const { data: score, loading, revalidating, revalidate } = useSWR<OilScoreData>(
     "oil:v1",
@@ -131,16 +325,17 @@ export function Oil() {
 
   const load = () => { setErr(null); void revalidate(true); };
 
-  // 实时油价轮询（20 秒档，与后端缓存对齐；后台标签页暂停）
+  // 实时行情 + WTI 暗盘轮询（20 秒档，与后端缓存对齐；后台标签页暂停）
   useEffect(() => {
     let cancelled = false;
     let timer: number | null = null;
     const tick = async () => {
       if (!document.hidden) {
-        try {
-          const px = await api.oilSpot();
-          if (!cancelled) setSpot(px);
-        } catch { /* 静默保留旧值 */ }
+        const [px, hy] = await Promise.allSettled([api.oilSpot(), api.oilWtiHyper()]);
+        if (!cancelled) {
+          if (px.status === "fulfilled") setSpot(px.value);
+          if (hy.status === "fulfilled") setWtiHyper(hy.value);
+        }
       }
       if (!cancelled) timer = window.setTimeout(tick, SPOT_REFRESH_MS);
     };
@@ -167,6 +362,20 @@ export function Oil() {
     };
     void loadBrent();
     const timer = window.setInterval(() => { if (!document.hidden) void loadBrent(); }, 60 * 60_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, []);
+
+  // 三个外盘品种的日K迷你走势（低频，1 小时刷新即可——日线盘中只有末根在动）
+  useEffect(() => {
+    let cancelled = false;
+    const loadFutures = async () => {
+      try {
+        const h = await api.futuresHist(250);
+        if (!cancelled) setFutures(h);
+      } catch { /* 迷你走势缺省即可，不阻塞卡片其余部分 */ }
+    };
+    void loadFutures();
+    const timer = window.setInterval(() => { if (!document.hidden) void loadFutures(); }, 60 * 60_000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, []);
 
@@ -220,6 +429,9 @@ export function Oil() {
         spot?.brent?.price
           ? `Brent ${spot.brent.price.toFixed(2)} USD（${spot.brent.change_pct != null ? (spot.brent.change_pct > 0 ? "+" : "") + spot.brent.change_pct.toFixed(2) + "%" : "—"}）、WTI ${spot?.wti?.price?.toFixed(2) ?? "—"} USD、天然气 ${spot?.ng?.price?.toFixed(3) ?? "—"} USD`
           : "实时行情：暂不可用",
+        wtiHyper?.price
+          ? `WTI 暗盘（Hyperliquid 永续，7×24 含周末）：${wtiHyper.price.toFixed(2)} USD/桶（${wtiHyper.change_pct != null ? (wtiHyper.change_pct > 0 ? "+" : "") + wtiHyper.change_pct.toFixed(2) + "%" : "—"}），持仓 ${wtiHyper.open_interest != null ? (wtiHyper.open_interest / 1e4).toFixed(1) + " 万桶" : "—"}，资金费率年化 ${wtiHyper.funding_annual != null ? wtiHyper.funding_annual.toFixed(1) + "%" : "—"}`
+          : "WTI 暗盘：暂不可用",
         score.top_positive_drivers.length ? `利多驱动：${score.top_positive_drivers.join("、")}` : "利多驱动：暂无明显",
         score.top_negative_drivers.length ? `利空驱动：${score.top_negative_drivers.join("、")}` : "利空驱动：暂无明显",
         `维度得分：${dimOrder.map((name) => {
@@ -265,33 +477,26 @@ export function Oil() {
         </GlassCard>
       )}
 
-      {score && (
-        <>
-          {unavailableSources.length > 0 && (
-            <div className="mb-3 text-[11px] text-warning">
-              数据源异常：{unavailableSources.map((s) => `${s.label}${s.status === "stale"
-                ? `（观测滞后${s.age_days ?? "?"}天）` : "（缺失）"}`).join("、")}
-            </div>
-          )}
+      {score && unavailableSources.length > 0 && (
+        <div className="mb-3 text-[11px] text-warning">
+          数据源异常：{unavailableSources.map((s) => `${s.label}${s.status === "stale"
+            ? `（观测滞后${s.age_days ?? "?"}天）` : "（缺失）"}`).join("、")}
+        </div>
+      )}
 
-          <div className="mb-5 grid items-stretch gap-4 lg:grid-cols-[minmax(220px,1fr)_auto_minmax(220px,1fr)]">
-            <GlassCard className="p-4">
-              <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                <Flame className="h-3.5 w-3.5" /> 实时行情
-              </div>
-              <div className="grid grid-cols-3 gap-3">
-                <SpotQuote q={spot?.brent ?? null} unit="USD" />
-                <SpotQuote q={spot?.wti ?? null} unit="USD" />
-                <SpotQuote q={spot?.ng ?? null} unit="USD" />
-              </div>
-              <div className="mt-2 border-t border-border/30 pt-2 text-[10px] leading-relaxed text-muted-foreground/60">
-                Brent/WTI 为外盘连续合约（腾讯财经），北京时间连续报价{spot?.stale ? " · 缓存" : ""}。
-              </div>
-            </GlassCard>
+      {/* 顶部三列：实时行情（左 1/3，暗盘分时图 + tab 切外盘）｜评分卡｜AI 解读。
+          等高靠「压缩高的那张」而不是「拉伸矮的两张」：实时行情卡把分时图压到 152、
+          外盘折线压到 88、口径与时间并成一行、统计行收成两行，实测外框 334px；
+          网格用 items-start 让三卡各取自然高度——评分卡 328 / AI 解读 330，三者底边差 ≤6px，
+          既不强制 stretch（那会把矮卡拉出几百 px 死白），也不受 AI 文案长短影响。 */}
+      <div className="mb-5 grid items-start gap-4 lg:grid-cols-3">
+        <LiveOilPanel hyper={wtiHyper} spot={spot} futures={futures} />
 
+        {score && (
+          <>
             <GlassCard glow className="p-5">
-              <div className="flex items-center gap-5">
-                <div className="relative h-32 w-32">
+              <div className="flex items-center gap-4">
+                <div className="relative h-32 w-32 shrink-0">
                   <svg viewBox="0 0 120 120" className="h-full w-full -rotate-90">
                     <circle cx="60" cy="60" r={r} fill="none" strokeWidth="10"
                       className="stroke-muted/30" />
@@ -392,8 +597,18 @@ export function Oil() {
                 </div>
               </div>
             </GlassCard>
-          </div>
+          </>
+        )}
 
+        {!score && !err && (
+          <GlassCard className="flex min-h-40 items-center justify-center p-5 text-sm text-muted-foreground lg:col-span-2">
+            评分卡计算中…
+          </GlassCard>
+        )}
+      </div>
+
+      {score && (
+        <>
           <GlassCard className="mb-5 p-5">
             <div className="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">
               <Flame className="h-3.5 w-3.5" /> 维度得分
