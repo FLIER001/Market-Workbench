@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.vibe-research.app-restart</string>
+
+  <!-- 后端进程在 macOS 上内存只涨不跌：Python/NumPy 释放的页不还给系统，
+       gc.collect()、PYTHONMALLOC=malloc、malloc_zone_pressure_relief() 实测均无效
+       （见 .workbuddy/memory/MEMORY.md），唯一回收手段是重启进程。
+       三个时刻都避开了 A 股连续竞价与后台重算窗口（调度器只在 09:15-11:30 /
+       13:00-15:00 与 15:10-15:20 运行）。重启后由磁盘快照兜底，首个请求毫秒级返回。
+
+       停用：launchctl bootout gui/501/com.vibe-research.app-restart -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/launchctl</string>
+    <string>kickstart</string>
+    <string>-k</string>
+    <string>gui/501/com.vibe-research.app</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict>
+      <key>Hour</key>
+      <integer>4</integer>
+      <key>Minute</key>
+      <integer>30</integer>
+    </dict>
+    <dict>
+      <key>Hour</key>
+      <integer>11</integer>
+      <key>Minute</key>
+      <integer>45</integer>
+    </dict>
+    <dict>
+      <key>Hour</key>
+      <integer>15</integer>
+      <key>Minute</key>
+      <integer>40</integer>
+    </dict>
+  </array>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/private/tmp/vibe-research-app-restart.log</string>
+  <key>StandardErrorPath</key>
+  <string>/private/tmp/vibe-research-app-restart.log</string>
+</dict>
+</plist>
