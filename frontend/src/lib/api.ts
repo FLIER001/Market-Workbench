@@ -40,6 +40,92 @@ export interface MyReport {
   id: string; name: string; industry: string; size: number; ext: string; ts: number;
 }
 
+// ---------------------------------------------------------------------------
+// 美联储利率追踪（FedWatch）
+// ---------------------------------------------------------------------------
+
+export interface FedWatchNextMeeting {
+  label: string; dates: string | null; days_away: number | null;
+}
+export interface FedWatchStatement {
+  date?: string; url?: string; action?: string;
+  target_low?: number; target_high?: number; sentence?: string;
+}
+export interface FedWatchEffr {
+  date: string | null; rate: number; target_low: number | null; target_high: number | null;
+}
+export interface FedWatchOfficial {
+  next_meeting?: FedWatchNextMeeting | null;
+  meetings?: Array<{ label: string; dates: string; has_sep?: boolean }>;
+  latest_statement?: FedWatchStatement;
+  effr?: FedWatchEffr | null;
+  error?: string;
+}
+export interface FedWatchSpot { rate: number | null; method: string; }
+export interface FedWatchZqQuote { price: number; symbol: string; market_time?: number | null; }
+export interface FedWatchProb {
+  meeting: string; dates: string;
+  implied_rate: number; path_rate?: number;
+  p_hike: number; p_cut: number; p_hold: number;
+  contract: string; contract_price: number;
+}
+export interface FedWatchPmOutcome {
+  label: string; yes: number | null; vol24h: number;
+  chg_1d?: number | null; chg_1w?: number | null; chg_1m?: number | null;
+  best_bid?: number | null; best_ask?: number | null;
+}
+export interface FedWatchPmEvent {
+  title: string; end: string; vol24h: number;
+  meeting?: string | null; kind?: string; year?: string;
+  markets: FedWatchPmOutcome[];
+}
+export interface FedWatchMatrixRow {
+  meeting: string; dates: string; implied_rate: number;
+  cme_equiv: {
+    p_hike: number; p_cut: number; p_hold: number;
+    contract: string; contract_price: number;
+    chg?: Record<string, number>;
+  };
+  polymarket: {
+    p_hike: number; p_cut: number; p_hold: number | null;
+    vol24h: number; outcomes: FedWatchPmOutcome[];
+    chg?: { p_hike_chg_24h?: number | null; p_cut_chg_24h?: number | null; p_hold_chg_24h?: number | null };
+  } | null;
+  diff: { p_hike_diff: number; p_cut_diff: number; p_hold_diff: number | null } | null;
+}
+export interface FedWatchData {
+  schema_version: number; updated: string;
+  official: FedWatchOfficial;
+  futures?: {
+    spot: FedWatchSpot;
+    quotes: Record<string, FedWatchZqQuote>;
+    probs: FedWatchProb[];
+    note?: string; error?: string; stale_quotes?: boolean;
+  };
+  polymarket?: {
+    decisions: FedWatchPmEvent[];
+    counts: FedWatchPmEvent[];
+    level: FedWatchPmEvent[];
+    error?: string;
+  };
+  marginal?: {
+    zq: Record<string, Record<string, number>>;
+    pm: Record<string, { p_hike_chg_24h?: number | null; p_cut_chg_24h?: number | null; p_hold_chg_24h?: number | null }>;
+    history_note: string | null;
+  };
+  cme_archive?: {
+    snapshot_date?: string;
+    meetings?: Record<string, {
+      ease: number; no_change: number; hike: number;
+      contract: string; mid_price: string;
+    }>;
+    error?: string;
+  };
+  matrix: FedWatchMatrixRow[];
+  source_status?: Array<{ key: string; label: string; status: string }>;
+}
+
+
 // 下载/预览研报：带鉴权头 fetch → blob → 触发浏览器下载（<a download> 无法带 Authorization，故走 blob）。
 export async function downloadReport(id: string, name: string): Promise<void> {
   const resp = await fetch(`/api/myreports/file/${id}`, { headers: authHeaders() });
@@ -1468,6 +1554,8 @@ export interface TimingBlock {
   text: string;
   parts: TimingPart[];
   hist?: HistPoint[];
+  /** 下联图对照基准：全A指数（中证全指 000985）日收盘，与 hist 共用同一条交易日横轴 */
+  benchmark?: { name: string; code: string; label: string; hist: HistPoint[] };
   drivers?: { name: string; contribution: number }[];
 }
 export interface MarketConfirmBlock {
@@ -1718,6 +1806,7 @@ export const api = {
   oilScore: (refresh = false) => get<OilScoreData>(`/oil/score${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
   oilInsight: (refresh = false) =>
     get<OilInsight | null>(`/oil/insight${refresh ? "?refresh=true" : ""}`, INSIGHT_TIMEOUT_MS).then((d) => d ?? null),
+  fedWatch: (refresh = false) => get<FedWatchData>(`/fedwatch${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
   oilSpot: () => get<OilSpotData>("/oil/spot"),
   oilWtiHyper: () => get<OilHyperSpotData>("/oil/wti"),
   futuresHist: (days = 250) => get<FuturesHistData>(`/oil/futures-hist?days=${days}`),

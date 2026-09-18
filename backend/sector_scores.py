@@ -1035,3 +1035,21 @@ def get_sector_scores(force: bool = False) -> dict:
         valid=lambda value: bool(value.get("industries")),
         ttl=_cache_ttl(cached or {}), warm=_load_cache, save=_save_cache, force=force,
     )
+
+
+def adopt_disk_snapshot() -> bool:
+    """子进程重算落盘后，主进程把新快照原子换入内存缓存。
+
+    macOS 上主进程释放的堆不还给系统（实测见 mem_watchdog），全市场
+    评分重算每轮会在主进程留下几十 MB 永久残渣——所以重算由调度器
+    下沉到子进程执行（进程退出内存即归还），本函数只负责无竞占地
+    拾取成果。快照没有变新（子进程失败）则不动内存里的旧值。
+    """
+    fresh = _load_cache()
+    if fresh is None:
+        return False
+    current = cache_runtime.peek("sector_scores:v6")
+    if current is not None and str(fresh.get("generated_at")) == str(current.get("generated_at")):
+        return False
+    cache_runtime.swap_in("sector_scores:v6", fresh)
+    return True

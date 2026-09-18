@@ -182,6 +182,9 @@ _TIMING_SCALE = 1.6  # 加权均值围绕 50 的放大倍数（与债市分品�
 _IDX_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _IDX_LOCK = threading.Lock()
 _IDX_TTL = 3600.0
+# 一次取全、按 days 切片缓存：调用方需求不一（趋势 320、择时回放基准 260），
+# 若按 days 缓存，先到者会把后到者的窗口截短（后到者拿到 hit[-days:] 只有先到者的长度）。
+_IDX_BARS = 700
 
 
 def _index_points(secid: str, days: int = 320) -> list[dict]:
@@ -192,15 +195,54 @@ def _index_points(secid: str, days: int = 320) -> list[dict]:
             return hit[1][-days:]
     rows = []
     for _ in range(2):  # 东财断连时重试一次（腾讯降级在内）
-        rows = astock.index_daily_em(secid, days=days)
+        rows = astock.index_daily_em(secid, days=_IDX_BARS)
         if rows:
             break
         time.sleep(1.0)
-    pts = _kline_points(rows, days)
+    pts = _kline_points(rows, _IDX_BARS)
     if pts:
         with _IDX_LOCK:
             _IDX_CACHE[secid] = (now, pts)
-    return pts
+    return pts[-days:]
+
+
+# 全A指数基准（择时分回放的下方对照图）：与板块评分/宏观总分同源，均用中证全指 000985。
+_BENCHMARK_SECID = "1.000985"
+_BENCHMARK_CODE = "000985"
+_BENCHMARK_NAME = "全A指数"
+_BENCHMARK_BARS = 260  # 与择时分逐日回放同长（约一年交易日）
+
+
+def _trading_days(bars: int = _BENCHMARK_BARS) -> set[str]:
+    """交易日历（取自中证全指日K，进程级缓存）。日历不可用时返回空集，调用方按不过滤处理。"""
+    return {str(p["date"])[:10] for p in _index_points(_BENCHMARK_SECID, days=bars)}
+
+
+def _last_trading_day(ref: str | None = None) -> str:
+    """不晚于 ref 的最近交易日。用于把「当期读数」落在真实交易日上，而不是快照运行日。"""
+    ref = str(ref or datetime.now(_BEIJING).strftime("%Y-%m-%d"))[:10]
+    days = sorted(d for d in _trading_days() if d <= ref)
+    return days[-1] if days else ref
+
+
+def _benchmark_series(axis: list[str]) -> dict:
+    """全A指数（中证全指 000985）日收盘，裁剪到择时分回放的日期区间。
+
+    两张图共用一条日期横轴，因此这里只保留 axis 覆盖区间内的交易日；前端按 date
+    对齐（不按数组下标硬拉），任一序列缺当日值时该点不画，不做前向填充臆造走势。
+    """
+    out = {"name": _BENCHMARK_NAME, "code": _BENCHMARK_CODE,
+           "label": f"{_BENCHMARK_NAME}（中证全指 {_BENCHMARK_CODE}）", "hist": []}
+    if not axis:
+        return out
+    pts = _index_points(_BENCHMARK_SECID, days=_BENCHMARK_BARS)
+    if not pts:
+        return out
+    lo, hi = str(axis[0])[:10], str(axis[-1])[:10]
+    out["hist"] = [{"date": str(p["date"])[:10], "v": p["v"]}
+                   for p in pts if lo <= str(p["date"])[:10] <= hi]
+    return out
+
 
 _RISK_LEVELS = [
     {"key": "strong_risk_off", "min": -1, "max": 25, "label": "强偏空", "multiplier": 0.60,
@@ -380,8 +422,16 @@ def _market_confirm(macro: dict, macro_date: str, curve: dict, pos: dict,
          []),
     ]
     # crowding 的当期分注入回放尾点（它没有逐日 hist）
-    today = str(datetime.now(_BEIJING).strftime("%Y-%m-%d"))
+    # 尾点落在「最近交易日」而非快照运行日：周末/节假日跑批时，日期轴上不该出现一个
+    # 指数没有报价的点（下方全A指数对照图与它共用同一条横轴）。
+    today = _last_trading_day()
     score, parts, hist = _combine(mc_parts, _MC_WEIGHTS, 1.0, replay_today=today)
+    # 逐日回放只留真实交易日：日度宏观快照在周末也续接一条，但当日只有部分成分有值，
+    # 按已覆盖权重归一后合成出的分数与交易日不同口径（实测 2025-09-28 周日 60.7，
+    # 夹在周五 71.7 与周一 76.2 之间），这种点会污染回放曲线并让两张图的横轴错位。
+    tdays = _trading_days()
+    if tdays:
+        hist = [p for p in hist if p["date"] in tdays]
 
     # 波动率/信用利差当日值留给失效条件生成
     return {
@@ -782,6 +832,8 @@ def _payload() -> dict:
 
     mc = _market_confirm(macro, macro_date, curve, pos, sector, liq_leverage)
     timing = _timing_engine(macro_score, liq_score, mc, macro_hist, liq_hist)
+    # 择时分回放的下方对照：全A指数日收盘，共用同一条日期横轴（前端按 date 对齐）
+    timing["benchmark"] = _benchmark_series([str(p["date"])[:10] for p in (timing.get("hist") or [])])
     corr = _correlation_summary()
     scores = _asset_scores(macro, macro_date, liq_score, mc, segments, calc,
                            oil_data, gold_data, corr)

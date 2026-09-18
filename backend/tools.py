@@ -28,6 +28,7 @@ import cache_runtime
 import bonds
 import gold_score
 import oil
+import fedwatch
 import sector_scores
 import sw_level2_scores
 import industry_chain
@@ -184,6 +185,10 @@ TOOLS: list[dict] = [
        "查油价多维评分：总分/信号 + 七维（边际物理稀缺/供给弹性/炼化需求/计价环境/风险溢价/仓位/趋势）"
        "+ 正负贡献因子 + Brent-WTI/SC比率/SPR/需求天数结构层。",
        example="原油现在什么评分、库存和供给端什么状态 → query_oil_score()"),
+    _t("query_fedwatch",
+       "查美联储利率追踪：下次 FOMC 会议倒计时 + 当前目标区间 + ZQ 期货自算的加息/降息概率（CME FedWatch 等价口径）"
+       "+ Polymarket 预测市场概率 + 两源概率差与 24h 边际变化。",
+       example="市场现在怎么定价下次美联储会议、和昨天比概率变了吗 → query_fedwatch()"),
     _t("query_bonds_curve",
        "查中债国债收益率曲线（3M-30Y 关键期限）+ 期限利差（10Y-1Y 等）+ AAA 信用利差的历史序列。",
        example="当前收益率曲线形态、期限利差在什么位置 → query_bonds_curve()"),
@@ -738,6 +743,47 @@ def _gold_score(args: dict):
     }
 
 
+def _fedwatch(args: dict):
+    """美联储利率追踪：下次会议 + 目标区间 + 自算概率 vs Polymarket + 概率差。"""
+    d = fedwatch.get_fedwatch() or {}
+    off = d.get("official") or {}
+    matrix = d.get("matrix") or []
+    if not matrix and not (d.get("polymarket") or {}).get("decisions"):
+        return {"error": "美联储利率追踪暂不可用"}
+    fut = d.get("futures") or {}
+    out = {
+        "updated": d.get("updated"),
+        "next_meeting": off.get("next_meeting"),
+        "target_range": None,
+        "spot": fut.get("spot"),
+        "meetings": [],
+    }
+    stmt = off.get("latest_statement") or {}
+    if stmt.get("target_low") is not None:
+        out["target_range"] = f"{stmt['target_low']}-{stmt['target_high']}%"
+    effr = off.get("effr")
+    if effr:
+        out["effr"] = f"{effr['rate']}%（{effr['date']}）"
+        if out["target_range"] is None:
+            out["target_range"] = f"{effr['target_low']}-{effr['target_high']}%"
+    for row in matrix:
+        cme = row.get("cme_equiv") or {}
+        pm = row.get("polymarket") or {}
+        diff = row.get("diff") or {}
+        out["meetings"].append({
+            "meeting": row["meeting"],
+            "dates": row.get("dates"),
+            "implied_rate": row.get("implied_rate"),
+            "zq_prob": {k: cme.get(k) for k in ("p_hike", "p_hold", "p_cut")},
+            "polymarket": {k: pm.get(k) for k in ("p_hike", "p_hold", "p_cut", "vol24h")} if pm else None,
+            "diff": diff if diff else None,
+        })
+    src = d.get("source_status") or []
+    if src:
+        out["data_sources"] = [f"{s['label']}: {s['status']}" for s in src]
+    return out
+
+
 def _oil_score(args: dict):
     """油价评分：总分/信号 + 七维得分 + 指标明细（裁掉 hist）+ 结构层最新值。"""
     d = oil.get_oil_score() or {}
@@ -875,6 +921,20 @@ def _bonds_overview(args: dict):
     return out or {"error": "债市数据暂不可用"}
 
 
+def _bench_summary(b: dict | None) -> dict | None:
+    """全A指数（择时分回放的下方对照图）压缩摘要：只给最新点位与区间涨跌，不回传整条曲线。"""
+    pts = [p for p in ((b or {}).get("hist") or [])
+           if isinstance(p, dict) and isinstance(p.get("v"), (int, float)) and p.get("date")]
+    if len(pts) < 2:
+        return None
+    first, last = pts[0]["v"], pts[-1]["v"]
+    return {
+        "name": (b or {}).get("label") or (b or {}).get("name"),
+        "start": f"{pts[0]['date']} {first:.2f}", "latest": f"{pts[-1]['date']} {last:.2f}",
+        "range_pct": round((last / first - 1.0) * 100.0, 2) if first else None,
+    }
+
+
 def _timing_allocation(args: dict) -> dict:
     """择时+大类配置：结论层（档位/倍率/权重/调仓）+ 三证据分，hist 只留尾部 8 点。"""
     d = timing_alloc.get_timing_allocation() or {}
@@ -899,6 +959,7 @@ def _timing_allocation(args: dict) -> dict:
             "invalidation": t.get("invalidation"),
             "parts": t.get("parts"), "hist_recent": _hist(t.get("hist")),
         },
+        "benchmark": _bench_summary(t.get("benchmark")),
         "evidence": {k: {"score": (v or {}).get("score"), "state": (v or {}).get("state")}
                      for k, v in ev.items() if isinstance(v, dict)},
         "allocation": {
@@ -955,6 +1016,7 @@ _HANDLERS = {
     "query_sector_scores": _sector_scores,
     "query_gold_score": _gold_score,
     "query_oil_score": _oil_score,
+    "query_fedwatch": _fedwatch,
     "query_bonds_curve": _bonds_curve,
     "query_bonds_overview": _bonds_overview,
     "query_bonds_framework": _bonds_framework,

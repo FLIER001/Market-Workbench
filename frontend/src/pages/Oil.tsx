@@ -95,23 +95,23 @@ function StructureSparkline({ title, data, color, unit, note }: {
 }
 
 // 实时行情可切换的四个标的：默认 WTI 暗盘，另可切到三个外盘品种。
+// 只留 label / unit —— 数据源与口径说明用户明确要求不在卡内出现（页面底部有统一说明）。
 type OilTabKey = "hyper" | "brent" | "ny" | "gas";
 
-const OIL_TABS: { key: OilTabKey; label: string; note: string; unit: string }[] = [
-  { key: "hyper", label: "WTI 暗盘", note: "Hyperliquid 永续 · 7×24", unit: "USD/桶" },
-  { key: "brent", label: "布伦特原油", note: "腾讯财经 · 外盘连续", unit: "USD/桶" },
-  { key: "ny", label: "纽约原油", note: "腾讯财经 · 外盘连续", unit: "USD/桶" },
-  { key: "gas", label: "美国天然气", note: "腾讯财经 · 外盘连续", unit: "USD/MMBtu" },
+const OIL_TABS: { key: OilTabKey; label: string; unit: string }[] = [
+  { key: "hyper", label: "WTI 暗盘", unit: "USD/桶" },
+  { key: "brent", label: "布伦特原油", unit: "USD/桶" },
+  { key: "ny", label: "纽约原油", unit: "USD/桶" },
+  { key: "gas", label: "美国天然气", unit: "USD/MMBtu" },
 ];
 
 // 外盘品种聚焦视图：腾讯外盘连续合约只有单点实时报价（没有分时序列），
 // 所以配一条新浪全球期货的日K折线（近 250 个交易日），把「当前价处在中期走势的什么位置」补上。
 // 高度刻意压扁：本卡是顶部三列里最左的 1/3 栏，要跟右侧评分卡 / AI 解读卡保持齐平。
-function SpotTabView({ label, q, hist, unit }: {
+function SpotTabView({ label, q, hist }: {
   label: string;
   q: OilSpotQuote | null;
   hist: HistPoint[];
-  unit: string;
 }) {
   const up = q?.change_pct != null && q.change_pct > 0;
   const down = q?.change_pct != null && q.change_pct < 0;
@@ -138,14 +138,13 @@ function SpotTabView({ label, q, hist, unit }: {
           {up ? <TrendingUp className="h-3.5 w-3.5" /> : down ? <TrendingDown className="h-3.5 w-3.5" /> : null}
           {q?.change_pct != null ? `${q.change_pct > 0 ? "+" : ""}${q.change_pct.toFixed(2)}%` : "—"}
         </span>
-        <span className="ml-auto text-[10px] text-muted-foreground/60">{unit}</span>
       </div>
 
       <div className="mt-2.5">
         {hist.length > 1 ? (
-          <Sparkline data={hist} height={88} color="--primary" showLatest />
+          <Sparkline data={hist} height={113} color="--primary" showLatest />
         ) : (
-          <div className="flex h-[88px] items-center justify-center text-[10px] text-muted-foreground/50">
+          <div className="flex h-[113px] items-center justify-center text-[10px] text-muted-foreground/50">
             走势暂不可用
           </div>
         )}
@@ -176,6 +175,12 @@ function SpotTabView({ label, q, hist, unit }: {
           {low != null ? low.toFixed(2) : "—"}</b></span>
         <span>振幅 <b className="font-mono font-medium text-foreground">
           {amplitude != null ? `${amplitude.toFixed(2)}%` : "—"}</b></span>
+      </div>
+
+      {/* 数据源说明放在视图内部最后一行：这样暗盘 tab 不会为它空出一整行，
+          省下的高度全给走势图（原来它单独占一行，两卡高度对齐时要额外占位）。 */}
+      <div className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground/50">
+        外盘＝腾讯报价＋新浪 250 日线；周末/结算窗口看暗盘补齐。
       </div>
     </div>
   );
@@ -226,14 +231,21 @@ function LiveOilPanel({ hyper, spot, futures }: {
 
   return (
     <GlassCard className="p-3.5">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      {/* 标题行右侧挂「单位 + 报价时间」：原先它们是 tabs 下面独立一行的口径说明，
+          用户要求删掉那一行——时间挪上来，省下的高度全部还给分时图。 */}
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
           <Flame className="h-3.5 w-3.5" /> 实时行情
         </span>
+        <span className="ml-auto flex shrink-0 items-baseline gap-1.5 text-[10px] text-muted-foreground/60">
+          <span className="text-muted-foreground/45">{active.unit}{stale ? " · 缓存" : ""}</span>
+          <span className="tabular-nums text-muted-foreground/45">{stampLabel}</span>
+        </span>
       </div>
 
-      {/* 分段控件（项目无 Tabs 组件，用朴素按钮实现）。aria-pressed 供无头浏览器断言定位 */}
-      <div className="mt-2.5 inline-flex flex-wrap gap-0.5 rounded-lg border border-border/50 bg-muted/20 p-0.5">
+      {/* 分段控件（项目无 Tabs 组件，用朴素按钮实现）。aria-pressed 供无头浏览器断言定位。
+          宽度铺满整行、四个标签等分（`flex-1`），不再是一个窄窄的 inline-flex 胶囊。 */}
+      <div className="mt-2.5 flex w-full gap-0.5 rounded-lg border border-border/50 bg-muted/20 p-0.5">
         {OIL_TABS.map((t) => (
           <button
             key={t.key}
@@ -241,7 +253,7 @@ function LiveOilPanel({ hyper, spot, futures }: {
             aria-pressed={tab === t.key}
             onClick={() => setTab(t.key)}
             className={cn(
-              "rounded-md px-2 py-0.5 text-[11px] transition-colors",
+              "flex-1 rounded-md px-1 py-0.5 text-center text-[11px] transition-colors",
               tab === t.key
                 ? "bg-background font-medium text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground",
@@ -252,19 +264,14 @@ function LiveOilPanel({ hyper, spot, futures }: {
         ))}
       </div>
 
-      <div className="mt-1 flex items-baseline justify-between gap-2 text-[10px] text-muted-foreground/60">
-        <span className="truncate">{active.note} · {active.unit}{stale ? " · 缓存" : ""}</span>
-        <span className="shrink-0 tabular-nums text-muted-foreground/45">{stampLabel}</span>
-      </div>
-
       {/* 视图区固定最小高度：四个 tab 内容长短不一，切换时卡片高度不跳。
-          下限 203 是两边实测后取齐的结果——暗盘 tab 152 图 + 8 外边距 + 43 统计行 = 203，
-          外盘 tab「报价 + 88 折线 + 区间条 + 四列统计」= 195，取 203 让两边一样高。 */}
-      <div className="mt-2 min-h-[203px]">
+          下限 243 是两边实测后取齐的结果——暗盘 tab 192 图 + 8 外边距 + 43 统计行 = 243，
+          外盘 tab「报价 + 113 折线 + 区间条 + 四列统计 + 数据源行」= 243，两边正好一样高。 */}
+      <div className="mt-2 min-h-[243px]">
         {isHyper ? (
           <>
             {chart ? (
-              <MinuteChart data={chart} height={152} minHeight={152} />
+              <MinuteChart data={chart} height={192} minHeight={192} />
             ) : (
               <div className="flex h-40 items-center justify-center text-[11px] text-muted-foreground">
                 暗盘分时暂不可用
@@ -292,15 +299,7 @@ function LiveOilPanel({ hyper, spot, futures }: {
             </div>
           </>
         ) : (
-          <SpotTabView label={active.label} q={extQuote ?? null} hist={extHist} unit={active.unit} />
-        )}
-      </div>
-
-      {/* 脚注区固定高度：暗盘 tab 不显示口径说明但仍占位——切 tab 时卡片高度不变。
-          17px = 外盘那一行（10px × leading-relaxed）的实测高度。 */}
-      <div className="mt-1 min-h-[17px] text-[10px] leading-relaxed text-muted-foreground/50">
-        {!isHyper && (
-          <>外盘＝腾讯报价＋新浪 250 日线；周末/结算窗口看暗盘补齐。</>
+          <SpotTabView label={active.label} q={extQuote ?? null} hist={extHist} />
         )}
       </div>
     </GlassCard>

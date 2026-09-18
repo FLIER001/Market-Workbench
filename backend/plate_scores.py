@@ -1123,3 +1123,15 @@ def get_plate_scores(force: bool = False) -> dict:
         valid=lambda value: bool(value.get("boards")),
         ttl=_cache_ttl(cached or {}), warm=_load_cache, save=_save_cache, force=force,
     )
+
+
+def adopt_disk_snapshot() -> bool:
+    """子进程重算落盘后，主进程把新快照原子换入内存缓存（见 sector_scores 同名函数）。"""
+    fresh = _load_cache()
+    if fresh is None:
+        return False
+    current = cache_runtime.peek("plate_scores:v5")
+    if current is not None and str(fresh.get("generated_at")) == str(current.get("generated_at")):
+        return False
+    cache_runtime.swap_in("plate_scores:v5", fresh)
+    return True

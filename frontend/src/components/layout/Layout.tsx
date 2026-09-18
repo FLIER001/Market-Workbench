@@ -3,7 +3,7 @@ import { Link, Outlet, useLocation } from "react-router-dom";
 import {
   Activity, Radar, LayoutGrid, Wallet, Settings, Search,
   Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github, Globe, Zap,
-  Star, FileText, Droplets, Loader2, PieChart, Coins, Gauge, Landmark, Flame, Scale, FlaskConical,
+  Star, FileText, Droplets, Loader2, PieChart, Coins, Gauge, Landmark, Flame, Scale, FlaskConical, Building2,
   ChevronDown, HeartPulse, type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -45,6 +45,7 @@ const NAV: NavNode[] = [
   { to: "/bonds", icon: Landmark, label: "债市" },
   { to: "/gold", icon: Coins, label: "黄金" },
   { to: "/oil", icon: Flame, label: "油价" },
+  { to: "/fedwatch", icon: Building2, label: "美联储" },
   { to: "/research", icon: FileText, label: "笔记", match: "/research" },
 ];
 

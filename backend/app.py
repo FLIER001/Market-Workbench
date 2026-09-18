@@ -12,6 +12,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
+import sys
 import threading
 import time as _time
 from datetime import datetime
@@ -39,6 +41,7 @@ import timing_alloc
 import users
 import market
 import gold_score as gold_score_layer
+import fedwatch as fedwatch_layer
 import oil as oil_layer
 import myreports as mr
 import reflection as reflect_layer
@@ -48,6 +51,7 @@ import sw_level2_scores as sw_level2_layer
 import industry_chain as industry_chain_layer
 import tools as tools_layer
 import cache_runtime
+import mem_watchdog
 import stock_cache
 import score_scheduler
 import pulse.market_pulse as pulse_market_pulse
@@ -64,11 +68,46 @@ pf.start_scheduler(300, users.user_ids)
 fpf.start_scheduler(120, users.user_ids)
 fund_pfs.start_scheduler()
 newsradar.start_scheduler()
+# 美联储利率追踪：启动预热 + 每 10 分钟后台刷新（积累 24h/7d 边际变化历史）
+fedwatch_layer.warmup()
+fedwatch_layer.start_scheduler(600)
+def _recalc_in_subprocess(module: str, entry: str, adopt) -> None:
+    """评分重算下沉子进程：子进程算完落盘退出，内存随进程归还系统。
+
+    为什么不在主进程算：macOS 上 Python/NumPy 释放的页不还给系统（实测见
+    mem_watchdog），全市场评分每轮重算会在主进程留下几十 MB 永久残渣
+    （实测 4.3MB/min 只涨不跌，105 分钟从 266MB 涨回 711MB）。子进程
+    退出即全额归还，主进程堆上不再出现面板级大分配。
+
+    子进程失败（非零退出/超时/OSError）时保留内存旧值，由下轮调度或
+    真实请求的 TTL 路径兜底。stdout/stderr 继承主进程，错误进后端日志。
+    """
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", f"import {module}; {module}.{entry}"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            timeout=1800,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"[recalc-subprocess] {module} 执行异常：{exc}", flush=True)
+        return
+    if proc.returncode != 0:
+        print(f"[recalc-subprocess] {module} 退出码 {proc.returncode}，保留旧值", flush=True)
+        return
+    adopt()
+
+
 score_scheduler.start(
-    lambda: sector_scores_layer.get_sector_scores(force=True),
-    lambda: sw_level2_layer.get_level2_scores(force=True),
-    lambda: plate_scores_layer.get_plate_scores(force=True),
+    lambda: _recalc_in_subprocess(
+        "sector_scores", "get_sector_scores(force=True)", sector_scores_layer.adopt_disk_snapshot),
+    lambda: _recalc_in_subprocess(
+        "sw_level2_scores", "get_level2_scores(force=True)", sw_level2_layer.adopt_disk_snapshot),
+    lambda: _recalc_in_subprocess(
+        "plate_scores", "get_plate_scores(force=True)", plate_scores_layer.adopt_disk_snapshot),
 )
+# 内存看门狗：footprint 超限或跑满 8h 时主动退出，由 launchd KeepAlive 拉起。
+# 成因（macOS 上 Python 释放的页不归还系统）与四道安全阀见 mem_watchdog 模块 docstring。
+mem_watchdog.start()
 
 
 def _warm_holder_increase() -> None:
@@ -1053,9 +1092,18 @@ def market_liquidity(refresh: bool = False):
         raise HTTPException(502, f"资金供给指标异常：{e}") from e
 
 
+def _cache_put(cache: dict, key, value, limit: int = 8) -> None:
+    """结果缓存带条数上限（FIFO 淘汰），防长期运行无限膨胀。"""
+    cache[key] = value
+    while len(cache) > limit:
+        cache.pop(next(iter(cache)))
+
+
 # 全球指数分时 60 秒缓存（数据源分钟级）
+# 全球指数 key 来自固定表，条数天然有界；A 股分时按代码累积，必须限量。
 _GLOBAL_MINUTE_CACHE: dict = {}
 _A_MINUTE_CACHE: dict = {}
+_A_MINUTE_CACHE_LIMIT = 64
 
 
 @app.get("/api/global/indices")
@@ -1167,6 +1215,12 @@ def quote(codes: str = Query(..., description="逗号分隔的 6 位代码")):
         return {"data": astock.tencent_quote(lst)}
     except Exception as e:  # noqa: BLE001 — 边界统一兜底
         raise HTTPException(502, f"行情源异常：{e}") from e
+
+
+# 个股维度缓存的常驻上限：键是 stock:<endpoint>:<code>，随「浏览过的股票数 × 端点
+# 种类」无限增长，是进程常驻内存最主要的增长项。400 条 ≈ 20 只股票的常见端点组合，
+# 与磁盘侧 stock_cache.MAX_STOCKS=20 同口径；淘汰后仍有磁盘快照兜底，回读是毫秒级。
+cache_runtime.register_group("stock:", 400)
 
 
 def _stock_cached(endpoint: str, code: str, ttl: int, fetch, force: bool = False, valid=None):
@@ -1352,7 +1406,7 @@ def kline_minute(code: str = Query(...)):
         # 收盘时间标注正确（不再把 13:01 数据点误标到 11:31 槽位）。
         if not data.get("market_minutes"):
             data["market_minutes"] = [[570, 690], [780, 900]]
-        _A_MINUTE_CACHE[code] = (_time.time(), data)
+        _cache_put(_A_MINUTE_CACHE, code, (_time.time(), data), limit=_A_MINUTE_CACHE_LIMIT)
         return {"data": data}
     except HTTPException:
         raise
@@ -1816,6 +1870,23 @@ def oil_futures_hist(days: int = Query(250, ge=30, le=1000)):
         raise HTTPException(502, f"外盘日K异常：{e}") from e
 
 
+# ---------------------------------------------------------------------------
+# 美联储利率追踪（FedWatch）
+# ---------------------------------------------------------------------------
+
+@app.get("/api/fedwatch")
+def fedwatch_snapshot(request: Request, response: Response, refresh: bool = False):
+    """美联储利率追踪主快照：官方锚 + ZQ 自算概率 + Polymarket + 对比矩阵。
+
+    缓存 2 分钟（盘中边际变化敏感），磁盘快照 last-good 兜底。
+    """
+    try:
+        data = fedwatch_layer.get_fedwatch(force=refresh)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"美联储利率追踪异常：{e}") from e
+    return _conditional_json(data, request, response)
+
+
 @app.get("/api/oil/brent-hist")
 def oil_brent_hist(days: int = Query(400, ge=60, le=1000)):
     """布伦特连续（OIL）日K收盘序列：评分卡旁油价近1年走势，1 小时缓存。"""
@@ -1909,13 +1980,6 @@ def factor_data_status():
 
 
 _factor_eval_cache: dict[str, tuple] = {}
-
-
-def _cache_put(cache: dict, key: str, value, limit: int = 8) -> None:
-    """结果缓存带条数上限（FIFO 淘汰），防长期运行无限膨胀。"""
-    cache[key] = value
-    while len(cache) > limit:
-        cache.pop(next(iter(cache)))
 
 
 def _factor_input_version() -> str:

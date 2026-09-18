@@ -34,6 +34,41 @@ class _Entry:
 _entries: dict[str, _Entry] = {}
 _lock = threading.RLock()
 
+# 按键维度天然无上限的缓存族（如 stock:<endpoint>:<code>——浏览过的股票越多、
+# 常驻条目越多）。这类缓存必须定期淘汰，否则进程常驻内存只涨不跌。
+# 「key 数量固定」的缓存（整页评分、单载荷快照）不要注册：淘汰它们只会触发
+# 无谓重算，拿不到任何内存收益。
+_groups: list[tuple[str, int]] = []
+
+
+def register_group(prefix: str, keep: int) -> None:
+    """声明某 key 前缀的常驻条数上限，超出后按 cached_at 淘汰最旧的。
+
+    只对「键随用户输入无限增长」的缓存族调用。keep 的口径是
+    「常用窗口 × 该族的端点种类数」，与磁盘侧 stock_cache.MAX_STOCKS 对齐即可。
+    """
+    _groups[:] = [g for g in _groups if g[0] != prefix]
+    _groups.append((prefix, keep))
+
+
+def _trim_group(key: str) -> None:
+    """写入 key 后触发：命中前缀则做一次 LRU 淘汰，最多处理一组。
+
+    只在写入路径（_refresh / get 的 warm 分支）调用，读路径零开销。
+    `keep` 只约束「已落定」的条目：正在后台刷新的（含本次刚写入的那条）
+    不计入也不淘汰，否则刚算好的结果会被自己清掉。
+    """
+    for prefix, keep in _groups:
+        if not key.startswith(prefix):
+            continue
+        group = [k for k, entry in _entries.items()
+                 if k.startswith(prefix) and not entry.refreshing]
+        if len(group) > keep:
+            group.sort(key=lambda k: _entries[k].cached_at)
+            for old in group[:-keep]:
+                _entries.pop(old, None)
+        return
+
 
 def _fmt(ts: float) -> str:
     return datetime.fromtimestamp(ts, BEIJING).isoformat(timespec="seconds")
@@ -111,6 +146,25 @@ def seed(key: str, value: Any, cached_at: float | None = None) -> None:
             entry.cached_at = cached_at or time.time()
 
 
+def swap_in(key: str, value: Any, cached_at: float | None = None) -> None:
+    """用磁盘快照原子替换内存值，供「子进程重建完成后的主进程换入」用。
+
+    与 seed 的区别：无条件覆盖并清掉错误/退避状态。请求路径在锁内
+    只会看到旧值或新值，**绝不会看到 miss**——这是调度器把重算下沉到
+    子进程后，主进程拾取结果的安全通道（invalidate+get 有毫秒级
+    冷建竞态，绝不能用在有真实流量的 key 上）。
+    """
+    if value is None:
+        return
+    with _lock:
+        entry = _entries.setdefault(key, _Entry())
+        entry.value = value
+        entry.cached_at = cached_at or time.time()
+        entry.error = None
+        entry.failures = 0
+        entry.retry_at = 0.0
+
+
 def invalidate(key: str) -> None:
     """Hard invalidation is for schema/business invalidation, never mere age."""
     with _lock:
@@ -171,6 +225,7 @@ def _refresh(
             entry.error = None
             entry.failures = 0
             entry.retry_at = 0.0
+            _trim_group(key)
     except Exception as exc:  # noqa: BLE001 - boundary stores failure for UI
         with _lock:
             entry = _entries.setdefault(key, _Entry())
@@ -215,6 +270,7 @@ def get(
                     # 是很久前的——按 mtime 判 fresh 会让页面长期展示旧数据时点。
                     entry.cached_at = warm_time() if warm_time else min(
                         now, _time_from_value(warmed) or now)
+                _trim_group(key)
 
         if entry.value is not None:
             stale = force or now - entry.cached_at >= ttl
@@ -266,3 +322,5 @@ def get(
 def reset_for_tests() -> None:
     with _lock:
         _entries.clear()
+        # 组配置随状态一起清掉：测试各自 register_group，避免相互串味。
+        _groups.clear()

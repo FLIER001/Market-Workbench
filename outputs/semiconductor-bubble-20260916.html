@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>半导体行业泡沫评估与投资价值研判（2026-09-16）</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#ffffff; --line:#e4e7ec;
+    --ink:#15181d; --ink2:#4a5160; --ink3:#828a99;
+    --up:#d64541;      /* 涨 / 红 */
+    --down:#2e9e6b;    /* 跌 / 绿 */
+    --blue:#4b6bfb; --amber:#e0a028; --purple:#7c5cd6;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    font-size:14px; line-height:1.7; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px; margin:0 auto; padding:28px 22px 60px;}
+  header.hero{
+    background:linear-gradient(135deg,#1d2433 0%,#2c3852 60%,#3a4a6b 100%);
+    color:#fff; border-radius:14px; padding:26px 28px; margin-bottom:20px;
+  }
+  header.hero h1{margin:0 0 6px; font-size:22px; letter-spacing:.3px;}
+  header.hero .sub{color:#b9c3d6; font-size:13px;}
+  header.hero .tagrow{margin-top:14px; display:flex; flex-wrap:wrap; gap:8px;}
+  .tag{background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.18);
+        border-radius:999px; padding:3px 11px; font-size:12px; color:#dbe3f0;}
+  section{background:var(--card); border:1px solid var(--line); border-radius:12px;
+          padding:20px 22px; margin-bottom:16px;}
+  h2{font-size:16px; margin:0 0 14px; padding-left:10px; border-left:4px solid var(--blue);
+     line-height:1.3;}
+  h3{font-size:14px; margin:18px 0 8px; color:var(--ink);}
+  p{margin:8px 0; color:var(--ink2);}
+  .lead{color:var(--ink);}
+  .grid{display:grid; gap:14px;}
+  .g3{grid-template-columns:repeat(3,minmax(0,1fr));}
+  .g2{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .g4{grid-template-columns:repeat(4,minmax(0,1fr));}
+  @media(max-width:900px){.g3,.g2,.g4{grid-template-columns:1fr;}}
+  .kpi{background:#fafbfc; border:1px solid var(--line); border-radius:10px; padding:14px 15px;}
+  .kpi .lbl{font-size:12px; color:var(--ink3);}
+  .kpi .val{font-size:22px; font-weight:650; margin:4px 0 2px; letter-spacing:-.3px;}
+  .kpi .note{font-size:11.5px; color:var(--ink3); line-height:1.5;}
+  .up{color:var(--up);} .down{color:var(--down);} .neu{color:var(--ink);}
+  table{width:100%; border-collapse:collapse; font-size:13px; margin-top:6px;}
+  th,td{padding:8px 10px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top;}
+  th{background:#f7f8fa; font-weight:600; color:var(--ink2); font-size:12px;
+     white-space:nowrap;}
+  td.num,th.num{text-align:right; font-variant-numeric:tabular-nums;}
+  tr:last-child td{border-bottom:none;}
+  .pill{display:inline-block; border-radius:5px; padding:1px 7px; font-size:11.5px;
+        font-weight:600; white-space:nowrap;}
+  .p5{background:#fbe3e2; color:#a5302c;}
+  .p4{background:#fdeadb; color:#b4661a;}
+  .p3{background:#fdf3d7; color:#93701b;}
+  .p2{background:#e6f4ec; color:#1f7a52;}
+  .p1{background:#e8effe; color:#2b46b8;}
+  .chartbox{width:100%; height:360px;}
+  .cap{font-size:11.5px; color:var(--ink3); margin-top:6px;}
+  .src{font-size:11.5px; color:var(--ink3); margin-top:10px;
+       border-top:1px dashed var(--line); padding-top:8px;}
+  ul{margin:8px 0 8px 18px; padding:0; color:var(--ink2);}
+  li{margin:5px 0;}
+  .callout{background:#f0f4ff; border-left:4px solid var(--blue); border-radius:8px;
+           padding:12px 15px; margin:12px 0; color:var(--ink);}
+  .callout.warn{background:#fff6ed; border-left-color:var(--amber);}
+  .callout.risk{background:#fdf0ef; border-left-color:var(--up);}
+  .callout b{color:var(--ink);}
+  .disc{background:#f7f8fa; border:1px solid var(--line); border-radius:10px;
+        padding:14px 16px; font-size:12.5px; color:var(--ink2);}
+  .bar{height:7px; border-radius:4px; background:#eceef2; overflow:hidden; margin-top:6px;}
+  .bar span{display:block; height:100%;}
+  .flexline{display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;}
+  .mono{font-variant-numeric:tabular-nums;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>半导体行业泡沫评估与投资价值研判</h1>
+  <div class="sub">国内 + 国际双视角 ｜ 估值 · 供需 · 政策 · 技术 · 资金 · 龙头 六维分析 ｜ 数据基准日 2026-09-16</div>
+  <div class="tagrow">
+    <span class="tag">A股口径：红涨绿跌</span>
+    <span class="tag">数据来源：申万 / Wind / SEMI / WSTS / 公司公告</span>
+    <span class="tag">含投资判断，末尾附免责声明</span>
+  </div>
+</header>
+
+<!-- ============ 结论先行 ============ -->
+<section>
+  <h2>一、核心结论（结论先行）</h2>
+
+  <div class="callout">
+    <b>一句话判断：不存在全球性全面泡沫，但存在显著的、高度结构性分化的局部泡沫——国际龙头是"盈利驱动的合理偏贵"，A股是"资产端已到历史极值的预期透支"。</b>
+  </div>
+
+  <div class="grid g3">
+    <div class="kpi">
+      <div class="lbl">国际·费城半导体指数</div>
+      <div class="val neu">前瞻 PE ≈ 20–26×</div>
+      <div class="note">处 5 年均值（约 22×）附近甚至下方；<br>6 月底至今远期 PE 从 29× 降至 19.6×，<br>同期远期 EPS 上修约 20%</div>
+      <div class="bar"><span style="width:22%;background:var(--down)"></span></div>
+      <div class="note" style="margin-top:4px">泡沫程度：低</div>
+    </div>
+    <div class="kpi">
+      <div class="lbl">A股·申万半导体板块</div>
+      <div class="val up">PB 9.30×（97.5%分位）</div>
+      <div class="note">PS 13.93×（97.6%分位）<br>PE 76.3×（83.8%分位）<br>股息率 0.11%（5.8%分位）</div>
+      <div class="bar"><span style="width:88%;background:var(--up)"></span></div>
+      <div class="note" style="margin-top:4px">泡沫程度：中高</div>
+    </div>
+    <div class="kpi">
+      <div class="lbl">A股·极值个案</div>
+      <div class="val up">流通盘 6.6% 撬动 3.75 万亿</div>
+      <div class="note">长鑫科技（688825）流通市值仅 2,487.9 亿<br>对应总市值 37,506 亿，居 A 股第一</div>
+      <div class="bar"><span style="width:98%;background:var(--up)"></span></div>
+      <div class="note" style="margin-top:4px">泡沫程度：严重</div>
+    </div>
+  </div>
+
+  <h3>三条支撑判断的依据</h3>
+  <ul>
+    <li><b>分子（盈利）真在爆发，不是纯叙事。</b>A股申万半导体 2026 年中报 TTM 归母净利 1,026.6 亿元、同比 <span class="up">+234.3%</span>；利润增速（+234%）远超收入增速（TTM 营收 8,059.9 亿元、毛利同比 +53.4%）。国际端 SOX 成分股 2026 年盈利增速一致预期约 +100%。<span class="src" style="border:none;display:inline;padding:0">来源：申万行业财务（截至 2026-06-30）</span></li>
+    <li><b>分母（估值）在国际端被宏观压制，在 A 股端被资产溢价抬高。</b>国际是"估值下杀 + 盈利上修"，A 股是"PB/PS 打到 5 年 97% 以上分位、PE 靠利润做大分母而显便宜"。</li>
+    <li><b>风险不在指数，在内部结构与交易结构。</b>半导体占标普 500 权重约 14%（历史级集中度）；A 股侧则是流通盘极小标的的定价放大效应与产业资本减持压力。</li>
+  </ul>
+</section>
+
+<!-- ============ 泡沫分级 ============ -->
+<section>
+  <h2>二、泡沫程度分级：六个层次，冰火两重天</h2>
+  <p class="lead">把"半导体"当成一个同质整体讨论是错的。按环节与地域拆开后，泡沫程度呈极陡的梯度分布：</p>
+
+  <table>
+    <thead>
+      <tr><th>层级</th><th>代表标的 / 环节</th><th class="num">当前估值</th><th>核心逻辑</th><th>泡沫判定</th><th>严重度</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>① 国际·AI算力龙头</td>
+        <td>英伟达 NVDA<br>台积电 TSM<br>博通 AVGO</td>
+        <td class="num">PE(TTM) 26.8×<br>30.8× / 43.3×<br>2027E 约 16–18×</td>
+        <td>盈利兑现驱动，估值已从"高弹性"压缩为"高确定性"</td>
+        <td>盈利驱动，无系统性泡沫</td>
+        <td><span class="pill p1">低</span></td>
+      </tr>
+      <tr>
+        <td>② 国际·存储原厂</td>
+        <td>美光 MU<br>SK海力士</td>
+        <td class="num">PE(TTM) 21.0×<br>前瞻约 5–6×</td>
+        <td>盈利上修速度远快于股价（MU 年内 +225%）</td>
+        <td>估值反向压缩，无泡沫</td>
+        <td><span class="pill p1">低</span></td>
+      </tr>
+      <tr>
+        <td>③ 国际·设备</td>
+        <td>阿斯麦 ASML<br>应用材料 AMAT</td>
+        <td class="num">PE(TTM) 49.9×<br>36.3×</td>
+        <td>订单能见度达 8 个季度（近 30 年未见），但 60 日已回调 9.8% / 10.9%</td>
+        <td>偏高但可被订单消化</td>
+        <td><span class="pill p2">中低</span></td>
+      </tr>
+      <tr>
+        <td>④ A股·板块整体</td>
+        <td>申万二级·半导体</td>
+        <td class="num">PB 9.30×（97.5%分位）<br>PS 13.93×（97.6%分位）<br>PE 76.3×（83.8%分位）</td>
+        <td>资产端与收入端溢价已到 5 年历史极值；PE"便宜"是分母被存储涨价做大所致</td>
+        <td>预期透支，安全边际薄</td>
+        <td><span class="pill p4">中高</span></td>
+      </tr>
+      <tr>
+        <td>⑤ A股·设备与材料</td>
+        <td>半导体设备概念<br>科创半导体材料设备</td>
+        <td class="num">PE 137.5×<br>PE 179.3×（84.3%分位）</td>
+        <td>国产替代叙事被充分定价，部分环节国产化率仅约 20%，空间大但兑现慢</td>
+        <td>高估值依赖持续订单兑现</td>
+        <td><span class="pill p5">高</span></td>
+      </tr>
+      <tr>
+        <td>⑥ A股·极值个案</td>
+        <td>长鑫科技（688825）<br>源杰科技（688498）<br>华虹宏力（688347）</td>
+        <td class="num">流通占比 6.6%<br>PE 292.4× / 616.1×</td>
+        <td>稀缺性叙事 + 流通盘极小 + 业绩一次性爆发，三重放大</td>
+        <td>定价机制失灵，回撤风险最大</td>
+        <td><span class="pill p5">严重</span></td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="src">估值数据截至 2026-09-15 收盘（申万行业口径为 2026-09-15，个股 PE/PB 为 2026-09-16 盘中或最近收盘）；指数前瞻 PE 来源见文末。长鑫科技流通市值 2,487.93 亿元 / 总市值 37,505.96 亿元，来源：A股基本信息表（2026-09-16）。</div>
+</section>
+
+<!-- ============ 维度一 估值 ============ -->
+<section>
+  <h2>三、维度一｜估值水平：国际中位、A股极值</h2>
+
+  <h3>3.1 绝对估值横向对比（PE-TTM）</h3>
+  <div id="chartPe" class="chartbox"></div>
+  <div class="cap">国际标的 PE(TTM) 为 2026-09-15 收盘口径，费城半导体指数为 Wind 截至 2026-09-01；A股行业口径为申万二级 / 概念板块。红= A股口径，蓝= 国际市场。</div>
+
+  <div class="callout">
+    <b>关键在于口径：用 TTM 还是前瞻，结论完全相反。</b>费城半导体指数 PE(TTM) 约 35.9×，但 1 年期前瞻 PE 仅约 20×；SOXX 的 TTM PE 甚至高达 65–73×，而前瞻 PE 只有 19.6–22×。TTM 高企恰恰说明<b>历史盈利基数低、市场在赌未来盈利爆发</b>——所以判断标准不应是静态 PE，而应是"远期 EPS 能否继续被上修"。
+  </div>
+
+  <h3>3.2 A股半导体板块估值分位：资产端已到历史极值</h3>
+  <div id="chartPct" class="chartbox"></div>
+  <div class="cap">申万二级·半导体板块（pt01801081）近 5 年历史分位，数据截至 2026-09-15。</div>
+
+  <table>
+    <thead>
+      <tr><th>估值指标</th><th class="num">当前值</th><th class="num">历史分位</th><th class="num">1个月前</th><th class="num">1个季度前</th><th class="num">1年前</th><th>含义</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>PE(TTM)</td><td class="num">76.31</td><td class="num up">83.8%</td><td class="num">159.52</td><td class="num">215.97</td><td class="num">145.72</td><td>分母被盈利做大，绝对水平低于去年同期</td></tr>
+      <tr><td>PB(LF)</td><td class="num">9.30</td><td class="num up">97.5%</td><td class="num">11.51</td><td class="num">11.60</td><td class="num">6.23</td><td>资产溢价进入历史极值区</td></tr>
+      <tr><td>PS(TTM)</td><td class="num">13.93</td><td class="num up">97.6%</td><td class="num">18.61</td><td class="num">18.02</td><td class="num">9.41</td><td>收入端定价同样高企</td></tr>
+      <tr><td>PCF(TTM)</td><td class="num">52.97</td><td class="num">81.0%</td><td class="num">95.39</td><td class="num">142.08</td><td class="num">62.96</td><td>现金流口径相对温和</td></tr>
+      <tr><td>股息率(TTM)</td><td class="num">0.11%</td><td class="num down">5.8%</td><td class="num">0.09</td><td class="num">0.10</td><td class="num">0.19</td><td>纯成长属性，无防御价值</td></tr>
+    </tbody>
+  </table>
+  <div class="src">来源：申万行业估值（截至 2026-09-15）。同一数据块共享来源、周期与口径。</div>
+
+  <div class="callout warn">
+    <b>反向声音——"PE 分位低就是便宜"是错误归因。</b>卖方一致预期 2026 年净利润同比 +154.8%、2 年 CAGR 86.6%、PEG 0.82，看上去不贵。但这里的"便宜"隐含一个强假设：<b>2026–2027 年的高增速可持续</b>。而该增速主要来自存储涨价（价格驱动而非出货量驱动），一旦存储价格见顶、增速回落到常态（一致预期给出的后续年度增速仅 +31.9%），PEG 会从 0.82 迅速恶化到 2 倍以上。近 1 年 PE 分位（约 20%）显示"低估"，本质是<b>周期性盈利一次性做大分母的统计假象</b>，而非估值真便宜。
+  </div>
+
+  <h3>3.3 A股龙头个股估值分位（近 5 年）</h3>
+  <div id="chartLeader" class="chartbox"></div>
+  <div class="cap">PE/PB 近 5 年历史分位。注：寒武纪历史多数时间处于亏损或微利，PE 分位（4.7%）失真，应以 PB 分位（83.7%）为准。</div>
+  <div class="src">来源：个股估值分位（近 5 年，1220 个交易日样本），数据截至 2026-09-16。</div>
+</section>
+
+<!-- ============ 维度二 供需 ============ -->
+<section>
+  <h2>四、维度二｜供需格局：真实的短缺，但呈"K 形"撕裂</h2>
+  <div class="grid g4">
+    <div class="kpi"><div class="lbl">2026E 全球半导体销售额</div><div class="val neu">1.51 万亿美元</div><div class="note">WSTS 预测，同比约 +90%；2027E 1.91 万亿（+27%）</div></div>
+    <div class="kpi"><div class="lbl">2026H1 全球市场</div><div class="val up">7,020 亿美元</div><div class="note">同比 +102%；其中存储 +305%、逻辑 +45%（WSTS）</div></div>
+    <div class="kpi"><div class="lbl">DRAM / HBM 供需缺口</div><div class="val up">4.9% / 5.1%</div><div class="note">2011 年以来最高（高盛测算）</div></div>
+    <div class="kpi"><div class="lbl">中国集成电路出口（1–7月）</div><div class="val up">2,160 亿美元</div><div class="note">同比 +99.5%，已超 2025 年全年 2,019 亿</div></div>
+  </div>
+
+  <h3>4.1 供给刚性是真实存在的</h3>
+  <ul>
+    <li><b>产能周期不可压缩</b>：一座先进产线从开工、设备搬入、良率爬坡到满产约需 3–5 年；单座 2nm 厂投资超 250 亿美元；高端关键设备交付周期 12–24 个月。资金充足也无法让供给短期爆发。</li>
+    <li><b>存储产能已提前售罄</b>：三星、SK海力士、美光 2027 年产能基本售罄，客户配额仅为申请量的 60–70%；新增产能最早 2027 年下半年释放，且超 70% 投向 HBM/高端 DDR5。</li>
+    <li><b>供需缺口具备产业基础</b>，这也是"本轮不是纯炒作概念"的最有力论据——与 2000 年互联网泡沫时期大量无营收、无产品企业上市融资的特征有本质差异。</li>
+  </ul>
+
+  <h3>4.2 但"K 形分化"正在撕裂需求侧</h3>
+  <table>
+    <thead>
+      <tr><th>维度</th><th>强势端（受益 AI 算力）</th><th>弱势端（被挤出）</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>产品</td><td>服务器 DRAM、企业级 SSD、HBM</td><td>移动端 LPDDR（现货价部分松动）、低端 NAND</td></tr>
+      <tr><td>终端</td><td>AI 数据中心、云端加速器</td><td>智能手机（2026E 出货 <span class="down">−0.9%</span>）、PC（预计 <span class="down">双位数下滑</span>）</td></tr>
+      <tr><td>环节</td><td>先进制程、先进封装、设备</td><td>成熟制程、消费类芯片</td></tr>
+      <tr><td>价格边际</td><td>Q1 DRAM 合约价 +90~95%</td><td>Q3 涨幅收窄至 <span class="down">+13~18%</span>（NAND +10~15%），边际递减</td></tr>
+    </tbody>
+  </table>
+  <div class="callout warn">
+    <b>"算力税"是被低估的传导风险。</b>存储成本暴涨正向下游转移——主流旗舰手机内存+闪存成本占比从去年约 15% 升至 30% 以上。这意味着<b>半导体的高景气正在以消费电子链的利润为代价</b>，而非全行业普涨。中国集成电路上半年出口额 +96.1% 但出口量仅 +7%，呈典型"量平价飙"特征，本身就是价格驱动而非需求量的证据。
+  </div>
+
+  <h3>4.3 资本开支：仍处早中期，但 2027 年是关键分水岭</h3>
+  <div id="chartCapex" class="chartbox"></div>
+  <div class="cap">全球 300mm 晶圆厂设备支出（亿美元，柱）与同比增速（%，折线，右轴）。</div>
+  <div class="src">来源：SEMI《300mm Fab Outlook》（2026 年 4 月）。台积电 2026 年资本开支指引 600–640 亿美元（中值同比约 +52%）；北美云厂商 2026 年资本开支一致预期超 6,000 亿美元。</div>
+  <p>多方一致认为资本开支<b>处于本轮扩张的早中期而非顶部</b>：摩根大通 2026 年 9 月上调设备市场预期（2026 年 +31%、2027 年 +38%）；瑞银称客户订单能见度达 8 个季度，近 30 年未见。但摩根士丹利提示，超大规模资本开支增速预计<b>2027 年见顶、2028 年显著放缓</b>——这是当前估值最直接的时间锚。</p>
+</section>
+
+<!-- ============ 维度三 政策 ============ -->
+<section>
+  <h2>五、维度三｜政策环境：国内加码托底 vs 海外监管收紧</h2>
+  <div class="grid g2">
+    <div>
+      <h3>5.1 国内：《电子信息制造业发展"十五五"规划》</h3>
+      <p>2026-09-15 由工信部、国家发展改革委联合印发，是当前 A 股半导体最强的政策催化。</p>
+      <table>
+        <thead><tr><th>政策要点</th><th>增量含义</th></tr></thead>
+        <tbody>
+          <tr><td>2030 年规上企业营收突破 <b>30 万亿元</b></td><td>2025 年全行业 17.4 万亿，隐含五年 +72%</td></tr>
+          <tr><td>研发投入强度提升至 <b>3.5%</b></td><td>达到过去仅头部科技公司可及的强度</td></tr>
+          <tr><td>集成电路<b>全链条攻关</b></td><td>覆盖设备、材料、EDA、IP、先进封装</td></tr>
+          <tr><td>"以存强算、以存代算"</td><td>HBM / 铁电 / 阻变 / 磁电存储列为重点</td></tr>
+          <tr><td>光子产业<b>首次单列</b></td><td>打开逻辑、存储之外的新增长极</td></tr>
+          <tr><td>RISC-V 研发与产业化</td><td>指令集自主可控路径明确</td></tr>
+        </tbody>
+      </table>
+      <div class="callout warn" style="margin-top:12px">
+        <b>政策价值 ≠ 政策热度。</b>规划是顶层方向性文件（17 项任务），多数为方向性表述，真正可交易的硬点是"以存强算"对刻蚀/薄膜沉积/键合设备的增量需求、以及光子产业的独立方向。政策发布当日半导体主力资金净流入超 43 亿元、居全市场第一——<b>这种"政策+资金同一天碰头"往往意味着短期已提前定价，追高风险高于布局价值。</b>
+      </div>
+    </div>
+    <div>
+      <h3>5.2 海外：监管风险从"偶发"变为"永久"</h3>
+      <table>
+        <thead><tr><th>监管进展</th><th>市场反应</th></tr></thead>
+        <tbody>
+          <tr><td>2026 年 8 月<br>EU AI Act 高风险义务生效</td><td>形成监管碎片化套利格局，AI 运营地成为投资变量</td></tr>
+          <tr><td>2026 年 9 月初<br>AI 业界呼吁放缓前沿模型开发</td><td>SK海力士 −6%、三星 −4%、Kioxia −9%</td></tr>
+          <tr><td>2026-09-14<br>Anthropic CEO 表态"AI 降速"</td><td>费城半导体指数单日跌约 6%，ASML 单日市值蒸发约 336 亿欧元</td></tr>
+          <tr><td>10 年期美债收益率触及 5.012%</td><td>2007 年以来最高，直接压制高久期科技股估值</td></tr>
+        </tbody>
+      </table>
+      <div class="callout risk" style="margin-top:12px">
+        <b>这是本轮最被低估的风险类型：政策/言论可以在盈利毫无变化的情况下重定价估值。</b>三星 2026 年 7 月预告二季度营业利润同比暴增 19 倍，当日股价盘中却跌 10.1%——说明市场定价的已不是当期盈利，而是"AI 资本开支能否维持已计入倍数的增速"。高盛追踪 AI 相关股票的指数较高点累计回撤近 45%。
+      </div>
+      <h3>5.3 产业资本动向：国家大基金在减持</h3>
+      <p>芯原股份（688521）2026-08-31 公告：国家集成电路产业投资基金通过集中竞价减持 49.47 万股，持股比例由 5.0941% 降至 5.0000%，不再为 5% 以上股东。2026 年内大基金与另一大股东已披露减持金额合计约 33.39 亿元（其中大基金约 17.39 亿元）。<span class="src" style="border:none;display:inline;padding:0">来源：上交所《简式权益变动报告书》（2026-09-01），一手公告</span></p>
+      <p style="color:var(--ink3);font-size:12.5px">说明：该个案不能直接外推为"大基金全面退出半导体"，但减持时点位于板块高估值区间，作为产业资本态度信号具有参考意义。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 维度四 技术 ============ -->
+<section>
+  <h2>六、维度四｜技术迭代周期：从"制程微缩"转向"立体集成 + 封装瓶颈"</h2>
+  <div class="grid g3">
+    <div class="kpi"><div class="lbl">台积电 N2 良率</div><div class="val up">约 65%</div><div class="note">2026Q2 已贡献 3% 收入；竞品：英特尔 18A 约 55%、三星 SF2 约 40%</div></div>
+    <div class="kpi"><div class="lbl">3nm 月产能扩张</div><div class="val up">12–13 万 → 18 万片</div><div class="note">2025 年底 → 2026 年底，一年半扩产近七成，产能利用率维持 100% 以上</div></div>
+    <div class="kpi"><div class="lbl">CoWoS 先进封装出货</div><div class="val up">+80% 以上</div><div class="note">2026 年预计超 110 万片；先进封装已成算力链核心卡点</div></div>
+  </div>
+  <ul>
+    <li><b>瓶颈已从光刻转移到封装与存储。</b>2023Q1 台积电 CoWoS 月产能仅 1 万片，2026 年末预计突破 10 万片；中信证券判断 2027 年 CoWoS 产能仍将同比 +50% 以上。真正的产能约束在先进封装与 HBM，而非逻辑晶圆。</li>
+    <li><b>制程竞赛的成本代价开始显现。</b>2nm 陡峭爬坡稀释台积电毛利率 3–4 个百分点，海外厂爬坡再稀释 2–3 个百分点——2026Q3 毛利率指引中值降至 66%（Q2 为 67.7%）。技术迭代不再是纯增量，而是有明确代价的资本消耗。</li>
+    <li><b>技术路线出现分叉。</b>国内路径侧重成熟制程深耕 + 特色工艺 + 存储（长鑫科技已小批量生产 HBM3E、计划 2027 年扩量；已全球首发 LPDDR6 并落地小米 18 Fold），华为提出从"平面集成走向立体集成"的方向<span style="color:var(--ink3)">（该技术主张来自企业公开论文，非第三方验证数据，需核实原文）</span>。</li>
+    <li><b>对投资判断的含义</b>：技术迭代周期本身仍在上行（判定为"早中期"），但它同时是<b>资本开支刚性的来源</b>——这也意味着一旦需求端放缓，产能错配的代价会更重。</li>
+  </ul>
+</section>
+
+<!-- ============ 维度五 资金 ============ -->
+<section>
+  <h2>七、维度五｜资本流向：政策驱动的短期回补 vs 中期资金撤离</h2>
+  <div id="chartFlow" class="chartbox"></div>
+  <div class="cap">A股申万二级·半导体板块主力资金净流入（亿元）。当日 = 2026-09-16，其余为滚动区间累计。红=净流入，绿=净流出。</div>
+  <div class="src">来源：板块资金流向（申万二级 pt01801081），数据截至 2026-09-16。</div>
+
+  <div class="grid g2" style="margin-top:14px">
+    <div>
+      <h3>7.1 A股：短期猛回补，中期仍在失血</h3>
+      <table>
+        <thead><tr><th>区间</th><th class="num">主力净流入</th><th>信号</th></tr></thead>
+        <tbody>
+          <tr><td>当日（09-16）</td><td class="num up">+71.5 亿元</td><td>市场排名第 2，政策后延续流入</td></tr>
+          <tr><td>近 5 日</td><td class="num down">−215.3 亿元</td><td>中期仍为净流出</td></tr>
+          <tr><td>近 10 日</td><td class="num down">−410.5 亿元</td><td>调整期资金撤离</td></tr>
+          <tr><td>近 20 日</td><td class="num down">−1,112.9 亿元</td><td>尚未扭转趋势</td></tr>
+        </tbody>
+      </table>
+      <p style="font-size:12.5px;color:var(--ink3)">板块指数 9/1–9/16 区间 −4.30%，区间振幅 12.20%（最低 8,945.06 出现在 9/14），9/16 单日 +4.12%。板块流通市值约 14.48 万亿元。</p>
+      <p><b>ETF 侧呈逆向布局特征：</b>半导体设备ETF国泰（159516）近 20 日净流入 29.45 亿元；芯片ETF国泰（512760）近 20 日约 10.1 亿元、连续 5 日净流入；9 月以来 20 只科创 50 ETF 合计净流入 170.37 亿元。<b>"个股资金撤、ETF 资金进"是典型的机构化逆向配置，与散户追高行为不同。</b></p>
+    </div>
+    <div>
+      <h3>7.2 海外：需求侧资本开支是全部分歧的锚</h3>
+      <ul>
+        <li><b>多方</b>：2026 年北美云厂商资本开支一致预期超 6,000 亿美元；美国银行认为到 2030 年 AI 资本支出可增长 3 倍至 3 万亿美元以上；高盛测算 AI 资本开支目前仅占美国 GDP 约 0.8%，远低于历史技术投资周期 1.5% 以上的峰值。</li>
+        <li><b>空方</b>：2026 年超大规模资本开支 6,350–7,250 亿美元 vs 当前 AI 变现仅 500–1,500 亿美元，这个"缺口"是全部争论的根源；同时担忧英伟达既作为芯片供应商又作为客户融资方，形成类似互联网泡沫前的"循环融资"结构。</li>
+        <li><b>估值已被压缩约 9 个 turn</b>：SOXX 远期 PE 从 6 月底约 29× 降至 19.6×，而同期远期 EPS 预估反而上修约 20%。这是"盈利上修、估值下杀"的典型组合。</li>
+      </ul>
+      <div class="callout">
+        <b>资金面的结论不同于估值面：</b>估值端国际并不极端，但交易结构端两者都脆弱——半导体占标普 500 权重约 14%，创历史级集中度；趋势型资金（CTA）卖出指数而非个股，一旦触发，半导体会按超出其权重的比例被抛售。
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 维度六 龙头 ============ -->
+<section>
+  <h2>八、维度六｜龙头企业表现：业绩兑现与定价失灵的对照</h2>
+
+  <h3>8.1 国际龙头（2026-09-15 收盘附近）</h3>
+  <table>
+    <thead>
+      <tr><th>公司</th><th>代码</th><th class="num">收盘价</th><th class="num">PE(TTM)</th><th class="num">PB</th><th class="num">总市值</th><th class="num">近60日</th><th>关键财务（最近报告期）</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>英伟达</td><td>NVDA</td><td class="num">212.17</td><td class="num">26.8×</td><td class="num">22.4×</td><td class="num">5.11 万亿美元</td><td class="num down">−5.9%</td><td>营收 962.2 亿美元（+105.9%），净利率 62.0%（FY26Q2）</td></tr>
+      <tr><td>台积电</td><td>TSM</td><td class="num">413.75</td><td class="num">30.8×</td><td class="num">10.6×</td><td class="num">2.15 万亿美元</td><td class="num down">−5.8%</td><td>营收 1.27 万亿（+36.0%），毛利率 67.7%（2026Q2）</td></tr>
+      <tr><td>美光科技</td><td>MU</td><td class="num">927.60</td><td class="num">21.0×</td><td class="num">10.4×</td><td class="num">1.05 万亿美元</td><td class="num down">−7.3%</td><td>营收 414.6 亿美元（+345.7%），毛利率 84.6%</td></tr>
+      <tr><td>阿斯麦</td><td>ASML</td><td class="num">1,591.48</td><td class="num">49.9×</td><td class="num">24.1×</td><td class="num">6,113 亿美元</td><td class="num down">−9.8%</td><td>营收 93.3 亿欧元（+21.3%），毛利率 54.0%</td></tr>
+      <tr><td>博通</td><td>AVGO</td><td class="num">339.27</td><td class="num">43.3×</td><td class="num">16.3×</td><td class="num">1.62 万亿美元</td><td class="num down">−8.0%</td><td>FY26Q3 AI 半导体收入 167 亿美元（同比 +221%）</td></tr>
+      <tr><td>超威半导体</td><td>AMD</td><td class="num">504.20</td><td class="num">129.3×</td><td class="num">12.2×</td><td class="num">8,231 亿美元</td><td class="num down">−0.3%</td><td>PE(TTM) 高位反映当前盈利仍在低位</td></tr>
+      <tr><td>英特尔</td><td>INTC</td><td class="num">97.14</td><td class="num down">亏损</td><td class="num">5.9×</td><td class="num">5,135 亿美元</td><td class="num down">−7.0%</td><td>年内 +163%，纯困境反转/本土制造叙事驱动</td></tr>
+    </tbody>
+  </table>
+  <div class="src">来源：行情与财务指标（最近报告期口径不同，NVDA 为 FY26Q2 截至 2026-07-26，TSM/ASML 为 2026Q2，MU 为 2026-05-28）。近 60 日为区间涨跌幅。</div>
+
+  <h3>8.2 A股龙头：业绩爆发与定价失灵的两种极端</h3>
+  <table>
+    <thead>
+      <tr><th>公司</th><th>代码</th><th class="num">市值（亿元）</th><th class="num">PE(TTM)</th><th class="num">PB</th><th class="num">2026H1 归母净利同比</th><th>估值特征</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>长鑫科技</td><td>688825</td><td class="num">37,438</td><td class="num">45.8×</td><td class="num">18.6×</td><td class="num up">+3,427.8%</td><td>流通盘仅占总股本约 6.6%，市值居 A 股第一；发行价 8.66 元 → 9/16 收盘 55.46 元</td></tr>
+      <tr><td>中芯国际</td><td>688981</td><td class="num">10,242</td><td class="num">142.1×</td><td class="num">5.97×</td><td class="num up">+94.2%</td><td>PE 分位 61.1%、PB 分位 82.0%、PEG 分位 87.1%</td></tr>
+      <tr><td>寒武纪</td><td>688256</td><td class="num">7,155</td><td class="num">214.8×</td><td class="num">52.7×</td><td class="num up">+122.6%</td><td>PB 分位 83.7%；PE 分位因历史亏损失真</td></tr>
+      <tr><td>海光信息</td><td>688041</td><td class="num">5,446</td><td class="num">173.3×</td><td class="num">21.5×</td><td class="num up">+49.7%</td><td>PE 分位 55.1%、PB 分位 71.8%</td></tr>
+      <tr><td>北方华创</td><td>002371</td><td class="num">4,826</td><td class="num">84.9×</td><td class="num">11.9×</td><td class="num">+5.1%</td><td>PE 分位 71.5%、PB 分位 87.4%；收入增速领先利润增速</td></tr>
+      <tr><td>中微公司</td><td>688012</td><td class="num">3,391</td><td class="num">80.2×</td><td class="num">11.3×</td><td class="num up">+300.2%</td><td>订单兑现已体现在利润端</td></tr>
+      <tr><td>华虹宏力</td><td>688347</td><td class="num">4,320</td><td class="num up">616.1×</td><td class="num">7.78×</td><td>—</td><td>盈利基数极低导致 PE 严重失真，属典型定价异常点</td></tr>
+    </tbody>
+  </table>
+  <div class="src">来源：板块龙头行情（2026-09-16）与 2026 年中报财务（截至 2026-06-30）；长鑫科技市值与流通数据为 2026-09-16 口径；发行价、上市日为交易所披露信息。北方华创 2026H1 归母净利 33.70 亿元、同比 +5.05%，收入同比 +24.90%，利润增速落后收入，与设备行业收入确认节奏有关。</div>
+
+  <div class="callout risk">
+    <b>长鑫科技是理解 A 股本轮泡沫的关键样本。</b>它同时具备三个放大因子：① <b>稀缺性</b>——A 股此前完全没有存储原厂，DRAM 全球长期由三星、SK海力士、美光三家垄断；② <b>业绩一次性爆发</b>——2026H1 营收 1,503.1 亿元（+873.6%）、归母净利 776.05 亿元（上年同期 −23.32 亿），驱动力是全球 DRAM 供不应求导致的价格大涨；③ <b>流通盘极小</b>——流通市值仅 2,487.93 亿元，占总市值约 6.6%。三者叠加意味着<b>股价对少量资金的敏感度被极度放大</b>，同时也意味着未来解禁期存在结构性的供给冲击风险。公司自身在业绩说明会中已回应"如何应对未来解禁压力"的提问。
+  </div>
+</section>
+
+<!-- ============ 综合评估 ============ -->
+<section>
+  <h2>九、综合评估：当前时点是否值得投资</h2>
+
+  <h3>9.1 泡沫严重程度的最终判定</h3>
+  <table>
+    <thead>
+      <tr><th>评估口径</th><th>判定</th><th>依据</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>全球半导体（指数层面）</td><td><span class="pill p2">非泡沫</span></td><td>前瞻 PE 20–26× 处 5 年均值附近；上涨由盈利上修驱动（远期 EPS +20% 而 PE 下杀 9 个 turn）；订单能见度 8 季度</td></tr>
+      <tr><td>全球半导体（交易结构）</td><td><span class="pill p4">拥挤度高</span></td><td>占标普 500 权重约 14%；CTA 卖出放大回撤；"循环融资"结构存在争议</td></tr>
+      <tr><td>A股半导体（板块整体）</td><td><span class="pill p4">中度泡沫</span></td><td>PB/PS 处 5 年 97% 以上分位；盈利高增依赖存储涨价这一周期性变量</td></tr>
+      <tr><td>A股半导体（设备材料）</td><td><span class="pill p5">偏高泡沫</span></td><td>PE 137.5× / 179.3×；国产替代预期定价充分；业绩兑现有节奏差</td></tr>
+      <tr><td>A股半导体（极值个例）</td><td><span class="pill p5">严重泡沫</span></td><td>长鑫科技流通占比 6.6%、华虹宏力 PE 616×、源杰科技 PE 292×，定价机制已脱离盈利锚</td></tr>
+      <tr><td><b>综合结论</b></td><td><span class="pill p4">结构性泡沫，非全面泡沫</span></td><td>泡沫存在且不算轻，但高度集中于"A股高估值+小流通盘+叙事驱动"这一交集；国际龙头层面不成立</td></tr>
+    </tbody>
+  </table>
+
+  <h3>9.2 分层投资判断</h3>
+  <table>
+    <thead>
+      <tr><th>方向</th><th>当前位置</th><th>判断</th><th>关键前提</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>国际存储原厂<br><span style="color:var(--ink3)">MU / SK海力士</span></td>
+        <td>前瞻 PE 约 5–6×</td>
+        <td><b>风险收益比最优</b>——盈利上修速度快于估值扩张，但需接受强周期属性</td>
+        <td>2027 年存储供需缺口不逆转；Q4 DRAM 合约价不确认见顶</td>
+      </tr>
+      <tr>
+        <td>国际算力龙头<br><span style="color:var(--ink3)">NVDA / TSM / AVGO</span></td>
+        <td>2027E PE 16–18×</td>
+        <td><b>可持有，不宜追高</b>——已从高弹性资产转为高确定性资产，估值扩张空间有限，收益主要靠盈利兑现</td>
+        <td>云厂商资本开支指引不下修；AI 变现数据持续改善</td>
+      </tr>
+      <tr>
+        <td>国际设备<br><span style="color:var(--ink3)">ASML / AMAT</span></td>
+        <td>PE 36–50×，60 日已回调 9–11%</td>
+        <td><b>回调后性价比改善</b>，但估值消化依赖订单能见度继续延长</td>
+        <td>2027 年 WFE 增速兑现（摩根大通预期 +38%）</td>
+      </tr>
+      <tr>
+        <td>A股设备与材料</td>
+        <td>PE 137–179×，PB 分位 87–95%</td>
+        <td><b>需等待估值消化</b>——产业逻辑（国产化率约 20%、扩产周期真实）成立，但当前位置安全边际薄</td>
+        <td>订单兑现节奏跟上；板块 PB 分位回落至 80% 以下</td>
+      </tr>
+      <tr>
+        <td>A股存储链<br><span style="color:var(--ink3)">长鑫科技等</span></td>
+        <td>流通盘极小，定价放大</td>
+        <td><b>谨慎</b>——业绩真实但定价已含稀缺性溢价与流通盘效应，未来解禁是明确的供给冲击</td>
+        <td>解禁节奏；市占率能否从 10% 继续提升</td>
+      </tr>
+      <tr>
+        <td>A股纯概念 / 亏损高估值小票</td>
+        <td>PE 负值或数百倍</td>
+        <td><b>回避</b>——回撤风险最大，缺乏业绩锚</td>
+        <td>—</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <b>核心判断依据（三句话）：</b><br>
+    ① <b>赚钱逻辑已从"赚估值的钱"切换到"赚业绩的钱"</b>——国际市场已完整演绎这一过程（远期 PE 降 9 个 turn、EPS 升 20%），A 股正在跟进但滞后；<br>
+    ② <b>"便宜"是错觉、"贵"要看口径</b>——A 股半导体 PE 分位低源于周期性盈利一次性做大分母，PB/PS 的 97% 分位才是资产端真实定价；<br>
+    ③ <b>风险不在行业景气，而在增速预期的边际变化</b>——2027 年资本开支增速见顶预期 + 存储价格边际递减（Q3 涨幅已收窄至 13–18%）是两个最可能触发估值重定价的变量。
+  </div>
+</section>
+
+<!-- ============ 风险 ============ -->
+<section>
+  <h2>十、主要风险点与观察指标</h2>
+  <table>
+    <thead>
+      <tr><th>#</th><th>风险点</th><th>传导路径</th><th>当前状态</th><th>观察指标</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>1</td><td><b>AI 资本开支增速 2027 年见顶</b></td><td>云厂商 capex 增速放缓 → 芯片订单预期下修 → 估值倍数压缩</td><td>摩根士丹利预计 2027 年见顶、2028 年显著放缓</td><td>微软/谷歌/Meta/亚马逊季度 capex 指引</td></tr>
+      <tr><td>2</td><td><b>存储周期进入后周期</b></td><td>DRAM 合约价见顶 → 存储链盈利预测反转</td><td>Q3 DRAM 合约价涨幅已从 Q1 的 90–95% 收窄至 13–18%；大摩称接近后周期</td><td>Q4 DRAM/NAND 合约价；2027H2 新增产能释放节奏</td></tr>
+      <tr><td>3</td><td><b>利率与流动性</b></td><td>10Y 美债收益率上行 → 高久期科技股估值折现率抬升</td><td>已触及 5.012%（2007 年以来最高）</td><td>10Y 美债收益率能否回落至 5% 以下；Fed 路径</td></tr>
+      <tr><td>4</td><td><b>产业资本与股东减持</b></td><td>大基金/大股东减持 → 供给增加 + 情绪信号</td><td>国家大基金 2026-08-31 减持芯原股份至 5%，年内累计披露减持约 33.39 亿元（含另一大股东）</td><td>季度减持公告；大基金持股变动</td></tr>
+      <tr><td>5</td><td><b>A股小流通盘标的的解禁冲击</b></td><td>解禁 → 可流通股本骤增 → 极小的资金量即可引发大幅波动</td><td>长鑫科技流通市值占比仅约 6.6%</td><td>解禁时间表与解禁规模</td></tr>
+      <tr><td>6</td><td><b>消费电子被"算力税"挤压</b></td><td>存储/晶圆成本上升 → 手机、PC 出货与利润承压 → 非 AI 链需求走弱</td><td>2026E 手机出货 −0.9%；PC 预计双位数下滑</td><td>季度手机/PC 出货量；终端厂商毛利率</td></tr>
+      <tr><td>7</td><td><b>海外 AI 监管与言论风险</b></td><td>监管或行业表态 → 在盈利无变化的情况下重定价估值</td><td>EU AI Act 高风险义务 2026-08 生效；9 月业界"降速论"致费半单日跌 6%</td><td>监管细则；前沿模型公司资本开支表态</td></tr>
+      <tr><td>8</td><td><b>低门槛环节产能过剩</b></td><td>同质化扩产 → 价格战 → 细分赛道盈利恶化</td><td>国内多地规划先进封装产线，若缺稳定高端算力客户，未来 2–3 年或现局部过剩</td><td>先进封装产线利用率与客户结构</td></tr>
+      <tr><td>9</td><td><b>A股估值口径风险</b></td><td>存储涨价这一周期性变量消退 → PEG 从 0.82 恶化至 2 倍以上</td><td>一致预期 2026 年净利 +154.8%，但后续年度增速仅 +31.9%</td><td>卖方盈利预测上修/下修方向</td></tr>
+    </tbody>
+  </table>
+  <div class="callout warn">
+    <b>最需要警惕的认知陷阱：</b>把"行业景气真实"直接等同于"当前估值合理"。本轮供需缺口、资本开支、政策支持都是真实的——<b>但真实的基本面不等于不贵的价格</b>。2020–2021 年的新能源、2015 年的互联网+都验证过这一点：产业趋势为真，估值透支同样为真，二者可以同时成立。
+  </div>
+</section>
+
+<section>
+  <h2>数据来源汇总</h2>
+  <div class="src" style="border:none;padding-top:0">
+    <b>一手来源</b>：上交所《简式权益变动报告书》与公司公告（芯原股份 2026-09-01；长鑫科技 2026 年半年度报告与业绩说明会）；交易所行情数据；申万行业分类与财务/估值指标（截至 2026-06-30 / 2026-09-15）。<br>
+    <b>机构研究</b>：SEMI《300mm Fab Outlook》（2026-04）；WSTS 春季预测；IDC；Gartner；TrendForce；SIA。券商观点来自中信证券、中信建投、中金公司、招商证券、国盛证券、摩根士丹利、摩根大通、高盛、美银、瑞银、花旗、BlackRock/iShares、ABN AMRO 等公开研究（属非一手来源，需核实原文）。<br>
+    <b>财经媒体</b>：新华财经、每日经济新闻、21 世纪经济报道、中国经营报、界面新闻、东方财富、今日头条等（非一手来源，需核实原文）。<br>
+    <b>数据口径提示</b>：国际标的 PE(TTM) 与前瞻 PE 口径不同（TTM 用历史盈利、前瞻用一致预期），不可直接跨口径比较；A股板块估值存在"长周期分位高、短周期分位低"的口径分歧，本报告已在正文中显式标注。
+  </div>
+</section>
+
+<section>
+  <div class="disc">
+    <b>免责声明</b>：以上内容基于公开数据和量化分析，仅供参考，不构成投资建议。市场有风险，投资需谨慎。任何投资决策应结合个人风险承受能力、资金状况和投资目标独立判断，必要时咨询持牌专业机构。过往表现不预示未来收益。
+  </div>
+  <p style="font-size:12px;color:var(--ink3);margin-top:10px">报告生成时间：2026-09-16 ｜ 数据基准日：2026-09-16（部分估值指标截至 2026-09-15 收盘）</p>
+</section>
+
+</div>
+
+<script>
+var LB = '#4b6bfb', UP = '#d64541', DN = '#2e9e6b', AM = '#e0a028';
+
+/* 图1：PE(TTM) 横向对比 */
+echarts.init(document.getElementById('chartPe')).setOption({
+  tooltip: { trigger: 'axis', valueFormatter: function (v) { return v + 'x'; } },
+  grid: { left: 58, right: 24, top: 30, bottom: 74 },
+  xAxis: {
+    type: 'category',
+    data: ['美光', '英伟达', '台积电', '费半指数', '应用材料', '博通', '阿斯麦', '申万半导体', '设备概念', '科创半导体材料设备'],
+    axisLabel: { interval: 0, rotate: 34, fontSize: 11, color: '#4a5160' },
+    axisLine: { lineStyle: { color: '#e4e7ec' } }
+  },
+  yAxis: { type: 'value', name: 'PE(TTM) 倍', nameTextStyle: { color: '#828a99' }, splitLine: { lineStyle: { color: '#eef0f3' } } },
+  series: [{
+    type: 'bar',
+    barWidth: '56%',
+    label: { show: true, position: 'top', fontSize: 10.5, color: '#4a5160' },
+    data: [
+      { value: 21.0, itemStyle: { color: LB } },
+      { value: 26.8, itemStyle: { color: LB } },
+      { value: 30.8, itemStyle: { color: LB } },
+      { value: 35.9, itemStyle: { color: LB } },
+      { value: 36.3, itemStyle: { color: LB } },
+      { value: 43.3, itemStyle: { color: LB } },
+      { value: 49.9, itemStyle: { color: LB } },
+      { value: 76.3, itemStyle: { color: UP } },
+      { value: 137.5, itemStyle: { color: UP } },
+      { value: 179.3, itemStyle: { color: UP } }
+    ]
+  }]
+});
+
+/* 图2：A股半导体板块估值历史分位 */
+echarts.init(document.getElementById('chartPct')).setOption({
+  tooltip: { trigger: 'axis', valueFormatter: function (v) { return v + '% 分位'; } },
+  grid: { left: 58, right: 24, top: 30, bottom: 40 },
+  xAxis: { type: 'category', data: ['PE(TTM)', 'PB(LF)', 'PS(TTM)', 'PCF(TTM)', '股息率'], axisLine: { lineStyle: { color: '#e4e7ec' } }, axisLabel: { color: '#4a5160' } },
+  yAxis: { type: 'value', max: 100, name: '近5年分位 %', nameTextStyle: { color: '#828a99' }, splitLine: { lineStyle: { color: '#eef0f3' } } },
+  series: [{
+    type: 'bar',
+    barWidth: '46%',
+    label: { show: true, position: 'top', fontSize: 11, formatter: '{c}%' },
+    markLine: {
+      silent: true, symbol: 'none',
+      lineStyle: { color: AM, type: 'dashed' },
+      label: { formatter: '80% 偏高线', color: AM, fontSize: 11 },
+      data: [{ yAxis: 80 }]
+    },
+    data: [
+      { value: 83.8, itemStyle: { color: UP } },
+      { value: 97.5, itemStyle: { color: UP } },
+      { value: 97.6, itemStyle: { color: UP } },
+      { value: 81.0, itemStyle: { color: UP } },
+      { value: 5.8, itemStyle: { color: DN } }
+    ]
+  }]
+});
+
+/* 图3：SEMI 300mm 设备支出 */
+echarts.init(document.getElementById('chartCapex')).setOption({
+  tooltip: { trigger: 'axis' },
+  legend: { data: ['设备支出(亿美元)', '同比增速(%)'], top: 0, textStyle: { color: '#4a5160' } },
+  grid: { left: 62, right: 58, top: 42, bottom: 40 },
+  xAxis: { type: 'category', data: ['2024', '2025', '2026E', '2027E', '2028E', '2029E'], axisLine: { lineStyle: { color: '#e4e7ec' } }, axisLabel: { color: '#4a5160' } },
+  yAxis: [
+    { type: 'value', name: '亿美元', nameTextStyle: { color: '#828a99' }, splitLine: { lineStyle: { color: '#eef0f3' } } },
+    { type: 'value', name: '同比 %', nameTextStyle: { color: '#828a99' }, splitLine: { show: false } }
+  ],
+  series: [
+    { name: '设备支出(亿美元)', type: 'bar', barWidth: '48%', itemStyle: { color: LB }, label: { show: true, position: 'top', fontSize: 10.5, color: '#4a5160' }, data: [1000, 1075, 1330, 1510, 1550, 1720] },
+    { name: '同比增速(%)', type: 'line', yAxisIndex: 1, smooth: true, symbolSize: 7, lineStyle: { width: 2.5, color: AM }, itemStyle: { color: AM }, data: [5, 7, 18, 14, 3, 11] }
+  ]
+});
+
+/* 图4：A股龙头估值分位 */
+echarts.init(document.getElementById('chartLeader')).setOption({
+  tooltip: { trigger: 'axis', valueFormatter: function (v) { return v + '% 分位'; } },
+  legend: { data: ['PE 分位', 'PB 分位'], top: 0, textStyle: { color: '#4a5160' } },
+  grid: { left: 58, right: 24, top: 42, bottom: 40 },
+  xAxis: { type: 'category', data: ['中芯国际', '北方华创', '寒武纪', '海光信息'], axisLine: { lineStyle: { color: '#e4e7ec' } }, axisLabel: { color: '#4a5160' } },
+  yAxis: { type: 'value', max: 100, name: '近5年分位 %', nameTextStyle: { color: '#828a99' }, splitLine: { lineStyle: { color: '#eef0f3' } } },
+  series: [
+    { name: 'PE 分位', type: 'bar', barWidth: '26%', itemStyle: { color: LB }, label: { show: true, position: 'top', fontSize: 10.5 }, data: [61.1, 71.5, 4.7, 55.1] },
+    { name: 'PB 分位', type: 'bar', barWidth: '26%', itemStyle: { color: UP }, label: { show: true, position: 'top', fontSize: 10.5 }, data: [82.0, 87.4, 83.7, 71.8] }
+  ]
+});
+
+/* 图5：A股半导体板块主力资金净流入 */
+echarts.init(document.getElementById('chartFlow')).setOption({
+  tooltip: { trigger: 'axis', valueFormatter: function (v) { return v + ' 亿元'; } },
+  grid: { left: 68, right: 26, top: 30, bottom: 44 },
+  xAxis: { type: 'category', data: ['当日 09-16', '近5日', '近10日', '近20日'], axisLine: { lineStyle: { color: '#e4e7ec' } }, axisLabel: { color: '#4a5160' } },
+  yAxis: { type: 'value', name: '亿元', nameTextStyle: { color: '#828a99' }, splitLine: { lineStyle: { color: '#eef0f3' } } },
+  series: [{
+    type: 'bar',
+    barWidth: '44%',
+    label: { show: true, position: 'top', fontSize: 11 },
+    data: [
+      { value: 71.5, itemStyle: { color: UP } },
+      { value: -215.3, itemStyle: { color: DN } },
+      { value: -410.5, itemStyle: { color: DN } },
+      { value: -1112.9, itemStyle: { color: DN } }
+    ]
+  }]
+});
+</script>
+</body>
+</html>

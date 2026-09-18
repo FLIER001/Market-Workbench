@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { RefreshCw, Scale, TrendingUp, Droplets, Zap, AlertTriangle, ChevronDown, Target } from "lucide-react";
+import { RefreshCw, Scale, TrendingUp, LineChart, Droplets, Zap, AlertTriangle, ChevronDown, Target } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { ColdStartNotice, SkeletonBlock } from "@/components/ui/PageSkeleton";
 import { Sparkline } from "@/components/ui/Sparkline";
+import { TimingReplayChart } from "@/components/allocation/TimingReplayChart";
 import { api, type AllocationData, type AllocationInsight, type TimingPart, type HistPoint } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useSWR } from "@/hooks/useSWR";
@@ -146,7 +147,7 @@ export function Allocation() {
   const a = data?.allocation;
   const tt = t ? scoreTone(t.score) : null;
   const hist = t && isHist(t.hist) ? t.hist : [];
-  const chg5d = hist.length >= 6 ? hist[hist.length - 1].v - hist[hist.length - 6].v : null;
+  const benchHist = t?.benchmark && isHist(t.benchmark.hist) ? t.benchmark.hist : [];
 
   return (
     <div>
@@ -188,9 +189,12 @@ export function Allocation() {
 
       {t && a && tt && data && (
         <>
-          {/* ——— 首屏结论卡 ——— */}
-          <GlassCard className="mb-4 p-4">
-            <div className="grid gap-4 lg:grid-cols-[1fr_auto]">
+          {/* ——— 首行：左 1/2 结论卡（风险环境 + AI 解读）｜右 1/2 择时回放 ——— */}
+          {/* grid-cols-1 不能省：只写 lg:grid-cols-2 时 <lg 走隐式列，隐式列按 min-content
+              布局、不随容器收缩，图表 SVG 的首帧宽度会把整行顶爆（实测 760 视口下页面横向溢出 65px）。 */}
+          <div className="mb-4 grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
+            {/* 首屏结论卡 */}
+            <GlassCard className="p-4">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2.5">
                   <span className={cn("rounded-lg px-3 py-1 text-xl font-extrabold", tt.bg, tt.text)}>
@@ -254,25 +258,33 @@ export function Allocation() {
                   </div>
                 )}
               </div>
-              {/* 择时分管线图 */}
-              <div className="flex min-w-0 flex-col justify-center lg:w-72">
-                <div className="flex items-baseline gap-2">
-                  <span className="text-[10px] text-muted-foreground/45">择时分（近 1 年逐日回放）</span>
-                  {chg5d != null && (
-                    <span className={cn("rounded bg-muted/30 px-1.5 py-px font-mono text-[10px]",
-                      chg5d > 1 ? "text-danger" : chg5d < -1 ? "text-success" : "text-muted-foreground")}>
-                      近5日{pctText(chg5d, 1)}
-                    </span>
-                  )}
-                </div>
-                {hist.length > 1 ? (
-                  <Sparkline data={hist} height={110} color="--primary" valueSuffix=" 分" showLatest />
-                ) : (
-                  <p className="mt-2 text-[10px] text-muted-foreground/40">历史回放积累中</p>
-                )}
+            </GlassCard>
+
+            {/* 择时回放：择时分 × 全A指数（两图共用交易日横轴，联动竖虚线） */}
+            <GlassCard className="p-4">
+              <div className="mb-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
+                  <LineChart className="h-4 w-4" /> 择时回放
+                </h3>
+                <span className="text-[10px] text-muted-foreground/50">
+                  近 1 年逐日回放 · 两图共用同一交易日横轴 · 悬停任一图同步出竖虚线
+                </span>
               </div>
-            </div>
-          </GlassCard>
+              {hist.length > 1 ? (
+                <TimingReplayChart timing={hist} benchmark={benchHist}
+                  benchmarkLabel={t.benchmark?.name ?? "全A指数"}
+                  timingHeight={90} benchHeight={72} />
+              ) : (
+                <p className="py-8 text-center text-xs text-muted-foreground/40">历史回放积累中，样本足够后自动显示</p>
+              )}
+              <p
+                className="mt-2 border-t border-border/30 pt-1.5 text-[10px] leading-snug text-muted-foreground/40"
+                title={`横轴 = 交易日（中证全指 ${t.benchmark?.code ?? "000985"} 交易日历），已剔除日度快照在周末/节假日续接的非交易日点；`
+                  + `下图 = ${t.benchmark?.name ?? "全A指数"}，作为择时分曲线的下联对照；两图按日期对齐而非按数组下标硬拉，缺当日值处断开、不做前向填充。`}>
+                横轴 = 交易日（中证全指 {t.benchmark?.code ?? "000985"} 日历）· 下图 {t.benchmark?.name ?? "全A指数"} 作对照 · 缺当日值处断开不填充
+              </p>
+            </GlassCard>
+          </div>
 
           {/* ——— 三层证据 ——— */}
           <div className="mb-2 flex items-center gap-2">

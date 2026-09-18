@@ -12,6 +12,7 @@ import { Macro } from "@/pages/Macro";
 import { Allocation } from "@/pages/Allocation";
 import { Gold } from "@/pages/Gold";
 import { Oil } from "@/pages/Oil";
+import { FedWatch } from "@/pages/FedWatch";
 import { Bonds } from "@/pages/Bonds";
 import { Factors } from "@/pages/Factors";
 import { Pulse } from "@/pages/Pulse";
@@ -47,6 +48,7 @@ export const router = createBrowserRouter([
       { path: "/macro", element: <Macro /> },
       { path: "/gold", element: <Gold /> },
       { path: "/oil", element: <Oil /> },
+      { path: "/fedwatch", element: <FedWatch /> },
       { path: "/bonds", element: <Bonds /> },
       { path: "/pulse", element: <Pulse /> },
       { path: "/liquidity", element: <Liquidity /> },

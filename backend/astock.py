@@ -30,6 +30,9 @@ UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 _QUOTE_CACHE: dict[tuple[str, ...], tuple[float, dict[str, dict]]] = {}
 _QUOTE_LOCK = threading.Lock()
 _INDEX_CACHE: tuple[float, list[dict]] | None = None
+# 键是「本次请求的代码集合」，不同页面/批量组合各不相同，条数随使用无限增长。
+# 单条 TTL 只有 3 秒，多留无任何收益，够覆盖并发页面即可。
+_QUOTE_CACHE_MAX = 16
 
 
 def _number(value) -> float | None:
@@ -132,6 +135,8 @@ def tencent_quote(codes: list[str]) -> dict[str, dict]:
         result = _parse_gtimg(_fetch_gtimg(prefixed))
         if result:
             _QUOTE_CACHE[key] = (time.time(), result)
+            while len(_QUOTE_CACHE) > _QUOTE_CACHE_MAX:
+                _QUOTE_CACHE.pop(next(iter(_QUOTE_CACHE)))
         return result
 
 
