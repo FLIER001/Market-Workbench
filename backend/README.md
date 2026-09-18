@@ -4,12 +4,20 @@ FastAPI service for Market Workbench. It provides market data, user-local resear
 
 ## Run locally
 
+The recommended entrypoint is the repo-root `./run.sh` (builds the frontend if stale, then serves both the API and `frontend/dist` from a single process):
+
+```bash
+./run.sh
+curl -fsS http://127.0.0.1:8900/api/health
+```
+
+Backend-only (no frontend static hosting) works as before:
+
 ```bash
 cd backend
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8900
-curl -fsS http://127.0.0.1:8900/api/health
 ```
 
 The frontend development server proxies `/api` to this address by default.

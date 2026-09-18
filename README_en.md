@@ -70,9 +70,11 @@ A locally hosted research workbench for China A-shares, with Hong Kong and US co
 ## Architecture
 
 ```text
-Browser ──/api──► React + Vite (5899) ──► FastAPI (8900) ──┬─ Public market data (quotes/financials/macro/news)
-                                                            ├─ ~/.vibe-research/ (accounts SQLite, portfolios, reports)
-                                                            └─ AI: user-configured API or local CLI
+Browser ──► FastAPI (8900) ──┬─ /api: public market data (quotes/financials/macro/news)
+                            │        + ~/.vibe-research/ (accounts SQLite, portfolios, reports)
+                            │        + AI: user-configured API or local CLI
+                            └─ serves frontend/dist statically (same process; for frontend
+                               HMR development run vite separately on 5899, /api proxies to 8900)
 ```
 
 - **Frontend**: React 19, TypeScript, Vite, Tailwind, ECharts
@@ -88,24 +90,18 @@ Requirements: Python 3.10+, Node.js 20+.
 ```bash
 git clone https://github.com/FLIER001/Market-Workbench.git
 cd Market-Workbench
-```
 
-```bash
-# Terminal 1: backend (http://127.0.0.1:8900)
+# Backend environment (the only required setup)
 cd backend
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8900
+cd ..
+
+# One command: builds frontend (incremental) + serves both from a single process
+./run.sh
 ```
 
-```bash
-# Terminal 2: frontend (http://127.0.0.1:5899)
-cd frontend
-npm install
-npm run dev
-```
-
-Open <http://127.0.0.1:5899>. On first launch (empty user database) you can register the primary account from the web page; registration then closes by default and accounts are managed via a CLI:
+Open <http://127.0.0.1:8900>. On first launch (empty user database) you can register the primary account from the web page; registration then closes by default and accounts are managed via a CLI:
 
 ```bash
 cd backend && .venv/bin/python add_user.py add <username>   # also list / passwd / remove

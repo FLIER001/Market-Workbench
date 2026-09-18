@@ -3,6 +3,21 @@
 本项目的版本号唯一来源是 `frontend/package.json`；后端 HTTP API、`/api/health`、
 前端界面与 MCP `serverInfo` 全部从它读取（见 `backend/version.py`）。
 
+## 未发布（统一启动 · 单进程）
+
+- **前后端统一为单进程启动**：后端静态托管 `frontend/dist`（`/assets` + SPA 回退路由），
+  日常使用只需 `./run.sh` 一个命令、一个进程、一个端口（8900）。省掉常驻的
+  vite dev server（实测 node+esbuild 约 250MB 常驻内存），静态文件由 FileResponse
+  直接服务，开销忽略不计。资产仍走 GZip（1.1MB 主包 → 320KB）。
+- SPA 回退路由放在 app.py 末尾（catch-all 必须在全部 API 路由之后注册）；
+  `/api/*` 未命中时仍返回 JSON 404，不回退到 index.html（前端 api 客户端靠状态码判错）。
+- `run.sh`：dist 缺失或源码比 dist 新才重新 `npm run build`（增量），然后单进程启动 uvicorn；
+  `VR_HOST`/`VR_PORT` 可覆盖。前端热更新开发仍可另开 `cd frontend && npm run dev`（5899，
+  `/api` 代理到 8900），与生产模式互不影响。
+- launchd 两个 plist（backend uvicorn + frontend vite）合并为 `com.vibe-research.app.plist`
+  单服务；环境变量（VR_DEEP_ANALYSIS_KEY）与 KeepAlive/RunAtLoad 语义不变。
+- README / docs/getting-started.md 快速开始改为统一入口。
+
 ## 未发布（2026-09-15 择时配置 · 双图联动回放）
 
 - 择时配置页新增「择时回放」模块：**上方 = 择时分逐日回放曲线，下方 = 全A指数走势**，

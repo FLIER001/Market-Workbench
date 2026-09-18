@@ -1,6 +1,6 @@
 # 快速开始
 
-本指南用于在一台本地机器上运行 Market Workbench。前端和后端需要同时启动。
+本指南用于在一台本地机器上运行 Market Workbench。统一入口 `run.sh` 单进程同时服务前后端。
 
 ## 前置条件
 
@@ -8,16 +8,14 @@
 - Node.js 20 或更高版本
 - npm
 
-## 启动后端
+## 启动（统一入口）
 
 ```bash
-cd backend
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8900
+cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && cd ..
+./run.sh
 ```
 
-另开一个终端确认健康检查：
+`run.sh` 会在需要时构建前端（源码比 `frontend/dist` 新才重新 build），然后单进程启动服务。确认健康检查：
 
 ```bash
 curl -fsS http://127.0.0.1:8900/api/health
@@ -25,7 +23,10 @@ curl -fsS http://127.0.0.1:8900/api/health
 
 预期返回包含 `"ok": true` 和当前版本号的 JSON。
 
-## 启动前端
+## 启动前端（仅前端开发需要）
+
+生产/日常使用无需另起前端：后端已静态托管 `frontend/dist`，`http://127.0.0.1:8900` 即完整应用。
+需要前端热更新开发时：
 
 ```bash
 cd frontend
@@ -33,7 +34,7 @@ npm install
 npm run dev
 ```
 
-访问 <http://127.0.0.1:5899>。首次使用请注册账号；账号数据库只保存在这台机器上。
+访问 <http://127.0.0.1:5899>（/api 自动代理到 8900）。首次使用请注册账号；账号数据库只保存在这台机器上。
 
 ## 首次配置 AI
 

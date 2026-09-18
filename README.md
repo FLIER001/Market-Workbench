@@ -70,9 +70,11 @@
 ## 架构
 
 ```text
-Browser ──/api──► React + Vite (5899) ──► FastAPI (8900) ──┬─ 公开市场数据源（行情/财务/宏观/资讯）
-                                                            ├─ ~/.vibe-research/（账号 SQLite、持仓、研报）
-                                                            └─ AI：用户自配 API 或本机 CLI
+Browser ──► FastAPI (8900) ──┬─ /api：公开市场数据源（行情/财务/宏观/资讯）
+                            │        + ~/.vibe-research/（账号 SQLite、持仓、研报）
+                            │        + AI：用户自配 API 或本机 CLI
+                            └─ 静态托管 frontend/dist（同一进程，无独立前端服务；
+                               前端开发热更新另起 vite，端口 5899，/api 自动代理）
 ```
 
 - **前端**：React 19、TypeScript、Vite、Tailwind、ECharts
@@ -88,30 +90,26 @@ Browser ──/api──► React + Vite (5899) ──► FastAPI (8900) ──�
 ```bash
 git clone https://github.com/FLIER001/Market-Workbench.git
 cd Market-Workbench
-```
 
-```bash
-# 终端一：后端（http://127.0.0.1:8900）
+# 后端环境（唯一必需的准备工作）
 cd backend
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8900
+cd ..
+
+# 一键启动：构建前端（增量）+ 单进程服务前后端
+./run.sh
 ```
 
-```bash
-# 终端二：前端（http://127.0.0.1:5899）
-cd frontend
-npm install
-npm run dev
-```
-
-浏览器打开 <http://127.0.0.1:5899>。首次启动（用户库为空）可在网页注册主账号；此后注册默认关闭，账号由后台脚本管理：
+浏览器打开 <http://127.0.0.1:8900>。首次启动（用户库为空）可在网页注册主账号；此后注册默认关闭，账号由后台脚本管理：
 
 ```bash
 cd backend && .venv/bin/python add_user.py add <用户名>   # 另有 list / passwd / remove
 ```
 
 验证服务：`curl -fsS http://127.0.0.1:8900/api/health`。常见问题（后端连不上、数据缺失、升级后数据位置）见 [docs/getting-started.md](docs/getting-started.md)。
+
+> 前后端由同一进程服务（后端静态托管 `frontend/dist`），无需另起 vite。仅前端开发需要热更新时，另开 `cd frontend && npm run dev`（端口 5899，/api 自动代理到 8900）。
 
 ## 接入 AI 与 Agent
 

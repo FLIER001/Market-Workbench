@@ -23,7 +23,9 @@ from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from pathlib import Path
 
 import astock
 import bonds as bonds_layer
@@ -2088,3 +2090,32 @@ def factor_custom_delete(fid: str):
 
     factor_expr.delete_custom(fid)
     return {"data": {"deleted": fid}}
+
+
+# ---------------------------------------------------------------------------
+# 前端静态托管：构建产物由本进程直接服务，省掉独立的 vite/node 进程
+# （dev 模式常驻 250MB+；静态托管只花 FileResponse 的零头）。
+# 必须放在文件末尾：catch-all 路由若注册在 API 路由之前会把它们全部吃掉。
+# dist 缺失时（只跑后端开发）这些路由不注册，不影响 /api。
+# ---------------------------------------------------------------------------
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+if _FRONTEND_DIST.is_dir():
+    app.mount("/assets", StaticFiles(directory=_FRONTEND_DIST / "assets"), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    def spa_index():
+        return FileResponse(_FRONTEND_DIST / "index.html")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def spa_fallback(path: str):
+        """SPA 回退：非静态文件的路径都回 index.html（react-router 接管）。
+
+        /api 前缀不回退：前端 api 客户端靠 404 判断接口不存在，回 index.html
+        会把错误页当 JSON 解析。"""
+        if path.startswith("api/") or path == "api":
+            raise HTTPException(404, "Not Found")
+        file = _FRONTEND_DIST / path
+        if file.is_file():
+            return FileResponse(file)
+        return FileResponse(_FRONTEND_DIST / "index.html")

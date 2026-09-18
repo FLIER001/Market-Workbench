@@ -3,30 +3,27 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.vibe-research.frontend</string>
+  <string>com.vibe-research.app</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/opt/homebrew/bin/npm</string>
-    <string>run</string>
-    <string>dev</string>
-    <string>--</string>
-    <string>--host</string>
-    <string>127.0.0.1</string>
+    <string>/Users/k/Market-Workbench/run.sh</string>
   </array>
-  <key>WorkingDirectory</key>
-  <string>/Users/k/Market-Workbench/frontend</string>
   <key>EnvironmentVariables</key>
   <dict>
+    <key>VR_DEEP_ANALYSIS_KEY</key>
+    <string>a0245618f7aa0391fe22f600622256ba8ef63b390134930e</string>
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
+  <key>WorkingDirectory</key>
+  <string>/Users/k/Market-Workbench</string>
   <key>KeepAlive</key>
   <true/>
   <key>RunAtLoad</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>/private/tmp/vibe-research-frontend.log</string>
+  <string>/private/tmp/vibe-research-app.log</string>
   <key>StandardErrorPath</key>
-  <string>/private/tmp/vibe-research-frontend.log</string>
+  <string>/private/tmp/vibe-research-app.log</string>
 </dict>
 </plist>
