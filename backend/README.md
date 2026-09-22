@@ -52,15 +52,15 @@ The MCP server reads the same version and uses the same data-tool layer as the H
 
 ## Configuration
 
-Copy [`.env.example`](.env.example) if you need configuration. Local development works with the defaults. For an internet-facing deployment, set both `VR_ALLOW_ORIGINS` and a strong `VR_API_KEY`.
+Copy [`.env.example`](.env.example) if you need configuration. Local development works with the defaults. For an internet-facing deployment, set both `MW_ALLOW_ORIGINS` and a strong `MW_API_KEY`.
 
 | Variable | Purpose |
 |---|---|
-| `VR_ALLOW_ORIGINS` | Comma-separated CORS allowlist; `*` is the local-development default |
-| `VR_API_KEY` | Enables bearer-token protection for `/api/*` except health |
-| `VR_DATA_DIR` | Base directory for local portfolio, reports and user data |
-| `VR_REPORTS_DIR` | Overrides the report archive directory only |
-| `VR_DATA_PROXY` | Set to `1` only when data sources must use the system proxy |
+| `MW_ALLOW_ORIGINS` | Comma-separated CORS allowlist; `*` is the local-development default |
+| `MW_API_KEY` | Enables bearer-token protection for `/api/*` except health |
+| `MW_DATA_DIR` | Base directory for local portfolio, reports and user data |
+| `MW_REPORTS_DIR` | Overrides the report archive directory only |
+| `MW_DATA_PROXY` | Set to `1` only when data sources must use the system proxy |
 | `IWENCAI_API_KEY` | Optional key for iWenCai report search |
 
 See the root [configuration guide](../docs/configuration.md) for storage and deployment details.
@@ -73,6 +73,6 @@ See the root [configuration guide](../docs/configuration.md) for storage and dep
 
 ## Data and security notes
 
-- Account data is stored in SQLite at `~/.vibe-research/users.db` by default. Passwords are salted and hashed; browser sessions use random tokens.
-- Portfolio and report files are stored under `~/.vibe-research/` unless redirected by environment variables.
+- Account data is stored in SQLite at `~/.market-workbench/users.db` by default. Passwords are salted and hashed; browser sessions use random tokens.
+- Portfolio and report files are stored under `~/.market-workbench/` unless redirected by environment variables.
 - The service is not a multi-tenant hosted platform. Do not expose it publicly without configuring CORS, an API key, TLS and your own access controls.

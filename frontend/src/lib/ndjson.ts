@@ -33,7 +33,7 @@ export async function streamNdjson(
     let detail: any = null;
     try { detail = await resp.json(); } catch { /* 无 JSON body 就用状态码兜底 */ }
     if (resp.status === 401) {
-      throw new ApiError("后端开启了访问鉴权（VR_API_KEY）：请在「接入 AI」页底部填写后端访问密钥", 401);
+      throw new ApiError("后端开启了访问鉴权（MW_API_KEY）：请在「接入 AI」页底部填写后端访问密钥", 401);
     }
     throw new ApiError(detail?.detail || `HTTP ${resp.status}`, resp.status);
   }

@@ -58,4 +58,4 @@ npm run dev
 
 ### 更新项目后数据是否还在
 
-默认数据目录位于 `~/.vibe-research/`，不在项目目录内。升级前仍建议备份该目录；路径配置见 [configuration.md](configuration.md)。
+默认数据目录位于 `~/.market-workbench/`，不在项目目录内。升级前仍建议备份该目录；路径配置见 [configuration.md](configuration.md)。

@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.vibe-research.app-restart</string>
+  <string>com.market-workbench.app-restart</string>
 
   <!-- 后端进程在 macOS 上内存只涨不跌：Python/NumPy 释放的页不还给系统，
        gc.collect()、PYTHONMALLOC=malloc、malloc_zone_pressure_relief() 实测均无效
@@ -11,13 +11,13 @@
        三个时刻都避开了 A 股连续竞价与后台重算窗口（调度器只在 09:15-11:30 /
        13:00-15:00 与 15:10-15:20 运行）。重启后由磁盘快照兜底，首个请求毫秒级返回。
 
-       停用：launchctl bootout gui/501/com.vibe-research.app-restart -->
+       停用：launchctl bootout gui/501/com.market-workbench.app-restart -->
   <key>ProgramArguments</key>
   <array>
     <string>/bin/launchctl</string>
     <string>kickstart</string>
     <string>-k</string>
-    <string>gui/501/com.vibe-research.app</string>
+    <string>gui/501/com.market-workbench.app</string>
   </array>
 
   <key>StartCalendarInterval</key>
@@ -46,8 +46,8 @@
   <false/>
 
   <key>StandardOutPath</key>
-  <string>/private/tmp/vibe-research-app-restart.log</string>
+  <string>/private/tmp/market-workbench-app-restart.log</string>
   <key>StandardErrorPath</key>
-  <string>/private/tmp/vibe-research-app-restart.log</string>
+  <string>/private/tmp/market-workbench-app-restart.log</string>
 </dict>
 </plist>

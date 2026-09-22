@@ -18,7 +18,7 @@ import { LogOut } from "lucide-react";
 import appPackage from "../../../package.json";
 
 const APP_VERSION = `v${appPackage.version}`;
-const REPO_URL = "https://github.com/FLIER001/Vibe-Research";
+const REPO_URL = "https://github.com/FLIER001/Market-Workbench";
 
 type NavItem = { to: string; icon: LucideIcon; label: string; match?: string };
 type NavNode = NavItem & { children?: NavItem[] };

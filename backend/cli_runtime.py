@@ -101,7 +101,7 @@ def run_cli(kind: str, system_prompt: str, user_prompt: str) -> str:
 
     combined = f"{system_prompt}\n\n{user_prompt}"
     env = {**os.environ, **d.get("env", {})}
-    tmpdir = tempfile.mkdtemp(prefix="vibe-cli-")
+    tmpdir = tempfile.mkdtemp(prefix="market-workbench-cli-")
     try:
         stdin_payload: str | None
         if d["delivery"] == "system-file":
@@ -157,7 +157,7 @@ def run_cli_stream(kind: str, system_prompt: str, user_prompt: str):
 
     combined = f"{system_prompt}\n\n{user_prompt}"
     env = {**os.environ, **d.get("env", {})}
-    tmpdir = tempfile.mkdtemp(prefix="vibe-cli-")
+    tmpdir = tempfile.mkdtemp(prefix="market-workbench-cli-")
     proc = None
     try:
         if d["delivery"] == "system-file":

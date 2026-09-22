@@ -36,7 +36,7 @@ import market
 BEIJING = timezone(timedelta(hours=8))
 
 _SNAPSHOT = os.path.join(
-    os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research"),
+    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
     "gold_score_snapshot.json")
 _CB_GOLD_VINTAGE_DIR = os.path.join(os.path.dirname(_SNAPSHOT), "gold_cb_vintages")
 _ETF_VINTAGE_DIR = os.path.join(os.path.dirname(_SNAPSHOT), "gold_etf_vintages")

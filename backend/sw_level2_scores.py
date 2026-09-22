@@ -39,7 +39,7 @@ from sector_scores import (
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 BEIJING = timezone(timedelta(hours=8))
-DATA_DIR = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
+DATA_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
 _PRIMARY_CACHE_FILE = os.path.join(DATA_DIR, "sw_level2_scores.json")
 _FALLBACK_CACHE_FILE = os.path.join(os.path.dirname(__file__), ".cache", "sw_level2_scores.json")
 _PRIMARY_SNAPSHOT_FILE = os.path.join(DATA_DIR, "sw_level2_snapshots.json")

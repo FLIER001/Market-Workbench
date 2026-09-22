@@ -325,7 +325,7 @@ _FFLOW_DELAY = "https://push2delay.eastmoney.com/api/qt/stock/fflow/daykline/get
 # 主源（东财 push2his）断连时的历史序列快照：成功时落盘、失败时回补，
 # 避免第三方源再挂时近 5/20/60 日累计整体缺失（同 market.py 指数流向的思路）。
 _FFLOW_SNAPSHOT = os.path.join(
-    os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research"),
+    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
     "stock_fflow_snapshot.json")
 
 

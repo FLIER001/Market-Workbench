@@ -11,7 +11,7 @@
 
 **为什么选它**
 
-- **全本地**：FastAPI + React，账号、持仓、研报存于本机 `~/.vibe-research/`，无云端托管、无遥测。
+- **全本地**：FastAPI + React，账号、持仓、研报存于本机 `~/.market-workbench/`，无云端托管、无遥测。
 - **数据零门槛**：东方财富、腾讯、新浪、AkShare、FRED、EIA、IMF、Polymarket/Kalshi 等公开接口，绝大多数无需 API key；核心依赖轻量秒装，重型数据源可选（未安装时对应端点返回 501 并附安装提示，不影响其余功能）。
 - **AI 自带（BYO）**：接入你自己的 OpenAI 兼容 API 或本机 CLI（Claude Code / Codex / Qwen / Gemini / DeepSeek）；密钥只存浏览器本地。
 - **Agent 友好**：内置零第三方依赖的 MCP Server，向本地 Agent 暴露 41 个数据工具（行情、估值、财务、资金流、宏观/流动性合成分、行业链、债市、因子回测等）。
@@ -71,7 +71,7 @@
 
 ```text
 Browser ──► FastAPI (8900) ──┬─ /api：公开市场数据源（行情/财务/宏观/资讯）
-                            │        + ~/.vibe-research/（账号 SQLite、持仓、研报）
+                            │        + ~/.market-workbench/（账号 SQLite、持仓、研报）
                             │        + AI：用户自配 API 或本机 CLI
                             └─ 静态托管 frontend/dist（同一进程，无独立前端服务；
                                前端开发热更新另起 vite，端口 5899，/api 自动代理）
@@ -129,13 +129,13 @@ HTTP API 分组与全部 MCP 工具清单见 [backend/README.md](backend/README.
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `VR_ALLOW_ORIGINS` | `*` | CORS 白名单；公网部署收紧为前端域名 |
-| `VR_API_KEY` | 空 | 设置后所有 `/api/*`（健康检查除外）要求 Bearer 鉴权 |
-| `VR_ALLOW_REGISTRATION` | 关 | 置 1 重开网页注册 |
-| `VR_DATA_DIR` / `VR_REPORTS_DIR` | `~/.vibe-research/` | 账号/持仓/研报存储位置 |
-| `VR_DATA_PROXY` | 关 | 仅当机器必须走系统代理出网时置 1 |
+| `MW_ALLOW_ORIGINS` | `*` | CORS 白名单；公网部署收紧为前端域名 |
+| `MW_API_KEY` | 空 | 设置后所有 `/api/*`（健康检查除外）要求 Bearer 鉴权 |
+| `MW_ALLOW_REGISTRATION` | 关 | 置 1 重开网页注册 |
+| `MW_DATA_DIR` / `MW_REPORTS_DIR` | `~/.market-workbench/` | 账号/持仓/研报存储位置 |
+| `MW_DATA_PROXY` | 关 | 仅当机器必须走系统代理出网时置 1 |
 
-完整变量（含 `VR_EIA_API_KEY`、深度分析模型覆盖等）见 [docs/configuration.md](docs/configuration.md)，示例见 [backend/.env.example](backend/.env.example)。
+完整变量（含 `MW_EIA_API_KEY`、深度分析模型覆盖等）见 [docs/configuration.md](docs/configuration.md)，示例见 [backend/.env.example](backend/.env.example)。
 
 ## 开发
 

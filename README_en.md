@@ -11,7 +11,7 @@ A locally hosted research workbench for China A-shares, with Hong Kong and US co
 
 **Why this project**
 
-- **Fully local** — FastAPI + React; accounts, portfolios and reports live in `~/.vibe-research/` on your machine. No cloud hosting, no telemetry.
+- **Fully local** — FastAPI + React; accounts, portfolios and reports live in `~/.market-workbench/` on your machine. No cloud hosting, no telemetry.
 - **Zero-key data** — Public endpoints: Eastmoney, Tencent, Sina, AkShare, FRED, EIA, IMF, Polymarket/Kalshi. Almost none require an API key. Core dependencies are lightweight; heavy data sources are optional (missing ones return 501 with install hints, other features keep working).
 - **BYO AI** — Plug in your own OpenAI-compatible API or local CLI (Claude Code / Codex / Qwen / Gemini / DeepSeek). Keys are stored only in your browser.
 - **Agent-ready** — Ships an MCP server with zero third-party dependencies, exposing 41 data tools to local agents (quotes, valuation, financials, flows, macro/liquidity composites, industry chains, bonds, factor backtests, and more).
@@ -71,7 +71,7 @@ A locally hosted research workbench for China A-shares, with Hong Kong and US co
 
 ```text
 Browser ──► FastAPI (8900) ──┬─ /api: public market data (quotes/financials/macro/news)
-                            │        + ~/.vibe-research/ (accounts SQLite, portfolios, reports)
+                            │        + ~/.market-workbench/ (accounts SQLite, portfolios, reports)
                             │        + AI: user-configured API or local CLI
                             └─ serves frontend/dist statically (same process; for frontend
                                HMR development run vite separately on 5899, /api proxies to 8900)
@@ -127,13 +127,13 @@ Local development needs no configuration: the frontend proxies `/api` to `http:/
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `VR_ALLOW_ORIGINS` | `*` | CORS allowlist; tighten to your frontend domain when public |
-| `VR_API_KEY` | empty | When set, all `/api/*` (except health) require Bearer auth |
-| `VR_ALLOW_REGISTRATION` | off | Set to 1 to reopen web registration |
-| `VR_DATA_DIR` / `VR_REPORTS_DIR` | `~/.vibe-research/` | Where accounts/portfolios/reports are stored |
-| `VR_DATA_PROXY` | off | Set to 1 only if the machine must use a system proxy to reach data sources |
+| `MW_ALLOW_ORIGINS` | `*` | CORS allowlist; tighten to your frontend domain when public |
+| `MW_API_KEY` | empty | When set, all `/api/*` (except health) require Bearer auth |
+| `MW_ALLOW_REGISTRATION` | off | Set to 1 to reopen web registration |
+| `MW_DATA_DIR` / `MW_REPORTS_DIR` | `~/.market-workbench/` | Where accounts/portfolios/reports are stored |
+| `MW_DATA_PROXY` | off | Set to 1 only if the machine must use a system proxy to reach data sources |
 
-Full variable list (incl. `VR_EIA_API_KEY`, deep-analysis model overrides) in [docs/configuration.md](docs/configuration.md); examples in [backend/.env.example](backend/.env.example).
+Full variable list (incl. `MW_EIA_API_KEY`, deep-analysis model overrides) in [docs/configuration.md](docs/configuration.md); examples in [backend/.env.example](backend/.env.example).
 
 ## Development
 

@@ -24,7 +24,7 @@ def legacy_ledger_unit_scope(monkeypatch):
     monkeypatch.setattr(app_module, "_portfolio_user_id", lambda request: None)
 
 
-# ── VR_API_KEY 鉴权中间件 ───────────────────────────────────────────
+# ── MW_API_KEY 鉴权中间件 ───────────────────────────────────────────
 
 def test_api_key_auth(monkeypatch):
     monkeypatch.setattr(app_module, "_API_KEY", "sekret")
@@ -191,7 +191,7 @@ def test_myreports_legacy_migration(tmp_path, monkeypatch):
     old = tmp_path / "repo-cache" / "myreports"
     old.mkdir(parents=True)
     (old / "index.json").write_text("[]", encoding="utf-8")
-    monkeypatch.delenv("VR_REPORTS_DIR", raising=False)
+    monkeypatch.delenv("MW_REPORTS_DIR", raising=False)
     monkeypatch.setattr(mr, "_OLD_DEFAULT_DIR", old)
     monkeypatch.setattr(mr, "REPORTS_DIR", tmp_path / "userdata" / "myreports")
     # 上次复制中断留下的半截临时目录，不该挡住这次迁移

@@ -5,8 +5,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-HOST="${VR_HOST:-127.0.0.1}"
-PORT="${VR_PORT:-8900}"
+HOST="${MW_HOST:-127.0.0.1}"
+PORT="${MW_PORT:-8900}"
 
 # 前端：dist 缺失或源码比 dist 新时才构建（增量判断，省一次 vite）
 if [ ! -f frontend/dist/index.html ] || \

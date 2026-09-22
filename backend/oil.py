@@ -33,15 +33,15 @@ import cache_runtime
 
 BEIJING = timezone(timedelta(hours=8))
 
-_SNAPSHOT_DIR = os.environ.get("VR_DATA_DIR") or os.path.join(
-    os.path.expanduser("~"), ".vibe-research")
+_SNAPSHOT_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(
+    os.path.expanduser("~"), ".market-workbench")
 _SNAPSHOT = os.path.join(_SNAPSHOT_DIR, "oil_score_snapshot.json")
 
 # EIA v2 / bulk：
 # bulk zip（57MB，无 key 无限流）为常规主源，7 天重下一次；
 # v2 API 为兜底（DEMO_KEY 限流严格，OVER_RATE_LIMIT 后长时间退避）。
-# 用户可申请 key 后配 VR_EIA_API_KEY 提升 v2 兜底可用性。
-_EIA_KEY = os.environ.get("VR_EIA_API_KEY") or "DEMO_KEY"
+# 用户可申请 key 后配 MW_EIA_API_KEY 提升 v2 兜底可用性。
+_EIA_KEY = os.environ.get("MW_EIA_API_KEY") or "DEMO_KEY"
 _EIA_SNDW = "https://api.eia.gov/v2/petroleum/sum/sndw/data/"
 _CFTC_ZIP = "https://www.cftc.gov/files/dea/history/fut_disagg_txt_{year}.zip"
 _GPR_XLS = "https://www.matteoiacoviello.com/gpr_files/data_gpr_daily_recent.xls"

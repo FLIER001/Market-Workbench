@@ -2,7 +2,7 @@
 
 ## 用户目标
 
-在 `/Users/k/Vibe-Research` 的 Market Workbench 基础上设计并后续落地一个因子研究与回测系统。用户特别要求借鉴优秀开源项目，“站在巨人的肩膀上”，不能闭门自研。
+在 `/Users/k/Market-Workbench` 的 Market Workbench 基础上设计并后续落地一个因子研究与回测系统。用户特别要求借鉴优秀开源项目，“站在巨人的肩膀上”，不能闭门自研。
 
 本轮只完成只读审计、开源调研和方案设计，未修改仓库文件。
 
@@ -28,12 +28,12 @@
 
 ## 当前项目事实
 
-- 架构：React 19 + TypeScript + Vite 前端，FastAPI 后端，本地自托管。见 `/Users/k/Vibe-Research/docs/architecture.md`。
-- 后端入口：`/Users/k/Vibe-Research/backend/app.py`。
+- 架构：React 19 + TypeScript + Vite 前端，FastAPI 后端，本地自托管。见 `/Users/k/Market-Workbench/docs/architecture.md`。
+- 后端入口：`/Users/k/Market-Workbench/backend/app.py`。
 - 当前数据层：`backend/astock.py` 提供行情、K 线、财务、公告等；大量模块使用 JSON/SQLite/内存 last-good 缓存。
 - 现有评分：`backend/plate_scores.py`、`sector_scores.py`、`sw_level2_scores.py`、`market.py`。
-- 现有专用回测：`/Users/k/Vibe-Research/research/A股宏观面总分模块_回测与权重设计.md` 和 `research/output/macro_backtest/`，但不是通用引擎。
-- 当前路线图在 `/Users/k/Vibe-Research/ROADMAP.md:88` 明确写着不做通用回测平台/量化因子工厂。新功能落地前必须先确认并修改这一产品边界。
+- 现有专用回测：`/Users/k/Market-Workbench/research/A股宏观面总分模块_回测与权重设计.md` 和 `research/output/macro_backtest/`，但不是通用引擎。
+- 当前路线图在 `/Users/k/Market-Workbench/ROADMAP.md:88` 明确写着不做通用回测平台/量化因子工厂。新功能落地前必须先确认并修改这一产品边界。
 - 本地 Python 环境已验证：Pandas `3.0.5`、NumPy `2.5.1`；未安装 DuckDB、PyArrow、SciPy。
 - Git 状态（2026-08-17）：`main...upstream/main [ahead 29, behind 25]`，仅有未跟踪 `.zcode/`。不要擅自处理该目录或同步分支。
 
@@ -98,7 +98,7 @@
 ### 存储
 
 ```text
-~/.vibe-research/factor-data/
+~/.market-workbench/factor-data/
 ├── catalog.json
 ├── bars/year=YYYY/*.parquet
 ├── instruments/*.parquet

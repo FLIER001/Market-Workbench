@@ -7,7 +7,7 @@ export class ApiError extends Error {
   }
 }
 
-// 后端访问密钥（对应后端部署时的 VR_API_KEY，公网部署防蹭用）。只存本地浏览器。
+// 后端访问密钥（对应后端部署时的 MW_API_KEY，公网部署防蹭用）。只存本地浏览器。
 const ACCESS_KEY = "vr-access-key";
 
 export function loadAccessKey(): string {
@@ -210,7 +210,7 @@ async function request<T>(
   }
   if (!resp.ok) {
     if (resp.status === 401) {
-      throw new ApiError("后端开启了访问鉴权（VR_API_KEY）：请在「接入 AI」页底部填写后端访问密钥", 401);
+      throw new ApiError("后端开启了访问鉴权（MW_API_KEY）：请在「接入 AI」页底部填写后端访问密钥", 401);
     }
     throw new ApiError(payload?.detail || `HTTP ${resp.status}`, resp.status);
   }

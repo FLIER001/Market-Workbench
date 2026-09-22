@@ -20,7 +20,7 @@ import {
   type SwLevel2Row,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { resolveRefreshing } from "@/hooks/useSWR";
+import { pollRefreshing } from "@/hooks/useSWR";
 
 type SortKey = "score" | "valuation" | "prosperity" | "attention" | "crowding";
 const LOCAL_CACHE_KEY = "vr-sector-scores-cache-v1";
@@ -231,10 +231,12 @@ export function SectorScoresPanel() {
     setLoading(true);
     setError(null);
     try {
-      const first = await api.sectorScores(refresh);
-      const next = await resolveRefreshing(first, () => api.sectorScores(false));
-      setData(next);
-      saveLocalCache(next);
+      // 首个响应（可能是 refreshing + last-good）先上屏，避免后台重算时白等。
+      await pollRefreshing(
+        await api.sectorScores(refresh),
+        () => api.sectorScores(false),
+        (v) => { setData(v); saveLocalCache(v); },
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "行业评分加载失败");
     } finally {
@@ -293,16 +295,20 @@ export function SectorScoresPanel() {
       }
       setLevel2Loading(true);
       try {
-        const first = await api.sectorScoresLevel2(false);
-        const next = await resolveRefreshing(first, () => api.sectorScoresLevel2(false));
-        if (cancelled) return;
-        setLevel2(next);
-        setLevel2Error(null);
-        try {
-          localStorage.setItem(LEVEL2_CACHE_KEY, JSON.stringify(next));
-        } catch {
-          /* 忽略本地存储失败 */
-        }
+        await pollRefreshing(
+          await api.sectorScoresLevel2(false),
+          () => api.sectorScoresLevel2(false),
+          (v) => {
+            if (cancelled) return;
+            setLevel2(v);
+            setLevel2Error(null);
+            try {
+              localStorage.setItem(LEVEL2_CACHE_KEY, JSON.stringify(v));
+            } catch {
+              /* 忽略本地存储失败 */
+            }
+          },
+        );
       } catch (err) {
         if (!cancelled) {
           setLevel2Error(err instanceof Error ? err.message : "二级行业指标加载失败");
@@ -332,10 +338,14 @@ export function SectorScoresPanel() {
   useEffect(() => {
     const timer = window.setInterval(() => {
       if (document.hidden) return;
-      api.sectorScoresLevel2(false).then((first) => resolveRefreshing(first, () => api.sectorScoresLevel2(false))).then((next) => {
-        setLevel2(next);
-        try { localStorage.setItem(LEVEL2_CACHE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
-      }).catch(() => {});
+      void api.sectorScoresLevel2(false).then((first) => pollRefreshing(
+        first,
+        () => api.sectorScoresLevel2(false),
+        (v) => {
+          setLevel2(v);
+          try { localStorage.setItem(LEVEL2_CACHE_KEY, JSON.stringify(v)); } catch { /* ignore */ }
+        },
+      )).catch(() => {});
     }, 60 * 60_000);
     return () => window.clearInterval(timer);
   }, []);

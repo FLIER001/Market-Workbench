@@ -42,8 +42,8 @@ import cache_runtime
 BEIJING = timezone(timedelta(hours=8))
 ET = ZoneInfo("America/New_York")
 
-_SNAPSHOT_DIR = os.environ.get("VR_DATA_DIR") or os.path.join(
-    os.path.expanduser("~"), ".vibe-research")
+_SNAPSHOT_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(
+    os.path.expanduser("~"), ".market-workbench")
 _SNAPSHOT = os.path.join(_SNAPSHOT_DIR, "fedwatch_snapshot.json")
 _HISTORY = os.path.join(_SNAPSHOT_DIR, "fedwatch_history.jsonl")
 

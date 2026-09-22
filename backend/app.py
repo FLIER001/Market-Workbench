@@ -215,9 +215,9 @@ def _conditional_json(data, request: Request, response: Response):
     return {"data": data}
 
 
-# CORS：默认放开（本地自托管友好）；公网部署时用 VR_ALLOW_ORIGINS 收紧成白名单。
-#   例：VR_ALLOW_ORIGINS="https://myhost"  （逗号分隔多个）
-_ORIGINS = [o.strip() for o in os.environ.get("VR_ALLOW_ORIGINS", "*").split(",") if o.strip()] or ["*"]
+# CORS：默认放开（本地自托管友好）；公网部署时用 MW_ALLOW_ORIGINS 收紧成白名单。
+#   例：MW_ALLOW_ORIGINS="https://myhost"  （逗号分隔多个）
+_ORIGINS = [o.strip() for o in os.environ.get("MW_ALLOW_ORIGINS", "*").split(",") if o.strip()] or ["*"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ORIGINS,
@@ -227,14 +227,14 @@ app.add_middleware(
 # GZip：债市框架/分品种等大 payload（含 3 年趋势序列）压缩传输，184KB → ~27KB
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
-# 可选鉴权：设了 VR_API_KEY 就要求所有 /api/* 带 `Authorization: Bearer <key>`
+# 可选鉴权：设了 MW_API_KEY 就要求所有 /api/* 带 `Authorization: Bearer <key>`
 #   （本地自托管不设=开放；公网部署务必设，否则别人能读你的持仓/调你的后端）。
-_API_KEY = os.environ.get("VR_API_KEY", "").strip()
+_API_KEY = os.environ.get("MW_API_KEY", "").strip()
 
 # 公开注册开关：默认关（账号由管理员用 backend/add_user.py 后台添加）。
 #   首次启动用户库为空时放行一次，方便新部署把主账号建出来；之后只能走后台添加。
-#   VR_ALLOW_REGISTRATION=1 可显式重新打开网页注册。
-_REGISTRATION = os.environ.get("VR_ALLOW_REGISTRATION", "").strip().lower() in ("1", "true", "yes", "on")
+#   MW_ALLOW_REGISTRATION=1 可显式重新打开网页注册。
+_REGISTRATION = os.environ.get("MW_ALLOW_REGISTRATION", "").strip().lower() in ("1", "true", "yes", "on")
 
 
 @app.middleware("http")
@@ -247,7 +247,7 @@ async def _require_api_key(request: Request, call_next):
     ):
         bearer_ok = request.headers.get("authorization", "") == f"Bearer {_API_KEY}"
         if request.headers.get("x-vr-access-key", "") != _API_KEY and not bearer_ok:
-            return JSONResponse({"detail": "未授权：缺少或错误的 API Key（VR_API_KEY）"}, status_code=401)
+            return JSONResponse({"detail": "未授权：缺少或错误的 API Key（MW_API_KEY）"}, status_code=401)
     return await call_next(request)
 
 
@@ -1610,10 +1610,10 @@ def industry(top: int = Query(20, ge=5, le=50)):
 # 深度分析代理：自选页「AI分析」列，转发到独立部署的 hermes-agent（约 20 分钟级慢任务）。
 # 密钥只放后端环境变量，不进前端；前端用 backgroundTasks 轮询等待。
 # ---------------------------------------------------------------------------
-_DEEP_ANALYSIS_URL = os.environ.get("VR_DEEP_ANALYSIS_URL", "http://192.168.0.231:8642/v1/chat/completions")
-_DEEP_ANALYSIS_KEY = os.environ.get("VR_DEEP_ANALYSIS_KEY", "")
-_DEEP_ANALYSIS_MODEL = os.environ.get("VR_DEEP_ANALYSIS_MODEL", "hermes-agent")
-_DEEP_ANALYSIS_TIMEOUT = int(os.environ.get("VR_DEEP_ANALYSIS_TIMEOUT", "2400"))  # 秒，覆盖 20 分钟级任务
+_DEEP_ANALYSIS_URL = os.environ.get("MW_DEEP_ANALYSIS_URL", "http://192.168.0.231:8642/v1/chat/completions")
+_DEEP_ANALYSIS_KEY = os.environ.get("MW_DEEP_ANALYSIS_KEY", "")
+_DEEP_ANALYSIS_MODEL = os.environ.get("MW_DEEP_ANALYSIS_MODEL", "hermes-agent")
+_DEEP_ANALYSIS_TIMEOUT = int(os.environ.get("MW_DEEP_ANALYSIS_TIMEOUT", "2400"))  # 秒，覆盖 20 分钟级任务
 
 
 class DeepAnalysisReq(BaseModel):
@@ -1631,7 +1631,7 @@ def deep_analysis(req: DeepAnalysisReq):
     if not prompt:
         raise HTTPException(400, "prompt 不能为空")
     if not _DEEP_ANALYSIS_KEY:
-        raise HTTPException(501, "后端未配置 VR_DEEP_ANALYSIS_KEY，无法调用深度分析服务")
+        raise HTTPException(501, "后端未配置 MW_DEEP_ANALYSIS_KEY，无法调用深度分析服务")
 
     import requests as _requests
 

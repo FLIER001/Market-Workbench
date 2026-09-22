@@ -4,9 +4,9 @@ The upstream reference uses the host app's LLM client. Market Workbench keeps th
 LLM config client-side, so this module is an *optional* bridge configured purely
 by environment variables — no config, no LLM call, panel stays English-only:
 
-    VR_PULSE_LLM_BASE_URL=https://api.openai.com/v1
-    VR_PULSE_LLM_API_KEY=sk-...
-    VR_PULSE_LLM_MODEL=gpt-4o-mini
+    MW_PULSE_LLM_BASE_URL=https://api.openai.com/v1
+    MW_PULSE_LLM_API_KEY=sk-...
+    MW_PULSE_LLM_MODEL=gpt-4o-mini
 
 Translations are cached on disk keyed by the stable English title, so only brand
 new titles ever cost an LLM call. Everything is best-effort: any config / network
@@ -28,9 +28,9 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_BASE_URL = os.environ.get("VR_PULSE_LLM_BASE_URL", "").strip()
-_API_KEY = os.environ.get("VR_PULSE_LLM_API_KEY", "").strip()
-_MODEL = os.environ.get("VR_PULSE_LLM_MODEL", "").strip()
+_BASE_URL = os.environ.get("MW_PULSE_LLM_BASE_URL", "").strip()
+_API_KEY = os.environ.get("MW_PULSE_LLM_API_KEY", "").strip()
+_MODEL = os.environ.get("MW_PULSE_LLM_MODEL", "").strip()
 _ENABLED = bool(_BASE_URL and _API_KEY and _MODEL)
 
 _BATCH = 4
@@ -39,7 +39,7 @@ _CACHE: dict[str, str] | None = None
 
 
 def _cache_path() -> Path:
-    base = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
+    base = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
     return Path(base) / "pulse" / "pulse_translations.json"
 
 

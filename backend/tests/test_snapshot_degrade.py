@@ -8,8 +8,8 @@
 1. schema_version 被改掉后，加载器仍返回可用载荷并打 degraded 标记；
 2. 缺关键字段时必须判废 —— 放宽版本门不等于接受坏数据。
 
-测试自造合成快照并重定向模块路径，不依赖 ~/.vibe-research 下的真实数据
-（conftest.py 会把 VR_DATA_DIR 指向临时目录，那里本来就是空的）。
+测试自造合成快照并重定向模块路径，不依赖 ~/.market-workbench 下的真实数据
+（conftest.py 会把 MW_DATA_DIR 指向临时目录，那里本来就是空的）。
 """
 from __future__ import annotations
 

@@ -942,9 +942,9 @@ _EM_SESSIONS: dict = {}         # {direct(bool): requests.Session}
 # 数据层连接模式：国内财经站（东财/腾讯/新浪）本应「直连」——很多用户开着 Clash/V2Ray
 # 科学上网，系统代理会把东财这类国内站路由挂掉（典型：push2.eastmoney.com 的 CONNECT 被掐）。
 # 默认 auto：先试直连、失败再降级走系统代理；探测一次后固定，避免每次都重试。
-# 只有少数「必须靠代理才能出网」的环境需要 VR_DATA_PROXY=1 强制走代理。
+# 只有少数「必须靠代理才能出网」的环境需要 MW_DATA_PROXY=1 强制走代理。
 # 注意：这只影响数据层；AI 层（可能要调国外模型）仍走各自的系统代理，不受影响。
-_em_mode = ["proxy" if os.environ.get("VR_DATA_PROXY", "").strip().lower() in ("1", "true", "yes") else "auto"]
+_em_mode = ["proxy" if os.environ.get("MW_DATA_PROXY", "").strip().lower() in ("1", "true", "yes") else "auto"]
 
 
 def _em_session(direct: bool):
@@ -979,7 +979,7 @@ def em_get(url: str, params: dict | None = None, headers: dict | None = None, ti
     """东财统一请求入口：串行限流 + **直连优先、失败降级系统代理**（避免科学上网代理挂掉国内站）。
 
     第一次请求探测：先直连（短超时、不重试），成功即固定走直连；失败则降级走系统代理并固定。
-    探测结果整个进程复用，避免每次重试。`VR_DATA_PROXY=1` 可跳过探测、强制走代理。
+    探测结果整个进程复用，避免每次重试。`MW_DATA_PROXY=1` 可跳过探测、强制走代理。
     """
     wait = _EM_MIN_INTERVAL - (time.time() - _em_last_call[0])
     if wait > 0:

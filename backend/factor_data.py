@@ -6,7 +6,7 @@
 - 无 point-in-time ST/停牌/涨跌停历史，ST 按构建时名称快照剔除（静态偏差）；
 - 上市日期用首根 K 线日期代理。
 
-存储：~/.vibe-research/factor/{bars.csv.gz, instruments.csv.gz, catalog.json}
+存储：~/.market-workbench/factor/{bars.csv.gz, instruments.csv.gz, catalog.json}
 # ponytail: CSV.gz + pandas，~1400 万行读约 10s；行数或并发用户上来再换 Parquet/DuckDB
 # ponytail: 整包重建（无增量日更），日常重建约 20-40 分钟；要日更时再加追加模式
 """
@@ -23,7 +23,7 @@ import pandas as pd
 import astock
 
 DATA_DIR = os.path.join(
-    os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research"),
+    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
     "factor",
 )
 _BARS_FILE = os.path.join(DATA_DIR, "bars.csv.gz")

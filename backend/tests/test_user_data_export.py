@@ -39,7 +39,7 @@ def test_export_redacts_key_and_omits_credentials(tmp_path, monkeypatch):
     fpf.add_holding("000001", 200, 1.5, user_id=uid)
 
     data = client.get("/api/auth/export", headers=headers).json()["data"]
-    assert data["format"] == "vibe-research-user-data"
+    assert data["format"] == "market-workbench-user-data"
     assert data["data"]["watchlist"] == ["600519"]
     assert data["data"]["llm"]["apiKey"] == ""  # key 不出本机
     assert "password" not in str(data) and "token" not in str(data)
@@ -95,7 +95,7 @@ def test_import_ledgers_skip_by_default(tmp_path, monkeypatch):
 def test_import_ledgers_merge_and_replace(tmp_path, monkeypatch):
     headers, uid = _setup(tmp_path, monkeypatch)
     export = {
-        "format": "vibe-research-user-data", "version": 1, "data": {},
+        "format": "market-workbench-user-data", "version": 1, "data": {},
         "ledgers": {
             "portfolio": {"holdings": [{"code": "600519", "shares": 100, "cost": 10}]},
             "fund_portfolio": {"holdings": [{"code": "000001", "shares": 200, "cost": 1.5}]},
@@ -120,16 +120,16 @@ def test_import_rejects_bad_format_and_bad_ledger(tmp_path, monkeypatch):
     assert client.post("/api/auth/import", headers=headers, json={"payload": {"format": "other"}}).status_code == 400
     # version 字段损坏（非数字）→ 400 而不是 500
     assert client.post("/api/auth/import", headers=headers,
-                       json={"payload": {"format": "vibe-research-user-data", "version": "abc", "data": {}}}).status_code == 400
+                       json={"payload": {"format": "market-workbench-user-data", "version": "abc", "data": {}}}).status_code == 400
     bad_ledger = {
-        "format": "vibe-research-user-data", "version": 1, "data": {},
+        "format": "market-workbench-user-data", "version": 1, "data": {},
         "ledgers": {"portfolio": {"holdings": [{"code": "6005", "shares": 1, "cost": 1}]}},
     }
     r = client.post("/api/auth/import", headers=headers, json={"payload": bad_ledger, "ledgers_mode": "replace"})
     assert r.status_code == 400
     # 负股数 → 400
     neg_ledger = {
-        "format": "vibe-research-user-data", "version": 1, "data": {},
+        "format": "market-workbench-user-data", "version": 1, "data": {},
         "ledgers": {"portfolio": {"holdings": [{"code": "600519", "shares": -1, "cost": 1}]}},
     }
     assert client.post("/api/auth/import", headers=headers, json={"payload": neg_ledger, "ledgers_mode": "replace"}).status_code == 400
@@ -140,7 +140,7 @@ def test_import_strips_derived_ledger_metadata(tmp_path, monkeypatch):
     否则本年盈亏会拿别处的年初基准重放。"""
     headers, uid = _setup(tmp_path, monkeypatch)
     payload = {
-        "format": "vibe-research-user-data", "version": 1, "data": {},
+        "format": "market-workbench-user-data", "version": 1, "data": {},
         "ledgers": {"portfolio": {"holdings": [{"code": "600519", "shares": 100, "cost": 10}],
                                   "ytd_year": 2024, "ytd_open": {"600519": 999.0},
                                   "last_refresh": "2024-01-01 00:00", "version": 42}},
@@ -156,7 +156,7 @@ def test_users_import_data_skips_unknown_keys(tmp_path, monkeypatch):
     monkeypatch.setattr(users, "DB_FILE", str(tmp_path / "users.db"))
     users.init_db()
     user = users.register("unit-user", "secret1")
-    payload = {"format": "vibe-research-user-data", "version": 1,
+    payload = {"format": "market-workbench-user-data", "version": 1,
                "data": {"notes": [1], "hacker-key": {"evil": True}}}
     result = users.import_data(user["id"], payload, merge=True)
     assert result["applied"] == ["notes"]

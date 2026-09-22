@@ -50,7 +50,7 @@ import astock
 import cache_runtime
 
 BEIJING = timezone(timedelta(hours=8))
-DATA_DIR = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
+DATA_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
 # v2：记录层新增 buy_date（最新增持日期口径）、计划层改为 start_date/end_date，
 # 旧快照结构不兼容，换 key/文件名让旧快照自然失效（不删旧文件）。
 SNAPSHOT = "holder_increase_raw_v2.json"

@@ -15,11 +15,11 @@ import random
 import sys
 from collections import defaultdict
 
-BACKEND = "/Users/k/Vibe-Research/backend"
+BACKEND = "/Users/k/Market-Workbench/backend"
 OUT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BACKEND)
-os.environ["VR_DATA_DIR"] = os.path.join(OUT, "datadir")
-os.makedirs(os.environ["VR_DATA_DIR"], exist_ok=True)
+os.environ["MW_DATA_DIR"] = os.path.join(OUT, "datadir")
+os.makedirs(os.environ["MW_DATA_DIR"], exist_ok=True)
 
 import market  # noqa: E402
 

@@ -12,7 +12,7 @@ Point-in-time 纪律：
   2006-2015 的老数据，少数记录的可见时点可能比真实首次公告晚（修正偏差，
   偏保守方向：不会提前看到未来数据，但个别记录可见得偏晚）。
 
-存储：~/.vibe-research/factor/fundamentals.csv.gz（code,report_date,notice_date,指标列）
+存储：~/.market-workbench/factor/fundamentals.csv.gz（code,report_date,notice_date,指标列）
 + fundamentals_meta.json（已抓报告期清单，断点续传）。
 # ponytail: 整包重建约 82 期 × ~10 页 ≈ 800 请求，10-20 分钟；要增量日更再改追加模式
 """

@@ -10,7 +10,7 @@ React + Vite (5899) ── development proxy ──► FastAPI (8900)
                                                    │
                  ┌─────────────────────────────────┼────────────────────────────┐
                  ▼                                 ▼                            ▼
-          Public market data                 ~/.vibe-research/            AI providers / CLI
+          Public market data                 ~/.market-workbench/            AI providers / CLI
        quotes, filings, news, funds       accounts, portfolio, reports    API or local runtime
 ```
 

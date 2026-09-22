@@ -1,7 +1,7 @@
 """基金持仓账本 —— 用户自己录入的基金持仓 + 实时估值/最新净值叠加浮动盈亏。
 
-与股票持仓（portfolio.py）同构：存本地用户数据目录（VR_DATA_DIR 或
-~/.vibe-research/fund_portfolio.json），不上传、不进仓库。区别在行情源：
+与股票持仓（portfolio.py）同构：存本地用户数据目录（MW_DATA_DIR 或
+~/.market-workbench/fund_portfolio.json），不上传、不进仓库。区别在行情源：
 基金看「最新公布净值」，交易时段叠加天天基金盘中估值（推算值，与净值分列）。
 
 - 市值/盈亏按最新公布净值计算（确定值）；
@@ -20,7 +20,7 @@ from datetime import datetime, timezone, timedelta
 
 import fund
 
-CACHE_DIR = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
+CACHE_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
 FPF_FILE = os.path.join(CACHE_DIR, "fund_portfolio.json")
 BEIJING = timezone(timedelta(hours=8))
 _LOCK = threading.Lock()

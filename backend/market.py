@@ -66,7 +66,7 @@ def _cached(key: str, fn, valid=bool, ttl: int | None = None):
 
 # 冷启动兜底：服务重启后若源仍不可用，从磁盘快照恢复整页 last-good，页面直接可渲染
 _LIQUIDITY_SNAPSHOT = os.path.join(
-    os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research"),
+    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
     "liquidity_snapshot.json")
 
 
@@ -239,7 +239,7 @@ def _empty_to_none(v):
 
 # 主力资金流历史快照：push2his 时通时断，成功时落盘，断连时回退快照，避免页面图表数据时有时无
 _FLOWS_SNAPSHOT = os.path.join(
-    os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research"),
+    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
     "index_flows_snapshot.json")
 
 
@@ -508,7 +508,7 @@ def _fred_csv(series_id: str, limit: int = 260) -> list[tuple[str, float]]:
 
 # FRED 序列磁盘兜底：重启后 / 连续故障期，用最近一次成功的序列保证国外单卡与指数不断档
 _FRED_SNAPSHOT = os.path.join(
-    os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research"),
+    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
     "fred_series_snapshot.json")
 _FRED_SERIES_TTL = 6 * 3600  # FRED 日频更新，6 小时内直接用缓存，0 外呼
 
@@ -591,7 +591,7 @@ def _mk_us_index(label: str, kind: str, comps: list[dict], interpretation: str,
 
 # 两融历史快照：东财数据中心偶发断连时回退最近一次成功抓取，保证指数子指标图表不断数据
 _MARGIN_SNAPSHOT = os.path.join(
-    os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research"),
+    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
     "margin_hist_snapshot.json")
 
 
@@ -867,7 +867,7 @@ def _kalshi_fed_odds_fetch() -> dict:
 
 
 # 美联储目标利率阈值概率的 last-good 文件：Kalshi 挂了时兜底，避免页面空白。
-_FED_ODDS_LAST = os.path.join(os.path.expanduser("~"), ".vibe-research", "fed_odds_last.json")
+_FED_ODDS_LAST = os.path.join(os.path.expanduser("~"), ".market-workbench", "fed_odds_last.json")
 
 
 def _fed_odds_with_fallback() -> dict:
@@ -1688,13 +1688,13 @@ def _liquidity_build() -> dict:
 
 _MACRO_TTL = 1800  # 聚合层 30 分钟检查；月/季底层源另有 12 小时缓存
 _MACRO_SNAPSHOT = os.path.join(
-    os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research"),
+    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
     "macro_snapshot.json")
 _MACRO_CLIMATE_SNAPSHOT = os.path.join(
-    os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research"),
+    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
     "macro_climate_hist.json")
 _MACRO_EPS_SNAPSHOT = os.path.join(
-    os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research"),
+    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
     "macro_eps_consensus.json")
 
 

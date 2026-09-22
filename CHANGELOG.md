@@ -3,6 +3,21 @@
 本项目的版本号唯一来源是 `frontend/package.json`；后端 HTTP API、`/api/health`、
 前端界面与 MCP `serverInfo` 全部从它读取（见 `backend/version.py`）。
 
+## 未发布（去 vibe 命名 · 统一为 Market Workbench）
+
+- **数据目录更名**：`~/.vibe-research/` → `~/.market-workbench/`（账号库、持仓账本、
+  研报与全部缓存快照的根目录）。这是本次唯一会动到磁盘数据的改动，旧目录需手工
+  `mv ~/.vibe-research ~/.market-workbench` 迁移。
+- **环境变量前缀更名**：`VR_*` → `MW_*`（`MW_DATA_DIR`、`MW_API_KEY`、
+  `MW_ALLOW_ORIGINS`、`MW_ALLOW_REGISTRATION`、`MW_DEEP_ANALYSIS_*`、`MW_EIA_API_KEY`、
+  `MW_PULSE_LLM_*`、`MW_DATA_PROXY`、`MW_MEM_WATCHDOG`、`MW_HOST`/`MW_PORT` 等）。
+  升级需同步更新 launchd plist 与任何外部脚本里的变量名。
+- **launchd 标识更名**：`com.vibe-research.app` / `-restart` → `com.market-workbench.app` /
+  `-restart`，日志改到 `/private/tmp/market-workbench-app.log`；plist 文件名同步更名。
+- **浏览器导出格式更名**：`vibe-research-user-data` → `market-workbench-user-data`，
+  备份文件名前缀同步改为 `market-workbench-backup-`（旧备份 JSON 需改字符串后才能导入）。
+- 其余零散标识（User-Agent、CLI 临时目录前缀、迁移日志前缀、README/docs 示例）一并去 vibe。
+
 ## 未发布（统一启动 · 单进程）
 
 - **前后端统一为单进程启动**：后端静态托管 `frontend/dist`（`/assets` + SPA 回退路由），
@@ -12,10 +27,10 @@
 - SPA 回退路由放在 app.py 末尾（catch-all 必须在全部 API 路由之后注册）；
   `/api/*` 未命中时仍返回 JSON 404，不回退到 index.html（前端 api 客户端靠状态码判错）。
 - `run.sh`：dist 缺失或源码比 dist 新才重新 `npm run build`（增量），然后单进程启动 uvicorn；
-  `VR_HOST`/`VR_PORT` 可覆盖。前端热更新开发仍可另开 `cd frontend && npm run dev`（5899，
+  `MW_HOST`/`MW_PORT` 可覆盖。前端热更新开发仍可另开 `cd frontend && npm run dev`（5899，
   `/api` 代理到 8900），与生产模式互不影响。
-- launchd 两个 plist（backend uvicorn + frontend vite）合并为 `com.vibe-research.app.plist`
-  单服务；环境变量（VR_DEEP_ANALYSIS_KEY）与 KeepAlive/RunAtLoad 语义不变。
+- launchd 两个 plist（backend uvicorn + frontend vite）合并为 `com.market-workbench.app.plist`
+  单服务；环境变量（MW_DEEP_ANALYSIS_KEY）与 KeepAlive/RunAtLoad 语义不变。
 - README / docs/getting-started.md 快速开始改为统一入口。
 
 ## 未发布（2026-09-15 择时配置 · 双图联动回放）

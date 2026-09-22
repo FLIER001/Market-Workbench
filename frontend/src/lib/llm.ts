@@ -85,7 +85,7 @@ export async function chatStream(messages: ChatMsg[], context: string, handlers:
     let body: any = null;
     try { body = await resp.json(); } catch { /* ignore */ }
     if (resp.status === 401) {
-      throw new ApiError("后端开启了访问鉴权（VR_API_KEY）：请在「接入 AI」页底部填写后端访问密钥", 401);
+      throw new ApiError("后端开启了访问鉴权（MW_API_KEY）：请在「接入 AI」页底部填写后端访问密钥", 401);
     }
     throw new ApiError(body?.detail || `HTTP ${resp.status}`, resp.status);
   }

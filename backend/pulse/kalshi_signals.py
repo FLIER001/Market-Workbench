@@ -57,7 +57,7 @@ def _cache_set(key: str, value: Any) -> None:
 
 
 def _snapshot_path() -> Path:
-    base = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
+    base = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
     return Path(base) / "pulse" / "kalshi_snapshot.json"
 
 
@@ -95,7 +95,7 @@ async def pull_raw_events(force: bool = False) -> list[dict[str, Any]]:
 
     events: list[dict[str, Any]] = []
     cursor = ""
-    headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (vibe-trading)"}
+    headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (market-workbench)"}
     async with httpx.AsyncClient(timeout=_PAGE_TIMEOUT, headers=headers) as client:
         for page in range(_MAX_PAGES):
             params: dict[str, str] = {

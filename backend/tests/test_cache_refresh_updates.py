@@ -226,7 +226,7 @@ def test_bonds_snapshot_save_failure_is_tolerated(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def _seed_pulse_snapshot(monkeypatch, tmp_path, *, age_s: float):
-    monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MW_DATA_DIR", str(tmp_path))
     old = {
         "as_of": "2026-08-28T09:00:00+08:00",
         "status": "旧现状",

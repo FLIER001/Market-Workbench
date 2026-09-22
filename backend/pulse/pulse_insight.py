@@ -3,7 +3,7 @@
 Runs once per rebuild for the core (expanded) modules only. Selection is
 deterministic (top events by Yes probability); the LLM only writes the Chinese
 event lines and the investment-impact call. The LLM config comes from the
-``VR_PULSE_LLM_*`` env vars, or — when unset — from the user's 「接入 AI」
+``MW_PULSE_LLM_*`` env vars, or — when unset — from the user's 「接入 AI」
 config stored in the users DB (same JSON the Settings page syncs). Either way
 unconfigured or failing calls degrade to a plain top-events fallback, never a
 failed rebuild.

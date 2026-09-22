@@ -14,7 +14,7 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { ColdStartNotice, TableSkeleton } from "@/components/ui/PageSkeleton";
 import { api, type PlateScoreRow, type PlateScoresData } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { resolveRefreshing } from "@/hooks/useSWR";
+import { pollRefreshing } from "@/hooks/useSWR";
 
 type SortKey = "priority" | "strength" | "opportunity";
 const LOCAL_CACHE_KEY = "vr-plate-scores-cache-v1";
@@ -247,10 +247,12 @@ export function PlateScoresPanel() {
     setLoading(true);
     setError(null);
     try {
-      const first = await api.plateScores(refresh);
-      const next = await resolveRefreshing(first, () => api.plateScores(false));
-      setData(next);
-      saveLocalCache(next);
+      // 首个响应（可能是 refreshing + last-good）先上屏，避免后台重算时白等十几秒。
+      await pollRefreshing(
+        await api.plateScores(refresh),
+        () => api.plateScores(false),
+        (v) => { setData(v); saveLocalCache(v); },
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "板块评分加载失败");
     } finally {

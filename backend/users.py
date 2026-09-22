@@ -21,7 +21,7 @@ import sqlite3
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CACHE_DIR = os.path.join(os.path.expanduser("~"), ".vibe-research")
+CACHE_DIR = os.path.join(os.path.expanduser("~"), ".market-workbench")
 os.makedirs(CACHE_DIR, exist_ok=True)
 DB_FILE = os.path.join(CACHE_DIR, "users.db")
 
@@ -214,7 +214,7 @@ def merge_data(user_id: int, items: dict) -> dict:
     return get_data(user_id)
 
 
-EXPORT_FORMAT = "vibe-research-user-data"
+EXPORT_FORMAT = "market-workbench-user-data"
 EXPORT_VERSION = 1
 
 

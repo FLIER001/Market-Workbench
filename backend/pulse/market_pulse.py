@@ -36,7 +36,7 @@ from .pulse_insight import (
 logger = logging.getLogger(__name__)
 
 def _snapshot_path() -> Path:
-    base = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
+    base = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
     return Path(base) / "pulse" / "pulse_snapshot.json"
 
 
@@ -112,7 +112,7 @@ async def _translate(markets: list[dict[str, Any]]) -> None:
     """Attach Chinese titles in-place (best-effort, bounded, self-healing cache).
 
     Uses the optional LLM bridge in ``pulse_translate`` (configured via
-    ``VR_PULSE_LLM_BASE_URL`` / ``VR_PULSE_LLM_API_KEY`` / ``VR_PULSE_LLM_MODEL``).
+    ``MW_PULSE_LLM_BASE_URL`` / ``MW_PULSE_LLM_API_KEY`` / ``MW_PULSE_LLM_MODEL``).
     When unconfigured, titles stay English-only — no failure, no noise.
     """
     try:

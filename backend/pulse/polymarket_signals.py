@@ -85,7 +85,7 @@ def _cache_set(key: str, value: Any) -> None:
 # this pinned version instantly (no network, no LLM, survives backend restart),
 # and only the refresh button (force=True) re-pulls and re-pins.
 def _snapshot_path() -> Path:
-    base = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
+    base = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
     return Path(base) / "pulse" / "polymarket_snapshot.json"
 
 
@@ -212,7 +212,7 @@ async def pull_raw_markets(pages: int = 3, force: bool = False) -> list[dict[str
         return raw
     raw = []
     seen_ids: set[str] = set()
-    headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (vibe-trading)"}
+    headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (market-workbench)"}
     async with httpx.AsyncClient(timeout=20.0, headers=headers) as client:
         for page in range(pages):
             params = {

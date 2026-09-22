@@ -2,7 +2,7 @@
 
 设计取舍：
 - 走 base64 JSON 上传（不引入 python-multipart 依赖，契合本项目「秒装必可用」）；研报文件不大，够用。
-- 存到 `VR_REPORTS_DIR`（默认 ~/.vibe-research/myreports/，也可用 VR_DATA_DIR 换根目录）——用户私有资料，绝不进仓、不上传。
+- 存到 `MW_REPORTS_DIR`（默认 ~/.market-workbench/myreports/，也可用 MW_DATA_DIR 换根目录）——用户私有资料，绝不进仓、不上传。
   放仓库外，重新下载/覆盖项目文件夹不会丢（issue #12）；≤v0.1.1 存 backend/.cache/myreports/，首次启动自动迁移（复制，旧目录保留作备份）。
 - 元数据存目录内 index.json；按文件名关键词自动打「行业」标签（best-effort，未命中记「未分类」）。
 
@@ -23,17 +23,17 @@ import uuid
 from pathlib import Path
 
 _OLD_DEFAULT_DIR = Path(__file__).resolve().parent / ".cache" / "myreports"  # ≤v0.1.1 旧位置
-_DATA_DIR = Path(os.environ.get("VR_DATA_DIR") or Path.home() / ".vibe-research")
+_DATA_DIR = Path(os.environ.get("MW_DATA_DIR") or Path.home() / ".market-workbench")
 _DEFAULT_DIR = _DATA_DIR / "myreports"
-# 空串视同未设置（与 VR_DATA_DIR 语义一致，避免 Path("") 落到进程工作目录）
-REPORTS_DIR = Path(os.environ.get("VR_REPORTS_DIR") or str(_DEFAULT_DIR))
+# 空串视同未设置（与 MW_DATA_DIR 语义一致，避免 Path("") 落到进程工作目录）
+REPORTS_DIR = Path(os.environ.get("MW_REPORTS_DIR") or str(_DEFAULT_DIR))
 _INDEX = REPORTS_DIR / "index.json"
 
 
 def _migrate_legacy() -> None:
-    """旧版研报在仓库内 .cache/ 里，重下载项目会丢；迁到用户目录（显式设了 VR_REPORTS_DIR 或新位置已有则不动）。"""
+    """旧版研报在仓库内 .cache/ 里，重下载项目会丢；迁到用户目录（显式设了 MW_REPORTS_DIR 或新位置已有则不动）。"""
     try:
-        if os.environ.get("VR_REPORTS_DIR") or REPORTS_DIR.exists() or not _OLD_DEFAULT_DIR.exists():
+        if os.environ.get("MW_REPORTS_DIR") or REPORTS_DIR.exists() or not _OLD_DEFAULT_DIR.exists():
             return
         tmp = REPORTS_DIR.with_name(REPORTS_DIR.name + ".migrate.tmp")
         if tmp.exists():
@@ -42,7 +42,7 @@ def _migrate_legacy() -> None:
         os.replace(tmp, REPORTS_DIR)  # 同盘原子改名：复制中断不会留半套研报挡住下次重试
     except OSError as e:
         # 迁移失败不阻塞启动，但要出声——旧数据原样保留在 _OLD_DEFAULT_DIR，可手工复制
-        print(f"[vibe-research] 研报数据迁移失败（旧数据仍在 {_OLD_DEFAULT_DIR}）: {e}", file=sys.stderr)
+        print(f"[market-workbench] 研报数据迁移失败（旧数据仍在 {_OLD_DEFAULT_DIR}）: {e}", file=sys.stderr)
 
 
 _migrate_legacy()

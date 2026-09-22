@@ -426,7 +426,7 @@ def _call(name: str, args: list[tuple], w: dict[str, pd.DataFrame]):
 
 
 # ---------------------------------------------------------------------------
-# 自定义因子存取（~/.vibe-research/factor/custom_factors.json）
+# 自定义因子存取（~/.market-workbench/factor/custom_factors.json）
 # ---------------------------------------------------------------------------
 
 _CUSTOM_FILE = os.path.join(factor_data.DATA_DIR, "custom_factors.json")

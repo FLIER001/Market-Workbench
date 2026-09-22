@@ -37,20 +37,34 @@ export function useSWR<T>(key: string, fetcher: (fresh?: boolean) => Promise<T>,
   const alive = useRef(true);
   const dataRef = useRef(data);
   dataRef.current = data;
+  // 当前 key：异步回填写入前用它校验，避免上一个 key（如上一个窗口）的轮询结果盖掉新 key 的数据。
+  const keyRef = useRef(scopedKey);
+  keyRef.current = scopedKey;
 
   const revalidate = useCallback(async (force = false) => {
     if (force && dataRef.current === null) setLoading(true);
     setRevalidating(true);
+    const requestKey = scopedKey;
+    const current = () => alive.current && keyRef.current === requestKey;
+    // 首帧落地：后端即便在后台重拉，也要先把手里的这批结果交给页面；
+    // 轮询只负责后续追新。此前首个响应被轮询循环扣住，切窗口要等 17s 才换表。
+    const commit = (v: T) => {
+      writeCache(requestKey, v, opts?.persist);
+      if (current()) { setData(v); setLoading(false); }
+    };
     // 手动刷新也复用同一飞行请求；force 只让首个请求要求后端检查软 TTL。
     let p = inflight.get(scopedKey) as Promise<T> | undefined;
     if (!p) {
       p = (async () => {
         let next = await fetcher(force);
-        // 后端正在后台刷新时短轮询状态；页面隐藏即暂停，恢复可见后继续。
-        for (const delay of [2000, 5000, 10_000]) {
+        commit(next);
+        // 后端正在后台刷新时继续追新；页面隐藏即暂停，恢复可见后继续。
+        for (const delay of REFRESH_POLL_DELAYS) {
           if ((next as CachePayload)?.cache_state !== "refreshing") break;
           await waitUntilVisible(delay);
+          if (!current()) break;
           next = await fetcher(false);
+          commit(next);
         }
         return next;
       })();
@@ -58,13 +72,12 @@ export function useSWR<T>(key: string, fetcher: (fresh?: boolean) => Promise<T>,
     }
     try {
       const d = await p;
-      writeCache(scopedKey, d, opts?.persist);
-      if (alive.current) setData(d);
+      if (current()) setData(d);
     } catch (e) {
       onError?.(e);
     } finally {
       if (inflight.get(scopedKey) === p) inflight.delete(scopedKey);
-      if (alive.current) { setLoading(false); setRevalidating(false); }
+      if (current()) { setLoading(false); setRevalidating(false); }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopedKey, opts?.persist]);
@@ -73,6 +86,13 @@ export function useSWR<T>(key: string, fetcher: (fresh?: boolean) => Promise<T>,
   // 真正的 setData 由仍存活的那次执行完成（alive 在 effect 启动时重置为 true）。
   useEffect(() => {
     alive.current = true;
+    // 切 key（如切窗口）时先同步换成本 key 的缓存值：命中即秒开，未命中立即回加载态。
+    // 此前这里不动 data，切窗口后页面还挂着上一个窗口的行，直到新请求回来才换——「不及时」的来源。
+    const cached = cache.has(scopedKey)
+      ? (cache.get(scopedKey) as T)
+      : (opts?.persist ? loadPersisted<T>(scopedKey) : null);
+    setData(cached ?? null);
+    setLoading(cached == null);
     revalidate();
     return () => { alive.current = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -95,6 +115,10 @@ export function useSWR<T>(key: string, fetcher: (fresh?: boolean) => Promise<T>,
 const inflight = new Map<string, Promise<unknown>>();
 
 const STORE_PREFIX = "vr-swr:";
+
+// 后端后台重建最长约 80s（40 只候选股的公告串行拉取解析），轮询窗口必须盖过它，
+// 否则「完成后自动更新」名不副实：页面停在旧时点，直到下次挂载才追上。
+const REFRESH_POLL_DELAYS = [2000, 5000, 10_000, 20_000, 30_000, 30_000, 30_000];
 
 async function waitUntilVisible(delay: number): Promise<void> {
   if (!document.hidden) await new Promise((resolve) => window.setTimeout(resolve, delay));
@@ -120,13 +144,25 @@ export function clearUserSWRCache(): void {
   } catch { /* storage unavailable */ }
 }
 
-/** 给仍使用自定义页面状态的慢数据集复用同一套后台刷新追新节奏。 */
-export async function resolveRefreshing<T extends CachePayload>(first: T, fetcher: () => Promise<T>): Promise<T> {
+/**
+ * 后台刷新追新：拿到首个响应就先交给 onValue 上屏，之后每轮轮询结果继续上屏，
+ * 最后返回终值。用于自定义页面状态的慢数据集（板块/行业评分、产业链）。
+ *
+ * 注意：后端 cache_state=refreshing 时响应里带的是上次成功结果（last-good），
+ * 不是空壳，所以先上屏不会闪白；首个响应若仍为空由调用方自行守卫。
+ */
+export async function pollRefreshing<T extends CachePayload>(
+  first: T,
+  fetcher: () => Promise<T>,
+  onValue: (v: T) => void,
+): Promise<T> {
   let value = first;
-  for (const delay of [2000, 5000, 10_000]) {
+  onValue(value);
+  for (const delay of REFRESH_POLL_DELAYS) {
     if (value.cache_state !== "refreshing") break;
     await waitUntilVisible(delay);
     value = await fetcher();
+    onValue(value);
   }
   return value;
 }

@@ -25,7 +25,7 @@ import fund
 import cache_runtime
 
 BEIJING = timezone(timedelta(hours=8))
-DATA_DIR = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
+DATA_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
 _CACHE_FILE = os.path.join(DATA_DIR, "fund_pfs.json")
 _DB_FILE = os.path.join(DATA_DIR, "fund_pfs.sqlite")
 _SCHEMA_VERSION = 3

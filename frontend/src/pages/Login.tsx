@@ -198,7 +198,7 @@ export function Login() {
           </div>
 
           <p className="mt-4 text-center text-[11px] leading-relaxed text-muted-foreground/50">
-            数据只存在你自己的机器上（~/.vibe-research），不会上传到任何服务器。
+            数据只存在你自己的机器上（~/.market-workbench），不会上传到任何服务器。
           </p>
           </>
           )}

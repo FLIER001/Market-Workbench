@@ -18,7 +18,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { ChainGraph } from "@/components/sectors/ChainGraph";
-import { resolveRefreshing } from "@/hooks/useSWR";
+import { pollRefreshing } from "@/hooks/useSWR";
 import sectorsData from "@/data/sectors.json";
 import {
   sectorEvents,
@@ -504,11 +504,16 @@ export function SectorDetail() {
     setChain(cached);
     setChainLoading(!cached);
     api.industryChain(key)
-      .then((first) => resolveRefreshing(first, () => api.industryChain(key)))
-      .then((next) => {
-        setChain(next);
-        try { localStorage.setItem(cacheKey, JSON.stringify(next)); } catch { /* storage unavailable */ }
-      })
+      .then((first) => pollRefreshing(
+        first,
+        () => api.industryChain(key),
+        (v) => {
+          // 首个响应先上屏并结束 loading，别让轮询追新把首帧扣住。
+          setChain(v);
+          setChainLoading(false);
+          try { localStorage.setItem(cacheKey, JSON.stringify(v)); } catch { /* storage unavailable */ }
+        },
+      ))
       .catch(() => setChainError(cached ? "产业链更新失败，继续展示上次缓存" : "产业链数据读取失败"))
       .finally(() => setChainLoading(false));
   }, [key]);

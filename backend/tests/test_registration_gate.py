@@ -2,9 +2,9 @@
 
 背景：注册原本对任何访客开放（任何人都可 POST /api/auth/register 自建账号
 绕过「暂不开放注册」的运营意图）。现在：
-- 默认（VR_ALLOW_REGISTRATION 未设）→ 有用户后 403；
+- 默认（MW_ALLOW_REGISTRATION 未设）→ 有用户后 403；
 - 用户库为空 → 放行（新部署要能建出主账号）；
-- VR_ALLOW_REGISTRATION=1 → 重开网页注册。
+- MW_ALLOW_REGISTRATION=1 → 重开网页注册。
 
 全部离线；用户库 monkeypatch 到 tmp_path。
 """
@@ -26,7 +26,7 @@ def _register(body=None):
 
 def test_registration_closed_by_default_once_users_exist(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
-    monkeypatch.delenv("VR_ALLOW_REGISTRATION", raising=False)
+    monkeypatch.delenv("MW_ALLOW_REGISTRATION", raising=False)
     monkeypatch.setattr(app_module, "_REGISTRATION", False)
 
     # 空库：放行首个账号
@@ -46,7 +46,7 @@ def test_registration_open_with_env_flag(tmp_path, monkeypatch):
 
 def test_auth_config_reports_registration_state(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
-    monkeypatch.delenv("VR_ALLOW_REGISTRATION", raising=False)
+    monkeypatch.delenv("MW_ALLOW_REGISTRATION", raising=False)
     monkeypatch.setattr(app_module, "_REGISTRATION", False)
 
     r = client.get("/api/auth/config")

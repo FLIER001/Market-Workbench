@@ -3,14 +3,14 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.vibe-research.app</string>
+  <string>com.market-workbench.app</string>
   <key>ProgramArguments</key>
   <array>
     <string>/Users/k/Market-Workbench/run.sh</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>VR_DEEP_ANALYSIS_KEY</key>
+    <key>MW_DEEP_ANALYSIS_KEY</key>
     <string>a0245618f7aa0391fe22f600622256ba8ef63b390134930e</string>
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
@@ -22,8 +22,8 @@
   <key>RunAtLoad</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>/private/tmp/vibe-research-app.log</string>
+  <string>/private/tmp/market-workbench-app.log</string>
   <key>StandardErrorPath</key>
-  <string>/private/tmp/vibe-research-app.log</string>
+  <string>/private/tmp/market-workbench-app.log</string>
 </dict>
 </plist>

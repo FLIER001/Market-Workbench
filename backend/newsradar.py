@@ -24,7 +24,7 @@ import cache_runtime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SOURCES_FILE = os.path.join(HERE, "news_sources.json")
-DATA_DIR = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
+DATA_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
 CACHE_DIR = DATA_DIR
 CACHE_FILE = os.path.join(CACHE_DIR, "radar.json")
 LEGACY_CACHE_FILE = os.path.join(HERE, ".cache", "radar.json")

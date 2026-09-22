@@ -89,7 +89,7 @@ def test_polymarket_history_raises_after_retries(monkeypatch):
 
 
 def test_snapshot_dir_respects_vr_data_dir(monkeypatch, tmp_path):
-    monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MW_DATA_DIR", str(tmp_path))
     from pulse import market_pulse
 
     p = market_pulse._snapshot_path()
@@ -100,7 +100,7 @@ def test_snapshot_dir_respects_vr_data_dir(monkeypatch, tmp_path):
 def test_empty_source_does_not_overwrite_snapshot(monkeypatch, tmp_path):
     from pulse import market_pulse
 
-    monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MW_DATA_DIR", str(tmp_path))
     old = {"as_of": "2026-08-13T10:00:00+08:00", "modules": [{"key": "宏观经济"}]}
     market_pulse._save_snapshot(old)
     monkeypatch.setattr(market_pulse, "_shaped_polymarket", lambda force: asyncio.sleep(0, result=[]))
@@ -115,7 +115,7 @@ def test_empty_source_does_not_overwrite_snapshot(monkeypatch, tmp_path):
 def test_failed_background_refresh_reports_error_and_keeps_last_good(monkeypatch, tmp_path):
     from pulse import market_pulse
 
-    monkeypatch.setenv("VR_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MW_DATA_DIR", str(tmp_path))
     old = {"as_of": "2026-08-13T10:00:00+08:00", "modules": [{"key": "宏观经济"}]}
     market_pulse._save_snapshot(old)
     monkeypatch.setattr(market_pulse, "_rebuilding", True)

@@ -8,32 +8,32 @@
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `VR_ALLOW_ORIGINS` | `*` | 逗号分隔的 CORS 来源。仅限本地开发时保留默认值。 |
-| `VR_API_KEY` | 空 | 设置后，除健康检查外的 API 都要求 `Authorization: Bearer <key>`。 |
+| `MW_ALLOW_ORIGINS` | `*` | 逗号分隔的 CORS 来源。仅限本地开发时保留默认值。 |
+| `MW_API_KEY` | 空 | 设置后，除健康检查外的 API 都要求 `Authorization: Bearer <key>`。 |
 
 公网部署至少应：
 
-1. 将 `VR_ALLOW_ORIGINS` 设为实际前端域名；
-2. 为 `VR_API_KEY` 设置随机强密钥；
+1. 将 `MW_ALLOW_ORIGINS` 设为实际前端域名；
+2. 为 `MW_API_KEY` 设置随机强密钥；
 3. 在反向代理上配置 HTTPS；
 4. 限制运行主机和数据目录的访问权限。
 
-前端“接入 AI”页可以填写与 `VR_API_KEY` 相同的访问密钥。该密钥只用于浏览器到你后端的请求鉴权。
+前端“接入 AI”页可以填写与 `MW_API_KEY` 相同的访问密钥。该密钥只用于浏览器到你后端的请求鉴权。
 
 ## 数据目录
 
 | 变量 | 默认位置 | 说明 |
 |---|---|---|
-| `VR_DATA_DIR` | `~/.vibe-research/` | 股票持仓及默认研报目录的根目录。 |
-| `VR_REPORTS_DIR` | `$VR_DATA_DIR/myreports/` | 单独覆盖研报存储位置。 |
+| `MW_DATA_DIR` | `~/.market-workbench/` | 股票持仓及默认研报目录的根目录。 |
+| `MW_REPORTS_DIR` | `$MW_DATA_DIR/myreports/` | 单独覆盖研报存储位置。 |
 
-账号 SQLite 数据库固定保存在 `~/.vibe-research/users.db`。建议定期备份该目录，以及通过变量指定的持仓和研报目录；不要把它们加入 Git 仓库或公开同步目录。
+账号 SQLite 数据库固定保存在 `~/.market-workbench/users.db`。建议定期备份该目录，以及通过变量指定的持仓和研报目录；不要把它们加入 Git 仓库或公开同步目录。
 
 ## 数据源与网络
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `VR_DATA_PROXY` | 未设置 | 设为 `1` 时强制数据请求使用系统代理。国内财经数据通常应保持直连。 |
+| `MW_DATA_PROXY` | 未设置 | 设为 `1` 时强制数据请求使用系统代理。国内财经数据通常应保持直连。 |
 | `IWENCAI_API_KEY` | 未设置 | 启用 iWenCai 研报语义搜索时使用。 |
 | `IWENCAI_BASE_URL` | 服务默认地址 | 覆盖 iWenCai 服务地址。 |
 

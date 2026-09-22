@@ -1,10 +1,10 @@
 """持仓数据层 —— 用户自己录入的持仓 + 实时行情叠加浮动盈亏。
 
-合规：持仓是用户主动录入的自己的标的（存本地 ~/.vibe-research/portfolio.json，
+合规：持仓是用户主动录入的自己的标的（存本地 ~/.market-workbench/portfolio.json，
 不上传、不进仓库），不预置任何标的、不含 _SEED 兜底、不做推荐。
 盈亏红涨绿跌（A股口径）。含每半小时后台定时刷新 + 手动刷新。
 
-存储位置：默认用户目录 ~/.vibe-research/（可用 VR_DATA_DIR 覆盖）——
+存储位置：默认用户目录 ~/.market-workbench/（可用 MW_DATA_DIR 覆盖）——
 放仓库外，重新下载/覆盖项目文件夹不会丢数据（issue #12）。
 ≤v0.1.1 存在 backend/.cache/ 仓库内，首次启动自动迁移（复制，旧文件保留作备份）。
 """
@@ -24,7 +24,7 @@ import astock
 HERE = os.path.dirname(os.path.abspath(__file__))
 _OLD_PF_FILE = os.path.join(HERE, ".cache", "portfolio.json")  # ≤v0.1.1 旧位置
 # CACHE_DIR 名字保留（测试/外部按此名 monkeypatch），实际已是用户数据目录
-CACHE_DIR = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
+CACHE_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
 PF_FILE = os.path.join(CACHE_DIR, "portfolio.json")
 BEIJING = timezone(timedelta(hours=8))
 _LOCK = threading.Lock()
@@ -61,7 +61,7 @@ def _migrate_legacy() -> None:
             os.replace(tmp, PF_FILE)  # 原子落位：复制中断不会留半截 portfolio.json 挡住下次重试
     except OSError as e:
         # 迁移失败不阻塞启动，但要出声——旧数据原样保留在 _OLD_PF_FILE，可手工复制
-        print(f"[vibe-research] 持仓数据迁移失败（旧数据仍在 {_OLD_PF_FILE}）: {e}", file=sys.stderr)
+        print(f"[market-workbench] 持仓数据迁移失败（旧数据仍在 {_OLD_PF_FILE}）: {e}", file=sys.stderr)
 
 
 _migrate_legacy()

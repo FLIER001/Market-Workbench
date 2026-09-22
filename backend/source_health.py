@@ -148,7 +148,7 @@ def _probe_eia() -> str | None:
     """EIA v2 API（油价页周度数据兜底源；DEMO_KEY 限流严格）。"""
     import requests
 
-    key = __import__("os").environ.get("VR_EIA_API_KEY") or "DEMO_KEY"
+    key = __import__("os").environ.get("MW_EIA_API_KEY") or "DEMO_KEY"
     try:
         r = requests.get(
             "https://api.eia.gov/v2/petroleum/sum/sndw/data/",
@@ -337,7 +337,7 @@ def _snapshot_state(module: str) -> dict | None:
     """pulse / factor_data 的快照状态（文件 mtime + 简单内容摘要）。"""
     import os
 
-    base = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
+    base = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
     if module == "pulse":
         path = os.path.join(base, "pulse", "pulse_snapshot.json")
         try:

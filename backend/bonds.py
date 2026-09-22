@@ -25,7 +25,7 @@ from ai_insight import cached_insight
 from bisect import bisect_left
 
 BEIJING = timezone(timedelta(hours=8))
-DATA_DIR = os.environ.get("VR_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".vibe-research")
+DATA_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
 
 
 def _snapshot_path(name: str) -> str:

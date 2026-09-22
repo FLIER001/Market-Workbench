@@ -77,7 +77,7 @@ SYSTEM_PROMPT = f"""你是 Market Workbench 里的投研助理。你可以调用
 
 
 # —— 防 SSRF：用户可自带 OpenAI 兼容端点，但后端替其发请求前要挡住指向云元数据/内网的地址 ——
-_PUBLIC_MODE = bool(os.environ.get("VR_API_KEY", "").strip())  # 设了鉴权≈公网部署姿态
+_PUBLIC_MODE = bool(os.environ.get("MW_API_KEY", "").strip())  # 设了鉴权≈公网部署姿态
 _METADATA_NETS = [ipaddress.ip_network("169.254.0.0/16"), ipaddress.ip_network("fe80::/10")]
 _PRIVATE_NETS = [ipaddress.ip_network(n) for n in
                  ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128", "fc00::/7")]
@@ -97,8 +97,8 @@ def _ip_blocked(host: str) -> bool:
 
 def _check_base_url(url: str) -> None:
     """挡住把用户自带 baseURL 指向云元数据 / 内网的 SSRF。
-    本地单用户（未设 VR_API_KEY）放行 127.0.0.1 等本机地址（方便接本机 Ollama / 网关），只挡 169.254 元数据；
-    公网部署（设了 VR_API_KEY）额外禁内网，并解析域名核对，防 DNS 指向内网。"""
+    本地单用户（未设 MW_API_KEY）放行 127.0.0.1 等本机地址（方便接本机 Ollama / 网关），只挡 169.254 元数据；
+    公网部署（设了 MW_API_KEY）额外禁内网，并解析域名核对，防 DNS 指向内网。"""
     p = urlparse(url or "")
     if p.scheme not in ("http", "https"):
         raise RuntimeError("Base URL 必须以 http:// 或 https:// 开头")

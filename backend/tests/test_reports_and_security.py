@@ -71,7 +71,7 @@ def _allowed(url: str) -> bool:
 
 
 def test_ssrf_local_mode():
-    assert chat._PUBLIC_MODE is False  # 测试进程未设 VR_API_KEY
+    assert chat._PUBLIC_MODE is False  # 测试进程未设 MW_API_KEY
     assert _allowed("https://api.deepseek.com") is True
     assert _allowed("http://127.0.0.1:11434") is True   # 本机 Ollama 等，本地放行
     assert _allowed("http://169.254.169.254/latest") is False  # 云元数据，始终挡
