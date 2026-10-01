@@ -6,6 +6,11 @@
 """
 
 import types
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
 
 import cache_runtime
 import sector_scores
@@ -82,9 +87,9 @@ def test_recalc_wrapper_success_invokes_adopt(monkeypatch):
         return types.SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(app.subprocess, "run", fake_run)
-    app._recalc_in_subprocess("sector_scores", "get_sector_scores(force=True)", lambda: adopted.append(1))
+    app._recalc_in_subprocess("sector_scores", "rebuild_snapshot()", lambda: adopted.append(1))
     assert adopted == [1]
-    assert captured["args"][2] == "import sector_scores; sector_scores.get_sector_scores(force=True)"
+    assert captured["args"][2] == "import sector_scores; sector_scores.rebuild_snapshot()"
 
 
 def test_recalc_wrapper_failure_keeps_old(monkeypatch):
@@ -104,3 +109,44 @@ def test_recalc_wrapper_failure_keeps_old(monkeypatch):
             monkeypatch.setattr(app.subprocess, "run", lambda *a, **k: fake)
         app._recalc_in_subprocess("sector_scores", "x", lambda: adopted.append(1))
         assert adopted == []
+
+
+@pytest.mark.parametrize("module,field", [("sector_scores", "industries"), ("sw_level2_scores", "industries"), ("plate_scores", "boards")])
+def test_real_child_saves_new_snapshot_before_exit(tmp_path, module, field):
+    """使用真实短命进程，避免 subprocess mock 漏掉 daemon 提前结束问题。"""
+    marker = tmp_path / "saved"
+    code = f'''
+import time
+from pathlib import Path
+import {module} as m
+m._load_cache = lambda: {{{field!r}: [{{"old": True}}], "generated_at": "old"}}
+def build():
+    time.sleep(0.05)
+    return {{{field!r}: [{{"new": True}}], "generated_at": "new"}}
+m._build = build
+m._save_cache = lambda v: Path({str(marker)!r}).write_text(v["generated_at"])
+m.rebuild_snapshot()
+'''
+    child = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=15)
+    assert child.returncode == 0, child.stderr
+    assert marker.read_text() == "new"
+
+
+@pytest.mark.parametrize("module", ["sector_scores", "sw_level2_scores", "plate_scores"])
+def test_empty_rebuild_does_not_overwrite_snapshot(monkeypatch, module):
+    import importlib
+    layer = importlib.import_module(module)
+    monkeypatch.setattr(layer, "_build", lambda: {})
+    monkeypatch.setattr(layer, "_save_cache", lambda v: pytest.fail("empty rebuild must not save"))
+    with pytest.raises(ValueError):
+        layer.rebuild_snapshot()
+
+
+def test_plate_save_failure_is_not_success(monkeypatch, tmp_path):
+    import plate_scores
+    blocked = tmp_path / "not-a-directory"
+    blocked.write_text("x")
+    monkeypatch.setattr(plate_scores, "_PRIMARY_CACHE_FILE", str(blocked / "a.json"))
+    monkeypatch.setattr(plate_scores, "_FALLBACK_CACHE_FILE", str(blocked / "b.json"))
+    with pytest.raises(OSError):
+        plate_scores._save_cache({"boards": [1]})

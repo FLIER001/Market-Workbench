@@ -1037,6 +1037,15 @@ def get_sector_scores(force: bool = False) -> dict:
     )
 
 
+def rebuild_snapshot() -> dict:
+    """子进程专用：同步重算并落盘，失败抛异常；不走 SWR 后台线程。"""
+    value = _build()
+    if not value.get("industries"):
+        raise ValueError("行业评分重算返回空数据")
+    _save_cache(value)
+    return value
+
+
 def adopt_disk_snapshot() -> bool:
     """子进程重算落盘后，主进程把新快照原子换入内存缓存。
 

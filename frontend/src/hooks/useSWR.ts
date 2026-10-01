@@ -50,7 +50,7 @@ export function useSWR<T>(key: string, fetcher: (fresh?: boolean) => Promise<T>,
     // 轮询只负责后续追新。此前首个响应被轮询循环扣住，切窗口要等 17s 才换表。
     const commit = (v: T) => {
       writeCache(requestKey, v, opts?.persist);
-      if (current()) { setData(v); setLoading(false); }
+      for (const subscriber of subscribers.get(requestKey) ?? []) subscriber.onValue(v);
     };
     // 手动刷新也复用同一飞行请求；force 只让首个请求要求后端检查软 TTL。
     let p = inflight.get(scopedKey) as Promise<T> | undefined;
@@ -62,22 +62,27 @@ export function useSWR<T>(key: string, fetcher: (fresh?: boolean) => Promise<T>,
         for (const delay of REFRESH_POLL_DELAYS) {
           if ((next as CachePayload)?.cache_state !== "refreshing") break;
           await waitUntilVisible(delay);
-          if (!current()) break;
+          if (!subscribers.get(requestKey)?.size) break;
           next = await fetcher(false);
           commit(next);
         }
         return next;
-      })();
+      })().finally(() => {
+        if (inflight.get(requestKey) === p) {
+          inflight.delete(requestKey);
+          for (const subscriber of subscribers.get(requestKey) ?? []) subscriber.onRefreshing(false);
+        }
+      });
       inflight.set(scopedKey, p);
+      for (const subscriber of subscribers.get(requestKey) ?? []) subscriber.onRefreshing(true);
     }
     try {
       const d = await p;
       if (current()) setData(d);
     } catch (e) {
-      onError?.(e);
+      if (current()) onError?.(e);
     } finally {
-      if (inflight.get(scopedKey) === p) inflight.delete(scopedKey);
-      if (current()) { setLoading(false); setRevalidating(false); }
+      if (current()) { setLoading(false); setRevalidating(inflight.has(requestKey)); }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopedKey, opts?.persist]);
@@ -93,15 +98,31 @@ export function useSWR<T>(key: string, fetcher: (fresh?: boolean) => Promise<T>,
       : (opts?.persist ? loadPersisted<T>(scopedKey) : null);
     setData(cached ?? null);
     setLoading(cached == null);
+    const requestKey = scopedKey;
+    const subscriber: Subscriber = {
+      onValue: (v) => {
+        if (alive.current && keyRef.current === requestKey) { setData(v as T); setLoading(false); }
+      },
+      onRefreshing: (busy) => {
+        if (alive.current && keyRef.current === requestKey) setRevalidating(busy);
+      },
+    };
+    const listeners = subscribers.get(requestKey) ?? new Set<Subscriber>();
+    subscribers.set(requestKey, listeners);
+    listeners.add(subscriber);
     revalidate();
-    return () => { alive.current = false; };
+    return () => {
+      alive.current = false;
+      listeners.delete(subscriber);
+      if (!listeners.size) subscribers.delete(requestKey);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revalidate, ...deps]);
 
   const setAndCache = useCallback((v: T | null) => {
     if (v == null) { cache.delete(scopedKey); clearPersisted(scopedKey); }
     else writeCache(scopedKey, v, opts?.persist);
-    setData(v);
+    for (const subscriber of subscribers.get(scopedKey) ?? []) subscriber.onValue(v);
   }, [cache, scopedKey, opts?.persist]);
 
   return { data, setData: setAndCache, loading, revalidating, revalidate };
@@ -113,6 +134,9 @@ export function useSWR<T>(key: string, fetcher: (fresh?: boolean) => Promise<T>,
 
 // 同一 key 飞行中的请求，用于并发去重（StrictMode 双挂载、多组件同 key 复用）。
 const inflight = new Map<string, Promise<unknown>>();
+type Subscriber = { onValue: (value: unknown) => void; onRefreshing: (busy: boolean) => void };
+// 每轮结果广播给全部存活组件，轮询不再依赖首个发起者的生命周期。
+const subscribers = new Map<string, Set<Subscriber>>();
 
 const STORE_PREFIX = "vr-swr:";
 

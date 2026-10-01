@@ -193,7 +193,7 @@ function PmDistributionCard({ event, title, note }: { event: FedWatchPmEvent | u
 export function FedWatch() {
   const [err, setErr] = useState<string | null>(null);
   const { data, loading, revalidating, revalidate } = useSWR<FedWatchData>(
-    "fedwatch:v1",
+    "fedwatch:v2",
     async (fresh) => {
       const d = await api.fedWatch(fresh);
       if (!isValid(d)) throw new Error("数据格式异常");
@@ -322,13 +322,14 @@ export function FedWatch() {
               <span className="flex items-center gap-1.5 font-semibold"><AlertTriangle className="h-3.5 w-3.5" />部分数据源异常</span>
               {futError && <span>ZQ：{futError}</span>}
               {pmError && <span>Polymarket：{pmError}</span>}
-              <span className="text-muted-foreground">展示 last-good 快照（{data.updated}）</span>
+              <span className="text-muted-foreground">ZQ 最近成功抓取：{data.futures?.fetched_at ?? "未知"}</span>
+              <span className="text-muted-foreground">Polymarket 最近成功抓取：{data.polymarket?.fetched_at ?? "未知"}</span>
             </GlassCard>
           )}
           {data.futures?.stale_quotes && !futError && (
             <GlassCard className="mb-4 flex flex-wrap items-center gap-2 border-amber-500/30 p-3 text-xs text-amber-600 dark:text-amber-400">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-              ZQ 数据源限流中：下方自算概率为限流前快照（Polymarket 侧为实时），恢复后自动更新
+              ZQ 暂不可用：下方自算概率为上次快照，恢复后自动更新
             </GlassCard>
           )}
 
@@ -383,15 +384,16 @@ export function FedWatch() {
                 {sources.map((s) => (
                   <span
                     key={s.key}
+                    title={[s.data_as_of && `数据时点：${s.data_as_of}`, s.fetched_at && `最近成功抓取：${s.fetched_at}`, s.refresh_attempted_at && `最近尝试：${s.refresh_attempted_at}`, s.error].filter(Boolean).join("\n")}
                     className={cn("rounded-md px-2 py-1 text-[11px]",
                       s.status === "fresh" ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-amber-500/10 text-amber-600 dark:text-amber-400")}
                   >
-                    {s.label}{s.status === "fresh" ? "" : "（异常）"}
+                    {s.label}{s.status === "fresh" ? "" : s.status === "stale" ? "（旧快照）" : "（缺失）"}
                   </span>
                 ))}
               </div>
               {unavailable.length === 0 && (
-                <div className="mt-2 text-[11px] text-muted-foreground">更新于 {data.updated}</div>
+                <div className="mt-2 text-[11px] text-muted-foreground">最近刷新尝试 {data.updated}；行情时点见各数据源</div>
               )}
             </GlassCard>
           </div>

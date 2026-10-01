@@ -101,12 +101,13 @@ export interface FedWatchData {
     quotes: Record<string, FedWatchZqQuote>;
     probs: FedWatchProb[];
     note?: string; error?: string; stale_quotes?: boolean;
+    fetched_at?: string | null; data_as_of?: string | null;
   };
   polymarket?: {
     decisions: FedWatchPmEvent[];
     counts: FedWatchPmEvent[];
     level: FedWatchPmEvent[];
-    error?: string;
+    error?: string; stale?: boolean; fetched_at?: string | null;
   };
   marginal?: {
     zq: Record<string, Record<string, number>>;
@@ -122,7 +123,9 @@ export interface FedWatchData {
     error?: string;
   };
   matrix: FedWatchMatrixRow[];
-  source_status?: Array<{ key: string; label: string; status: string }>;
+  source_status?: Array<{ key: string; label: string; status: string;
+    fetched_at?: string | null; data_as_of?: string | null;
+    refresh_attempted_at?: string | null; error?: string | null }>;
 }
 
 

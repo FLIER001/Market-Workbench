@@ -215,6 +215,14 @@ def test_parse_hl_candles():
 
 def test_wti_hyper_spot_aligns_and_accumulates(monkeypatch):
     """昨收取北京午夜前最后一根；末点用实时中间价覆盖；成交量累加为当日累计。"""
+    from datetime import datetime
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 9, 14, 0, 2, tzinfo=oil.BEIJING)
+
+    monkeypatch.setattr(oil, "datetime", FixedDateTime)
     calls: list[str] = []
     monkeypatch.setattr(oil, "_WTI_CACHE", {})
     monkeypatch.setattr(oil, "_WTI_CHART_CACHE", {})

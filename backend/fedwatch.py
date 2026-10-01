@@ -45,7 +45,8 @@ ET = ZoneInfo("America/New_York")
 _SNAPSHOT_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(
     os.path.expanduser("~"), ".market-workbench")
 _SNAPSHOT = os.path.join(_SNAPSHOT_DIR, "fedwatch_snapshot.json")
-_HISTORY = os.path.join(_SNAPSHOT_DIR, "fedwatch_history.jsonl")
+# v1 混入过以抓取时间重记的回退值；保留原文件，可信观测从 v2 重新积累。
+_HISTORY = os.path.join(_SNAPSHOT_DIR, "fedwatch_history_v2.jsonl")
 
 _TTL_FAST = 120            # 概率快照 2 分钟（盘中边际变化敏感）
 _HIST_MAX_LINES = 4000     # 历史线保留上限（10 分钟一条 ≈ 27 天）
@@ -664,7 +665,7 @@ def _pm_block() -> dict:
 
 def _hist_append(probs: list[dict], pm_decisions: list[dict]) -> None:
     """每次成功构建后追加一行（10 分钟调度 + 页面请求各触发一次）。"""
-    if not probs:
+    if not probs and not pm_decisions:
         return
     line = {
         "ts": int(time.time()),
@@ -717,6 +718,9 @@ def _hist_delta(meeting: str, kind: str, field: str,
         try:
             row = json.loads(ln)
         except json.JSONDecodeError:
+            continue
+        src = (row.get("probs") if kind == "zq" else row.get("pm")) or {}
+        if field not in (src.get(meeting) or {}):
             continue
         dt = abs(row.get("ts", 0) - target)
         if best_dt is None or dt < best_dt:
@@ -823,7 +827,7 @@ def _build_matrix(fut_probs: list[dict], pm_decisions: list[dict],
 
 
 def _build_snapshot() -> dict:
-    data: dict = {"schema_version": 1,
+    data: dict = {"schema_version": 2,
                   "updated": datetime.now(BEIJING).isoformat(timespec="seconds")}
 
     # 官方层
@@ -849,6 +853,7 @@ def _build_snapshot() -> dict:
         probs = _fedwatch_probs(zq, spot, upcoming[:4])
         data["futures"] = {
             "spot": spot, "quotes": zq, "probs": probs,
+            "fetched_at": datetime.now(BEIJING).isoformat(timespec="seconds") if probs else None,
             "note": ("CME FedWatch 等价口径：ZQ 合约价 × CME 官方方法论自算；"
                      "非 tick 级实时，与 CME 官网数值可能有数个百分点差异"),
         }
@@ -859,6 +864,8 @@ def _build_snapshot() -> dict:
     # 预测市场层
     try:
         data["polymarket"] = _pm_block()
+        data["polymarket"]["fetched_at"] = (datetime.now(BEIJING).isoformat(timespec="seconds")
+                                             if data["polymarket"].get("decisions") else None)
     except Exception as exc:  # noqa: BLE001
         data["polymarket"] = {"error": f"Polymarket 不可达：{exc}",
                               "decisions": [], "counts": [], "level": []}
@@ -869,29 +876,45 @@ def _build_snapshot() -> dict:
     except Exception as exc:  # noqa: BLE001
         data["cme_archive"] = {"error": str(exc)}
 
-    # last-good 字段级合并：ZQ 限流时段（quotes 空）不覆盖快照里已有的旧 quotes/probs，
-    # 仅更新时间戳与 PM 侧数据。避免一次限流窗口把好数据洗掉。
+    # 分源保留观测/抓取时点；updated 仅表示本次构建尝试，不能替代数据时点。
+    zq_fresh = bool(probs)
+    pm_fresh = bool((data.get("polymarket") or {}).get("decisions"))
+    prev = _load_snapshot()
+    prev_data = (prev[1] or {}) if prev else {}
     fut = data.get("futures") or {}
-    if not fut.get("quotes"):
-        prev = _load_snapshot()
-        prev_data = (prev[1] or {}) if prev else {}
+    fut.setdefault("fetched_at", None)
+    market_times = [q.get("market_time") for q in zq.values()
+                    if isinstance(q.get("market_time"), (int, float))]
+    fut["data_as_of"] = (datetime.fromtimestamp(max(market_times), BEIJING).isoformat(timespec="seconds")
+                         if market_times else None)
+    if not zq_fresh:
+        fut["error"] = fut.get("error") or "本轮未取得可计算概率的 ZQ/EFFR 数据"
         prev_fut = prev_data.get("futures") or {}
-        if prev_fut.get("quotes"):
-            fut["quotes"] = prev_fut["quotes"]
+        if prev_fut.get("probs"):
+            fut["quotes"] = prev_fut.get("quotes") or {}
             fut["spot"] = prev_fut.get("spot") or fut.get("spot")
             fut["probs"] = prev_fut.get("probs") or []
-            fut["stale_quotes"] = True  # 前端标注「ZQ 数据为限流前的快照」
+            fut["stale_quotes"] = True
+            fut["fetched_at"] = prev_fut.get("fetched_at")
+            fut["data_as_of"] = prev_fut.get("data_as_of")
             probs = fut["probs"]
-    if not (data.get("polymarket") or {}).get("decisions"):
-        prev = _load_snapshot()
-        prev_data = (prev[1] or {}) if prev else {}
+    pm = data["polymarket"]
+    pm.setdefault("fetched_at", None)
+    if not pm_fresh:
+        error = pm.get("error") or "本轮未取得 Polymarket 决策概率"
+        pm["error"] = error
         prev_pm = prev_data.get("polymarket") or {}
         if prev_pm.get("decisions"):
-            data["polymarket"] = prev_pm
+            pm = {**prev_pm, "stale": True, "error": error,
+                  "fetched_at": prev_pm.get("fetched_at")}
+            data["polymarket"] = pm
+
+    current_probs = probs if zq_fresh else []
+    current_pm = (pm.get("decisions") or []) if pm_fresh else []
 
     # 边际变化 + 对比矩阵
     try:
-        marginal = _marginal_changes(probs, data["polymarket"].get("decisions") or [])
+        marginal = _marginal_changes(current_probs, current_pm)
     except Exception:  # noqa: BLE001
         marginal = {"zq": {}, "pm": {}, "history_note": "历史数据不可用"}
     data["marginal"] = marginal
@@ -908,17 +931,21 @@ def _build_snapshot() -> dict:
         {"key": "fedwatch:effr", "label": "NY Fed EFFR",
          "status": "fresh" if official.get("effr") else "missing"},
         {"key": "fedwatch:zq", "label": "ZQ 联邦基金期货（Yahoo）",
-         "status": "fresh" if zq else "missing"},
+         "status": "fresh" if zq_fresh else "stale" if fut.get("probs") else "missing",
+         "fetched_at": fut.get("fetched_at"), "data_as_of": fut.get("data_as_of"),
+         "refresh_attempted_at": data["updated"], "error": fut.get("error")},
         {"key": "fedwatch:polymarket", "label": "Polymarket 预测市场",
-         "status": "fresh" if data["polymarket"].get("decisions") else "missing"},
+         "status": "fresh" if pm_fresh else "stale" if pm.get("decisions") else "missing",
+         "fetched_at": pm.get("fetched_at"), "refresh_attempted_at": data["updated"],
+         "error": pm.get("error")},
         {"key": "fedwatch:cme_archive", "label": "CME 官方口径存档（交叉校验）",
          "status": "fresh" if (data.get("cme_archive") or {}).get("meetings") else "missing"},
     ]
 
     # 快照历史追加（成功拿到概率才记）
-    if probs:
+    if current_probs or current_pm:
         try:
-            _hist_append(probs, data["polymarket"].get("decisions") or [])
+            _hist_append(current_probs, current_pm)
         except Exception:  # noqa: BLE001
             pass
     return data
@@ -934,6 +961,22 @@ def _load_snapshot():
     try:
         snap = json.load(open(_SNAPSHOT))
         val = snap.get("data")
+        if isinstance(val, dict) and val.get("schema_version") != 2:
+            # 旧快照缺乏分源时点，保留作展示兜底并立即追新，不能沿用其 fresh 标签。
+            val = dict(val)
+            val["degraded"] = True
+            for field, flag in (("futures", "stale_quotes"), ("polymarket", "stale")):
+                block = dict(val.get(field) or {})
+                block[flag] = True
+                block.setdefault("fetched_at", None)
+                block["error"] = block.get("error") or "旧版快照，数据时点待重新核验"
+                val[field] = block
+            val["marginal"] = {"zq": {}, "pm": {}, "history_note": "可信观测历史正在重新积累"}
+            val["source_status"] = [
+                {**s, "status": "stale"} if s.get("key") in ("fedwatch:zq", "fedwatch:polymarket") else s
+                for s in val.get("source_status") or []
+            ]
+            return (0, val)
         return (snap.get("updated_ts") or 0, val) if val is not None else None
     except Exception:  # noqa: BLE001
         return None
@@ -951,7 +994,7 @@ def _save_snapshot(data: dict) -> None:
 def get_fedwatch(force: bool = False) -> dict:
     """主入口：SWR 缓存（2 分钟 TTL）+ 磁盘快照持久化。"""
     return cache_runtime.get(
-        "fedwatch_v1", lambda: _build_snapshot(),
+        "fedwatch_v2", lambda: _build_snapshot(),
         valid=lambda v: bool((v.get("futures") or {}).get("probs")
                              or (v.get("polymarket") or {}).get("decisions")),
         warm=_load_snapshot,

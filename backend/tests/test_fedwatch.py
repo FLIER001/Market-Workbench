@@ -261,3 +261,108 @@ def test_marginal_changes_from_history(tmp_path):
         assert abs(zq.get("p_hike_chg_7d", 0) - 0.22) < 1e-9
     finally:
         fedwatch._HISTORY = real_hist
+
+
+def _stub_snapshot_sources(monkeypatch, tmp_path, zq_fresh, pm_fresh):
+    import copy
+    old_time = "2026-09-01T10:00:00+08:00"
+    prob = {"meeting": "2026-10", "dates": "x", "p_hike": 0.2, "p_hold": 0.8,
+            "p_cut": 0.0, "implied_rate": 3.0, "path_rate": 3.0,
+            "contract": "test", "contract_price": 97.0}
+    quote = {"price": 97.0, "market_time": 1789315200}
+    decision = {"meeting": "2026-10", "title": "Fed Decision in October?", "end": "2026-10-28", "vol24h": 1,
+                "markets": [{"label": "25 bps increase", "yes": 0.2, "chg_1d": 0.05},
+                            {"label": "No change", "yes": 0.8, "chg_1d": -0.05}]}
+    pm = {"decisions": [decision], "counts": [], "level": []}
+    previous = {"updated": old_time,
+                "futures": {"quotes": {"2026-10": quote}, "probs": [prob],
+                            "spot": {"rate": 3.0}, "fetched_at": old_time, "data_as_of": old_time},
+                "polymarket": {**copy.deepcopy(pm), "fetched_at": old_time}}
+    unchanged = copy.deepcopy(previous)
+    monkeypatch.setattr(fedwatch, "_SNAPSHOT_DIR", str(tmp_path))
+    monkeypatch.setattr(fedwatch, "_HISTORY", str(tmp_path / "history.jsonl"))
+    monkeypatch.setattr(fedwatch, "_official_block", lambda: {})
+    monkeypatch.setattr(fedwatch, "_fetch_zq_quotes", lambda: {"2026-10": quote} if zq_fresh else {})
+    monkeypatch.setattr(fedwatch, "_all_meetings", lambda: [])
+    monkeypatch.setattr(fedwatch, "_effr_history", lambda: [])
+    monkeypatch.setattr(fedwatch, "_spot_rate", lambda *a: {"rate": 3.0})
+    monkeypatch.setattr(fedwatch, "_fedwatch_probs", lambda *a: [prob] if zq_fresh else [])
+    monkeypatch.setattr(fedwatch, "_pm_block", lambda: copy.deepcopy(pm) if pm_fresh else {"decisions": [], "counts": [], "level": [], "error": "test upstream down"})
+    monkeypatch.setattr(fedwatch, "_cme_archive_block", lambda: {})
+    monkeypatch.setattr(fedwatch, "_load_snapshot", lambda: (0, previous))
+    return previous, unchanged, old_time
+
+
+def test_both_sources_down_preserve_times_and_do_not_append(monkeypatch, tmp_path):
+    from pathlib import Path
+    previous, unchanged, old_time = _stub_snapshot_sources(monkeypatch, tmp_path, False, False)
+    data = fedwatch._build_snapshot()
+    states = {s["key"]: s for s in data["source_status"]}
+    assert states["fedwatch:zq"]["status"] == "stale"
+    assert states["fedwatch:polymarket"]["status"] == "stale"
+    assert data["futures"]["fetched_at"] == old_time
+    assert data["polymarket"]["fetched_at"] == old_time
+    assert data["polymarket"]["error"] == "test upstream down"
+    assert data["marginal"]["zq"] == {} and data["marginal"]["pm"] == {}
+    assert not Path(fedwatch._HISTORY).exists()
+    assert previous == unchanged
+
+
+def test_zq_down_records_only_fresh_pm(monkeypatch, tmp_path):
+    import json
+    from pathlib import Path
+    _stub_snapshot_sources(monkeypatch, tmp_path, False, True)
+    data = fedwatch._build_snapshot()
+    history = json.loads(Path(fedwatch._HISTORY).read_text())
+    assert history["probs"] == {} and history["pm"]["2026-10"]["h"] == 0.2
+    assert data["marginal"]["zq"] == {}
+    assert data["marginal"]["pm"]["2026-10"]["p_hike_chg_24h"] == 0.05
+
+
+def test_pm_down_records_only_fresh_zq(monkeypatch, tmp_path):
+    import json
+    from pathlib import Path
+    _stub_snapshot_sources(monkeypatch, tmp_path, True, False)
+    data = fedwatch._build_snapshot()
+    history = json.loads(Path(fedwatch._HISTORY).read_text())
+    assert history["pm"] == {} and history["probs"]["2026-10"]["h"] == 0.2
+    assert data["futures"]["data_as_of"] is not None
+    assert data["marginal"]["pm"] == {}
+
+
+def test_delta_search_skips_rows_from_other_source(monkeypatch, tmp_path):
+    import json
+    now = int(time.time())
+    hist = tmp_path / "history.jsonl"
+    hist.write_text("\n".join(json.dumps(row) for row in [
+        {"ts": now - 86400 + 10, "probs": {}, "pm": {"2026-10": {"h": 0.8}}},
+        {"ts": now - 86400 + 20, "probs": {"2026-10": {"h": 0.2}}, "pm": {}},
+    ]))
+    monkeypatch.setattr(fedwatch, "_HISTORY", str(hist))
+    assert fedwatch._hist_delta("2026-10", "zq", "h", 86400, 3600) == 0.2
+
+
+def test_legacy_snapshot_is_degraded_and_forces_revalidation(monkeypatch, tmp_path):
+    import json
+    snap = tmp_path / "snapshot.json"
+    snap.write_text(json.dumps({"updated_ts": time.time(), "data": {
+        "schema_version": 1, "updated": "2026-09-01T10:00:00+08:00",
+        "futures": {"probs": [1]}, "polymarket": {"decisions": [1]},
+        "source_status": [{"key": "fedwatch:polymarket", "status": "fresh"}],
+        "marginal": {"zq": {"old": 1}},
+    }}))
+    monkeypatch.setattr(fedwatch, "_SNAPSHOT", str(snap))
+    stamp, data = fedwatch._load_snapshot()
+    assert stamp == 0
+    assert data["degraded"] and data["futures"]["stale_quotes"] and data["polymarket"]["stale"]
+    assert data["source_status"][0]["status"] == "stale"
+    assert data["marginal"]["zq"] == {}
+
+
+def test_legacy_fallback_never_invents_success_time(monkeypatch, tmp_path):
+    previous, _, _ = _stub_snapshot_sources(monkeypatch, tmp_path, False, False)
+    previous["futures"].pop("fetched_at")
+    previous["polymarket"].pop("fetched_at")
+    data = fedwatch._build_snapshot()
+    assert data["futures"]["fetched_at"] is None
+    assert data["polymarket"]["fetched_at"] is None

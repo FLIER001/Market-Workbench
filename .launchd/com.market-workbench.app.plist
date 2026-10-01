@@ -8,10 +8,11 @@
   <array>
     <string>/Users/k/Market-Workbench/run.sh</string>
   </array>
+  <!-- 凭证通过 run.sh 加载私有 backend/.env.local；不要写进 plist。 -->
   <key>EnvironmentVariables</key>
   <dict>
-    <key>MW_DEEP_ANALYSIS_KEY</key>
-    <string>a0245618f7aa0391fe22f600622256ba8ef63b390134930e</string>
+    <key>MW_MEM_WATCHDOG</key>
+    <string>1</string>
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>

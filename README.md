@@ -2,12 +2,14 @@
 
 # Market Workbench
 
-[![Version](https://img.shields.io/badge/version-1.8.0-1f6feb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.8.1-1f6feb)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)](https://react.dev/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
 本地自托管的 A 股市场研究工作台，兼顾港美市场。行情、财务、资金面、宏观、板块、债市、黄金、油价、因子检验与公开资讯聚合于单一界面；数据留在本机，AI 连接由你提供，产品不输出荐股或交易指令。
+
+v1.8.1 修复静态文件越界读取、定时评分重算提前退出、共享缓存切页追新及启动构建检查。内存看门狗默认关闭，仅受进程守护的 macOS 部署显式开启；深度分析凭证放在私有 `backend/.env.local`（`run.sh` 自动加载）或 `MW_ENV_FILE` 指定文件中。美联储页保留分源数据时点并标记回退，可信概率历史重新积累，原文件保留。
 
 **为什么选它**
 

@@ -30,7 +30,7 @@ test("key change swaps in that key's cache before revalidating", () => {
 // 上一个 key 的轮询结果不得盖掉新 key 的数据。
 test("stale key results cannot overwrite the current key", () => {
   assert.match(src, /keyRef\.current === requestKey/);
-  assert.match(src, /if \(!current\(\)\) break;/);
+  assert.match(src, /if \(!subscribers\.get\(requestKey\)\?\.size\) break;/);
 });
 
 // 后端冷重建约 80s，轮询总时长必须盖过它，否则「完成后自动更新」不成立。

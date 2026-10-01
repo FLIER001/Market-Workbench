@@ -1087,6 +1087,7 @@ def _load_cache() -> dict | None:
 
 
 def _save_cache(data: dict) -> None:
+    last_error: OSError | None = None
     for path in dict.fromkeys((_PRIMARY_CACHE_FILE, _FALLBACK_CACHE_FILE)):
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -1095,8 +1096,10 @@ def _save_cache(data: dict) -> None:
                 json.dump(data, f, ensure_ascii=False)
             os.replace(tmp, path)
             return
-        except OSError:
+        except OSError as error:
+            last_error = error
             continue
+    raise last_error or OSError("板块评分缓存写入失败")
 
 
 def _cache_ttl(data: dict) -> int:
@@ -1123,6 +1126,15 @@ def get_plate_scores(force: bool = False) -> dict:
         valid=lambda value: bool(value.get("boards")),
         ttl=_cache_ttl(cached or {}), warm=_load_cache, save=_save_cache, force=force,
     )
+
+
+def rebuild_snapshot() -> dict:
+    """子进程专用：同步重算并落盘，失败抛异常；不走 SWR 后台线程。"""
+    value = _build()
+    if not value.get("boards"):
+        raise ValueError("板块评分重算返回空数据")
+    _save_cache(value)
+    return value
 
 
 def adopt_disk_snapshot() -> bool:

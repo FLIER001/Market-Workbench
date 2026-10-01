@@ -16,6 +16,7 @@ import subprocess
 import sys
 import threading
 import time as _time
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional
 
@@ -62,17 +63,17 @@ from version import read_version
 
 __version__ = read_version()
 
-app = FastAPI(title="Market Workbench API", version=__version__)
 
-# 每半小时后台刷新持仓数据（场内证券 + 场外基金；真重算收益并写缓存，
-# 用户点进持仓页 GET 直接返回刷新好的结果。窗口内判断在各自模块内）
-pf.start_scheduler(300, users.user_ids)
-fpf.start_scheduler(120, users.user_ids)
-fund_pfs.start_scheduler()
-newsradar.start_scheduler()
-# 美联储利率追踪：启动预热 + 每 10 分钟后台刷新（积累 24h/7d 边际变化历史）
-fedwatch_layer.warmup()
-fedwatch_layer.start_scheduler(600)
+@asynccontextmanager
+async def _lifespan(application: FastAPI):
+    # 导入模块只注册路由；调度/预热属于真正的 ASGI 服务启动。
+    _start_background_jobs()
+    yield
+
+
+app = FastAPI(title="Market Workbench API", version=__version__, lifespan=_lifespan)
+
+
 def _recalc_in_subprocess(module: str, entry: str, adopt) -> None:
     """评分重算下沉子进程：子进程算完落盘退出，内存随进程归还系统。
 
@@ -97,19 +98,6 @@ def _recalc_in_subprocess(module: str, entry: str, adopt) -> None:
         print(f"[recalc-subprocess] {module} 退出码 {proc.returncode}，保留旧值", flush=True)
         return
     adopt()
-
-
-score_scheduler.start(
-    lambda: _recalc_in_subprocess(
-        "sector_scores", "get_sector_scores(force=True)", sector_scores_layer.adopt_disk_snapshot),
-    lambda: _recalc_in_subprocess(
-        "sw_level2_scores", "get_level2_scores(force=True)", sw_level2_layer.adopt_disk_snapshot),
-    lambda: _recalc_in_subprocess(
-        "plate_scores", "get_plate_scores(force=True)", plate_scores_layer.adopt_disk_snapshot),
-)
-# 内存看门狗：footprint 超限或跑满 8h 时主动退出，由 launchd KeepAlive 拉起。
-# 成因（macOS 上 Python 释放的页不归还系统）与四道安全阀见 mem_watchdog 模块 docstring。
-mem_watchdog.start()
 
 
 def _warm_holder_increase() -> None:
@@ -176,10 +164,24 @@ def _warm_expensive_datasets(gap_seconds: float = 5.0) -> None:
     threading.Thread(target=scoring_lane, daemon=True, name="warm:scoring").start()
 
 
-# 注意：下面几个预热此前「只有函数定义、没有调用点」——等于从未执行过。
-# 增持预热是本文件原有意图（见其 docstring），调用点缺失属实现遗漏，这里补回。
-_warm_holder_increase()
-_warm_expensive_datasets()
+def _start_background_jobs() -> None:
+    pf.start_scheduler(300, users.user_ids)
+    fpf.start_scheduler(120, users.user_ids)
+    fund_pfs.start_scheduler()
+    newsradar.start_scheduler()
+    fedwatch_layer.warmup()
+    fedwatch_layer.start_scheduler(600)
+    score_scheduler.start(
+        lambda: _recalc_in_subprocess(
+            "sector_scores", "rebuild_snapshot()", sector_scores_layer.adopt_disk_snapshot),
+        lambda: _recalc_in_subprocess(
+            "sw_level2_scores", "rebuild_snapshot()", sw_level2_layer.adopt_disk_snapshot),
+        lambda: _recalc_in_subprocess(
+            "plate_scores", "rebuild_snapshot()", plate_scores_layer.adopt_disk_snapshot),
+    )
+    mem_watchdog.start()
+    _warm_holder_increase()
+    _warm_expensive_datasets()
 
 
 # ---------------------------------------------------------------------------
@@ -2115,7 +2117,13 @@ if _FRONTEND_DIST.is_dir():
         会把错误页当 JSON 解析。"""
         if path.startswith("api/") or path == "api":
             raise HTTPException(404, "Not Found")
-        file = _FRONTEND_DIST / path
+        root = _FRONTEND_DIST.resolve()
+        try:
+            file = (root / path).resolve()
+        except (OSError, ValueError):
+            raise HTTPException(404, "Not Found") from None
+        if Path(path).is_absolute() or not file.is_relative_to(root):
+            raise HTTPException(404, "Not Found")
         if file.is_file():
             return FileResponse(file)
         return FileResponse(_FRONTEND_DIST / "index.html")

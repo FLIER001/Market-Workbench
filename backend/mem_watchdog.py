@@ -21,17 +21,18 @@ macOS 上 Python/NumPy 释放的页不会还给系统：实测 2M 行 DataFrame 
    `_MIN_INTERVAL` 秒则整轮禁用。**即使判断逻辑写错也不会连环重启。**
 3. 双条件：只有「footprint 超 `_MAX_FOOTPRINT_MB`」或「运行超 `_MAX_UPTIME`」
    才触发，任一条件都不至于误伤。
-4. 随时可关：环境变量 `MW_MEM_WATCHDOG=0` 时完全不注册线程。
+4. 默认关闭：仅有进程守护的 macOS 部署显式设置 `MW_MEM_WATCHDOG=1`。
 """
 
 from __future__ import annotations
 
 import ctypes
 import os
+import sys
 import threading
 import time
 
-_ENABLED = os.environ.get("MW_MEM_WATCHDOG", "1").lower() not in ("0", "false", "no")
+_ENABLED = os.environ.get("MW_MEM_WATCHDOG", "0").lower() in ("1", "true", "yes", "on")
 _POLL = 60.0              # 每分钟巡检一次（rusage 一次开销可忽略）；间隔越短触发越精准
 _GRACE = 15 * 60          # 启动宽限：15 分钟内绝不触发
 _MIN_INTERVAL = 30 * 60   # 两次自重启之间的最小间隔（冷却闸门）
@@ -43,7 +44,7 @@ _STAMP = os.path.join(
     "backend_last_selfrestart",
 )
 
-_libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+_libc = None
 _RUSAGE_INFO_V2 = 2
 
 
@@ -53,6 +54,14 @@ def footprint_mb() -> float | None:
     注意读的是 rusage_info_v2 的 offset 72；offset 80 是 ri_proc_start_abstime，
     读错了会得到一个荒谬的大值。取不到时返回 None，调用方按「不触发」处理。
     """
+    global _libc
+    if sys.platform != "darwin":
+        return None
+    if _libc is None:
+        try:
+            _libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+        except OSError:
+            return None
     buf = (ctypes.c_uint8 * 2048)()
     if _libc.proc_pid_rusage(ctypes.c_int(os.getpid()), _RUSAGE_INFO_V2, ctypes.byref(buf)) != 0:
         return None
@@ -106,11 +115,11 @@ def _loop(started: float) -> None:
             f"KeepAlive 拉起后由磁盘快照兜底（首请求毫秒级）",
             flush=True,
         )
-        os._exit(0)
+        os._exit(75)
 
 
 def start() -> None:
-    if not _ENABLED:
+    if not _ENABLED or sys.platform != "darwin":
         return
     threading.Thread(
         target=_loop, args=(time.time(),), daemon=True, name="mem-watchdog"

@@ -2,12 +2,14 @@
 
 # Market Workbench
 
-[![Version](https://img.shields.io/badge/version-1.8.0-1f6feb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.8.1-1f6feb)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)](https://react.dev/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
 A locally hosted research workbench for China A-shares, with Hong Kong and US coverage. Quotes, financials, fund flows, macro, sectors, bonds, gold, oil, factor evaluation and public news in one interface. Data stays on your machine; you bring the AI connection; the project issues no stock picks or trading instructions.
+
+v1.8.1 fixes static-file traversal, prematurely exiting score-refresh workers, shared-cache polling after navigation, and incomplete startup build checks. The memory watchdog is disabled by default and requires explicit opt-in with a process supervisor on macOS. Store deep-analysis credentials in private `backend/.env.local` (loaded by `run.sh`) or a file selected by `MW_ENV_FILE`. FedWatch marks fallback data and preserves source timestamps; trustworthy probability history starts in a new file while the original is retained.
 
 **Why this project**
 
