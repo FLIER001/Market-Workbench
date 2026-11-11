@@ -26,9 +26,7 @@ test("insight endpoints use bounded 45s timeout instead of 150s", () => {
 });
 
 for (const [file, key] of [
-  ["../src/pages/Gold.tsx", "gold-insight:v2"],
   ["../src/pages/Oil.tsx", "oil-insight:v2"],
-  ["../src/pages/Bonds.tsx", "bonds-insight:v2"],
   ["../src/pages/Allocation.tsx", "allocation-insight:v2"],
 ]) {
   test(`${file} uses versioned insight persist key`, () => {
@@ -37,3 +35,10 @@ for (const [file, key] of [
     assert.doesNotMatch(source, new RegExp(`"${key.replace(":v2", ":v1")}"`));
   });
 }
+
+// Gold V3 binds text to the input state instead of persisting old model text.
+test("gold insight is bound to the current input state", () => {
+  const source = readFileSync(new URL("../src/pages/Gold.tsx", import.meta.url), "utf8");
+  assert.match(source, /gold-insight:v3:.*state_id/);
+  assert.match(source, /persist:false/);
+});

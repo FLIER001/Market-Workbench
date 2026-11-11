@@ -135,3 +135,18 @@ def test_custom_factor_end_to_end(monkeypatch, tmp_path):
     assert len(factor_expr.list_custom()) == 1
     factor_expr.delete_custom("lovol")
     assert factor_expr.list_custom() == []
+
+
+def test_builder_templates_match_raw_fields_and_pandas():
+    """模板原始值可直接复核；反转/低波动方向由研究层单独应用。"""
+    import factor_expr
+
+    fields = factor_expr.build_fields(_make_panel(seed=97))
+    for window in (5, 20, 60):
+        for expression, expected in [
+            (f"close / close[{window}] - 1", fields["close"] / fields["close"].shift(window) - 1),
+            (f"ts_std(ret,{window})", fields["ret"].rolling(window).std()),
+            (f"volume / ts_mean(volume,{window})", fields["volume"] / fields["volume"].rolling(window).mean()),
+        ]:
+            actual = factor_expr.evaluate(factor_expr.compile_expr(expression), fields)
+            pd.testing.assert_frame_equal(actual, expected)

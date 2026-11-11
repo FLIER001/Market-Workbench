@@ -562,23 +562,18 @@ def test_parse_treasury_real_yield_and_h10_release_ttl():
     assert gold_score._h10_cache_ttl(datetime(2026, 8, 10, 16, 16, tzinfo=et)) == 60
 
 
-def test_gold_dimension_history_carries_slow_series_and_keeps_daily_points():
+def test_gold_dimension_history_requires_released_dates_and_all_parts():
     import gold_score
-
-    histories = {
-        "fast": [("2026-07-01", 20.0), ("2026-07-03", 40.0), ("2026-07-10", 60.0)],
-        "slow": [("2026-06", 80.0)],
-    }
-    rows = gold_score._dimension_score_history(
-        [("fast", 0.6), ("slow", 0.4)], histories, {"fast": 0.6, "slow": 0.4})
-
-    # 日频口径：月频观测日规范化为当月 1 日；观测日之间逐日前向填充
-    assert rows[0] == {"date": "2026-06-01", "v": 80.0}
-    assert {"date": "2026-07-01", "v": 44.0} in rows
-    assert {"date": "2026-07-03", "v": 56.0} in rows
-    assert {"date": "2026-07-10", "v": 68.0} in rows
-    assert {"date": "2026-07-02", "v": 44.0} in rows
-    assert len(rows) == 40  # 06-01..07-10 逐日
+    import pytest
+    with pytest.raises(ValueError, match='available dates'):
+        gold_score._dimension_score_history([('g06_cb', 1)], {'g06_cb': [('2026-06', 80)]}, {'g06_cb': 1})
+    histories = {'fast': [('2026-07-01', 20), ('2026-07-03', 40), ('2026-07-10', 60)],
+                 'g06_cb': [('2026-07-01', 80)]}
+    rows = gold_score._dimension_score_history([('fast', .6), ('g06_cb', .4)], histories, {'fast': .6, 'g06_cb': .4})
+    assert rows[0] == {'date': '2026-07-01', 'v': 44}
+    assert {'date':'2026-07-03', 'v':56} in rows
+    assert rows[-1] == {'date':'2026-07-10', 'v':68}
+    assert len(rows) == 10
 
 
 def test_gold_current_score_is_appended_without_overwriting_latest_observation():

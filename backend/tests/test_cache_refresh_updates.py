@@ -9,6 +9,7 @@ import time
 
 import cache_runtime
 import bonds
+from datetime import datetime
 
 import ai_insight
 from pulse import market_pulse
@@ -200,7 +201,7 @@ def test_shared_insight_force_rebuilds_even_when_fresh():
 # ---------------------------------------------------------------------------
 
 def test_bonds_basic_key_warms_from_disk_without_building(monkeypatch):
-    snapshot = {"date": "2026-08-28", "yields": {"1年": [{"date": "2026-08-28", "v": 1.5}]}}
+    snapshot = {"generated_at": datetime.now(bonds.BEIJING).isoformat(), "date": "2026-08-28", "yields": {"1年": [{"date": "2026-08-28", "v": 1.5}]}}
     monkeypatch.setattr(bonds, "_load_snapshot", lambda name: snapshot if name == "curve" else None)
     monkeypatch.setattr(
         bonds, "_curve_payload",

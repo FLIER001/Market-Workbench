@@ -106,7 +106,9 @@ def test_recalc_wrapper_failure_keeps_old(monkeypatch):
                 raise app.subprocess.TimeoutExpired(cmd="x", timeout=1)
             monkeypatch.setattr(app.subprocess, "run", boom)
         else:
-            monkeypatch.setattr(app.subprocess, "run", lambda *a, **k: fake)
+            def failed(*a, **k):
+                raise subprocess.CalledProcessError(fake.returncode, a[0])
+            monkeypatch.setattr(app.subprocess, "run", failed)
         app._recalc_in_subprocess("sector_scores", "x", lambda: adopted.append(1))
         assert adopted == []
 

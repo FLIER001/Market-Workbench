@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 # 必须赶在任何测试模块 import app 之前指到临时目录——否则持仓 CRUD 类测试会增删真实
 # ~/.market-workbench/ 里的用户数据（比如把用户真实持有的 600519 合并后删掉）。
 _TEST_DATA_DIR = tempfile.mkdtemp(prefix="mw-test-data-")
+os.environ["MW_USERS_DB"] = os.path.join(_TEST_DATA_DIR, "users.db")
 os.environ["MW_DATA_DIR"] = _TEST_DATA_DIR
 os.environ["MW_REPORTS_DIR"] = os.path.join(_TEST_DATA_DIR, "myreports")
 

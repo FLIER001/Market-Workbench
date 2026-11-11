@@ -5,10 +5,11 @@ import test from "node:test";
 const bonds = readFileSync(new URL("../src/pages/Bonds.tsx", import.meta.url), "utf8");
 const sector = readFileSync(new URL("../src/pages/SectorDetail.tsx", import.meta.url), "utf8");
 
-test("bonds persists all page snapshots and refreshes every block", () => {
-  assert.equal([...bonds.matchAll(/\{ persist: true \}/g)].length, 4);
-  assert.match(bonds, /revalidateFw\(true\)/);
-  assert.match(bonds, /revalidateSeg\(true\)/);
+test("bonds uses one coherent dashboard and snapshot-bound AI cache", () => {
+  assert.match(bonds, /"bonds-overview:v2"/);
+  assert.match(bonds, /bonds-insight:v3:\$\{fingerprint\}/);
+  assert.match(bonds, /ai\?\.input_fingerprint === data\?\.input_fingerprint/);
+  assert.doesNotMatch(bonds, /api\.bondsFramework|api\.bondsSegments/);
 });
 
 test("industry chain renders its local last-good before revalidation", () => {

@@ -1,10 +1,8 @@
 """因子实验室：合成数据 golden test（不打真 HTTP，时点纪律断言）。"""
 import sys
-import time
 
 import numpy as np
 import pandas as pd
-import pytest
 
 sys.path.insert(0, ".")
 
@@ -42,12 +40,13 @@ def _install_panel(monkeypatch, panel: pd.DataFrame):
 
 
 def _slice(panel: pd.DataFrame, start, end) -> pd.DataFrame:
-    df = panel
+    dates = panel["date"].to_numpy()
+    mask = np.ones(len(panel), dtype=bool)
     if start:
-        df = df[df["date"] >= start]
+        mask &= dates >= start
     if end:
-        df = df[df["date"] <= end]
-    return df
+        mask &= dates <= end
+    return pd.DataFrame(panel.loc[mask])
 
 
 def test_momentum_factor_rank_ic_perfect():
@@ -57,8 +56,8 @@ def test_momentum_factor_rank_ic_perfect():
     panel = _make_panel(close_fn=lambda i, t: 10.0 * (1 + i * 0.5) * (1 + 0.001 * t) ** i)
     out = factors.compute_factors(panel, ["mom60"])
     # 每一天横截面因子秩与 code 序号完全同序
-    for date, day in out.groupby(level="date"):
-        if day["mom60"].notna().sum() < 66:
+    for _date, day in out.groupby(level="date"):
+        if day["mom60"].notna().sum() < 30:
             continue
         ranks = day["mom60"].rank()
         idx = [int(c) for c in day.index.get_level_values("code")]
@@ -138,15 +137,16 @@ def test_backtest_cost_stress_labels(monkeypatch):
     # cost=2：标签应为 0x/2x/4x/6x（乘 cost），不再复用 0/1/2/3 字面量
     r2 = factor_backtest.run_backtest("mom60", top_n=10, freq="monthly", cost=2.0, min_days_listed=1)
     assert set(r2["cost_stress"]) == {"0x", "2x", "4x", "6x"}
-    # cost=2 时 chosen 走最近邻匹配（2.0 精确命中），主结果应等于 2x 行（无成本口径不同，只比相对量级）
-    assert r2["cost_stress"]["2x"]["total_return"] == r2["metrics"]["total_return"] or True
+    # 主结果必须精确对应用户选择的实际倍数，不能取压力倍数最近邻。
+    assert r2["cost_stress"]["2x"]["total_return"] == r2["metrics"]["total_return"]
     # 主结果成本介于 0x 与 4x 之间
     assert (r2["cost_stress"]["0x"]["total_return"] >= r2["metrics"]["total_return"]
             >= r2["cost_stress"]["4x"]["total_return"])
 
-    # cost=1.5（API 允许的任意浮点）：不 KeyError，取最近已算路径
+    # cost=1.5（API 允许的任意浮点）：主结果精确使用 1.5x。
     r15 = factor_backtest.run_backtest("mom60", top_n=10, freq="monthly", cost=1.5, min_days_listed=1)
     assert r15["metrics"]["n_days"] > 0
+    assert r15["metrics"] == r15["cost_stress"]["1.5x"]
 
 
 def test_backtest_equal_weight_rebalance(monkeypatch):
@@ -175,7 +175,6 @@ def test_backtest_timing_discipline(monkeypatch):
     _install_panel(monkeypatch, panel)
     first = factor_backtest.run_backtest("mom60", top_n=10, freq="monthly",
                                          cost=0.0, min_days_listed=1)
-    pairs = list(zip(first["nav"]["dates"], first["nav"]["strategy"]))
     i_dev = next(i for i, v in enumerate(first["nav"]["strategy"]) if v != 1.0)
     exec_day = first["nav"]["dates"][i_dev - 1]  # 无成本+开盘=收盘时，建仓日净值恰为 1.0
 

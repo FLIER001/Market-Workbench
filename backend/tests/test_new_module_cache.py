@@ -21,15 +21,15 @@ def test_bonds_overview_force_reaches_every_source(monkeypatch):
 
     result = bonds._overview_payload(force=True)
 
-    assert calls == [(name, True) for name in ("curve", "shibor", "policy", "index", "global", "calc", "positioning")]
+    assert sorted(calls) == sorted((name, True) for name in ("curve", "shibor", "policy", "index", "global", "positioning"))
     assert result["cache_state"] == "refreshing"
 
 
 def test_bonds_overview_warms_from_disk_without_building(monkeypatch):
-    snapshot = {"curve": {"curve": [{"tenor": "10年"}]}, "cache_state": "fresh"}
-    monkeypatch.setattr(bonds, "_load_snapshot", lambda name: snapshot if name == "overview" else None)
+    snapshot = {"schema_version": 2, "curve": {"curve": [{"tenor": "10年"}]}, "generated_at": datetime.now(bonds.BEIJING).isoformat()}
+    monkeypatch.setattr(bonds, "_load_snapshot", lambda name: snapshot if name == "dashboard" else None)
     monkeypatch.setattr(bonds, "_overview_payload", lambda force=False: (_ for _ in ()).throw(AssertionError("must not build")))
-    bonds.cache_runtime.invalidate("bonds:overview")
+    bonds.cache_runtime.invalidate("bonds:dashboard:v2")
 
     result = bonds.get_overview()
 
@@ -80,6 +80,29 @@ def test_allocation_warms_from_disk_without_building(monkeypatch):
     result = timing_alloc.get_timing_allocation()
 
     assert result["timing"] == snapshot["timing"]
+
+
+def test_bond_side_ignores_carry_strategy_row():
+    # 融资套息观察是策略组合不是债券品种（bonds.py 改过一次名，不能再靠写死的名字排除）
+    seg = {"rows": [{"segment": "短债(1-3Y)", "score": 0.2, "hist": []},
+                    {"segment": "长债(5-10Y)", "score": 0.4, "hist": []},
+                    {"segment": "融资套息观察（未加杠杆）", "score": 2.0, "hist": []}]}
+
+    score, text, _hist = timing_alloc._bond_bond_side(seg)
+
+    assert score == 57.5  # (0.2+0.4)/2 → 50 + 0.3×25；把套息行也均值进去会是 66.7
+    assert "套息" not in text
+
+
+def test_degraded_allocation_is_not_saved(monkeypatch):
+    saved = []
+    monkeypatch.setattr(timing_alloc, "_save_snapshot", saved.append)
+
+    timing_alloc._save_if_resolved({"allocation": {"resolved": False}})
+    assert saved == []
+
+    timing_alloc._save_if_resolved({"allocation": {"resolved": True}})
+    assert len(saved) == 1
 
 
 # —— AI 解读（择时配置页）——

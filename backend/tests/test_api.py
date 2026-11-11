@@ -24,6 +24,10 @@ def test_bad_code_400(path):
     assert client.get(path).status_code == 400
 
 
+def test_index_history_rejects_unknown_symbol():
+    assert client.get("/api/indices/history?symbol=sh999999").status_code == 404
+
+
 def test_industry_top_range():
     assert client.get("/api/industry?top=2").status_code == 422   # ge=5
     assert client.get("/api/industry?top=999").status_code == 422  # le=50
