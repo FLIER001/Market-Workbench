@@ -8,6 +8,8 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { StockSearchInput } from "@/components/ui/StockSearchInput";
 import { FundPortfolioPanel } from "@/components/funds/FundPortfolioPanel";
+import { XrayPanel } from "@/components/portfolio/XrayPanel";
+import { ReplayPanel } from "@/components/portfolio/ReplayPanel";
 import { isTradingHours } from "@/hooks/useLiveQuotes";
 import { useSWR } from "@/hooks/useSWR";
 import { useFreshOnEnter } from "@/hooks/useFreshOnEnter";
@@ -675,6 +677,10 @@ export function Portfolio() {
           </div>
         )}
       </GlassCard>
+
+      {/* 风险体检与历史回放：都按需拉取，不进入首屏行情轮询 */}
+      <XrayPanel holdings={holdings.length} />
+      <ReplayPanel holdings={holdings.length} />
 
       </>
       )}

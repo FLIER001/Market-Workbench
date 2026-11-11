@@ -376,6 +376,152 @@ export interface PortfolioData {
 }
 // 持仓择时信号（research/A股优质个股中短期择时策略.md 规则，后端按前复权日 K 计算）
 // 事件式：信号只在规则触发日产生并带有效期/衰减，不是"位置镜像"
+// —— 持仓风险体检 / 历史情景回放（A 股与场内 ETF；本币，不换汇）——
+export interface XrayReport {
+  ok: boolean;
+  error?: string;
+  inputs?: {
+    symbols: string[];
+    names?: Record<string, string>;
+    weights: Record<string, number>;
+    values: Record<string, number>;
+    total_value: number;
+    aligned_days: number; first_date: string; last_date: string; window_days: number;
+  };
+  concentration?: { hhi: number | null; effective_n: number | null; top1_weight: number | null; top3_weight: number | null };
+  volatility?: { daily_vol: number | null; annualized_vol: number | null; downside_deviation_annualized: number | null };
+  drawdown?: { max_drawdown: number | null; max_drawdown_start: string | null; max_drawdown_trough: string | null };
+  tail_risk?: { var_95: number | null; var_99: number | null; expected_shortfall_95: number | null; expected_shortfall_99: number | null; method: string };
+  diversification?: { diversification_ratio: number | null; note?: string };
+  correlation?: {
+    avg_pairwise_abs: number | null;
+    max_pair: { symbols: string[]; corr: number | null } | null;
+    beta_to_equal_weight: number | null;
+    note?: string;
+    correlation_matrix?: { symbols: string[]; values: (number | null)[][] };
+  };
+  risk_contribution?: { shares: Record<string, number | null> | null; note?: string };
+  asset_vol_annualized?: Record<string, number | null>;
+  industry_exposure?: {
+    rows: {
+      industry: string;
+      weight: number | null;
+      members?: { code: string; name: string; path: string }[];
+    }[];
+    unknown: string[];
+  };
+  gaps: { code: string; name?: string; reason: string }[];
+  notes?: string[];
+  as_of?: string;
+  source?: string;
+}
+
+export interface ReplayHolding {
+  code: string; name: string; weight: number | null; return: number | null;
+  contribution: number | null; first_date: string; last_date: string; halted_days: number;
+}
+export interface ReplayScenario {
+  id: string; label: string; start: string; end: string;
+  benchmark: ({ return: number | null; first_date: string; last_date: string } & ReplayPathStats) | null;
+  benchmark_error: string | null;
+  portfolio: ({ return: number | null; value_change: number | null; included_value: number | null; first_date: string; last_date: string; days: number } & ReplayPathStats) | null;
+  portfolio_note: string | null;
+  holdings: ReplayHolding[];
+  gaps: { code: string; name: string; reason: string }[];
+  coverage: number | null;
+  positions_included: number;
+}
+export interface ReplayPathStats {
+  max_drawdown: number | null; max_drawdown_peak: string | null; max_drawdown_trough: string | null;
+  worst_day: number | null; worst_day_date: string | null;
+}
+export interface ReplayData {
+  ok: boolean;
+  error?: string;
+  total_value?: number;
+  positions_input?: number;
+  benchmark_label?: string;
+  scenarios: ReplayScenario[];
+  paths: Record<string, { dates: string[]; portfolio: (number | null)[] | null; benchmark: (number | null)[] | null }>;
+  notes: string[];
+  min_coverage: number;
+}
+
+// —— 异动接近度（按交易所公开规则推算，不判断方向）——
+export interface AbnormalCriterion {
+  days: number; up: number | null; down: number | null;
+  limit: [number, number]; reached: "up" | "down" | null;
+}
+export interface AbnormalProximity {
+  as_of: string; since: string;
+  abnormal: AbnormalCriterion; severe10: AbnormalCriterion; severe30: AbnormalCriterion;
+  same_dir: { up: number; down: number; need: number };
+  recent: { date: string; kind: "abnormal" | "severe"; dir: "up" | "down"; why: string }[];
+  level: number;
+  notes: string[];
+}
+export interface AbnormalRow {
+  code: string; name: string; board: string; board_label: string; index_label: string;
+  result: AbnormalProximity | null; skipped: string | null;
+}
+export interface AbnormalData {
+  rows: AbnormalRow[];
+  rules: { board: string; label: string; index: string; abn: number; count: number; sev10: number[]; sev30: number[] }[];
+  as_of: string | null;
+  intraday: boolean;
+  gaps: string[];
+  source: string;
+  rule_source: string;
+}
+
+// —— 事件回看（个股）：一类事件历史上每次前后 20 个交易日相对沪深300的超额收益 ——
+export interface EventHorizonStats {
+  n: number; mean: number | null; median: number | null; positive_share: number | null;
+}
+export interface EventStudyEvent {
+  date: string; day0: string; label: string; detail: string;
+  direction: "up" | "down" | "large" | "small" | "other" | null;
+  pre: number | null; d0_1: number | null; d0_5: number | null; d0_20: number | null;
+  halted_days: number; days_after: number; path: number[]; overlaps_previous?: boolean;
+}
+export interface EventStudyData {
+  ok: boolean;
+  error?: string;
+  code?: string; kind?: string; kind_label?: string; benchmark_label?: string;
+  window?: { pre: number; post: number }; min_events?: number;
+  horizons: { key: string; from: number; to: number; label: string }[];
+  groups?: Record<string, string>;
+  events: EventStudyEvent[];
+  upcoming?: { date: string; label: string; detail: string }[];
+  summary: { key: string; label: string; events: number; note: string | null; horizons: Record<string, EventHorizonStats> }[];
+  mean_path?: { offsets: number[]; n: number; mean: (number | null)[]; median: (number | null)[] };
+  gaps: { date: string | null; label?: string; reason: string }[];
+  notes: string[];
+  sources?: string[];
+}
+
+// —— 财报前瞻：预约披露日、机构一致预期、历次发布后首日涨跌、实际 vs 预告 ——
+export interface EarningsPreviewHistory {
+  period: string | null; period_label: string; publish_date: string;
+  reaction_day: string | null; reaction: number | null; market: number | null; excess: number | null;
+  eps: number | null; net_profit_yi: number | null; revenue_yi: number | null;
+  same_day_releases?: number; pending?: boolean;
+}
+export interface EarningsPreviewData {
+  ok: boolean;
+  error?: string;
+  next_report: { period: string | null; period_label: string; date: string; first_appointed: string | null;
+                 rescheduled: string[]; days_left: number } | null;
+  consensus: { year: string; analysts: number | null; low: number | null; mean: number | null;
+               high: number | null; unit: string }[];
+  surprise: null | { period_label: string; forecast_low_yi: number | null; forecast_high_yi: number | null;
+                     actual_yi: number | null; position: string; forecast_type: string };
+  history: EarningsPreviewHistory[];
+  gaps: { date: string | null; label?: string; reason: string }[];
+  notes: string[];
+  sources?: string[];
+}
+
 export interface TimingSignal {
   code: string;
   signal: "add" | "reduce" | "watch" | null;
@@ -2050,6 +2196,23 @@ export const api = {
   publicNewsSearch: (q: string, count = 5) =>
     get<PublicNewsSearchData>(`/public-news-search?q=${encodeURIComponent(q)}&count=${count}`),
   portfolio: (fresh = false) => get<PortfolioData>(`/portfolio${fresh ? "?fresh=true" : ""}`),
+  portfolioXray: (refresh = false) =>
+    get<XrayReport>(`/portfolio/xray${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
+  portfolioReplay: (refresh = false) =>
+    get<ReplayData>(`/portfolio/replay${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
+  stockAbnormal: (codes: string[], refresh = false) => {
+    const qs = new URLSearchParams({ codes: codes.join(",") });
+    if (refresh) qs.set("refresh", "true");
+    return get<AbnormalData>(`/stock/abnormal?${qs.toString()}`, SLOW_TIMEOUT_MS);
+  },
+  eventStudyKinds: () => get<{ key: string; label: string }[]>("/stock/event-study/kinds"),
+  eventStudy: (code: string, kind: string, refresh = false) => {
+    const qs = new URLSearchParams({ code, kind });
+    if (refresh) qs.set("refresh", "true");
+    return get<EventStudyData>(`/stock/event-study?${qs.toString()}`, SLOW_TIMEOUT_MS);
+  },
+  earningsPreview: (code: string, refresh = false) =>
+    get<EarningsPreviewData>(`/stock/earnings-preview?code=${code}${refresh ? "&refresh=true" : ""}`, SLOW_TIMEOUT_MS),
   portfolioLegacyStatus: () => get<LegacyPortfolioStatus>("/portfolio/legacy-status"),
   importLegacyPortfolio: (kind: "securities" | "fund") =>
     request<PortfolioData | FundPortfolioData>(`/portfolio/import-legacy?kind=${kind}`, "POST"),
