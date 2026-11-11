@@ -7,7 +7,6 @@ import {
 import { PageHeader } from "@/components/ui/PageHeader";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
-import { EarningsSnapshot } from "@/components/ui/EarningsSnapshot";
 import { EarningsPreview } from "@/components/stock/EarningsPreview";
 import { EventStudy } from "@/components/stock/EventStudy";
 import {
@@ -501,9 +500,6 @@ export function StockData() {
               </div>
             </GlassCard>
           )}
-
-          {/* 财报速览（结论先行摘要，借鉴 equity-research 的结构纪律，剔除评级/目标价） */}
-          <EarningsSnapshot val={val} fin={fin} pctl={pctl} />
 
           {/* 下一份财报日 / 一致预期 / 历次发布后首日涨跌 */}
           <EarningsPreview code={val.code} />
