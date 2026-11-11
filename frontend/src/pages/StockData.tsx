@@ -490,12 +490,6 @@ export function StockData() {
             <StockKLineChart code={val.code} name={val.name} volRatio={quoteVolRatio ?? undefined} />
           </Suspense>
 
-          {/* 财报速览（结论先行摘要，借鉴 equity-research 的结构纪律，剔除评级/目标价） */}
-          <EarningsSnapshot val={val} fin={fin} pctl={pctl} />
-
-          {/* 下一份财报日 / 一致预期 / 历次发布后首日涨跌 */}
-          <EarningsPreview code={val.code} />
-
           {pctl && (pctl.metrics.pe_ttm || pctl.metrics.pb || pctl.metrics.peg) && (
             <GlassCard glow className="mb-4">
               <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold"><LineChart className="h-4 w-4 text-primary" /> 估值历史分位 · {pctl.period}</h3>
@@ -507,6 +501,12 @@ export function StockData() {
               </div>
             </GlassCard>
           )}
+
+          {/* 财报速览（结论先行摘要，借鉴 equity-research 的结构纪律，剔除评级/目标价） */}
+          <EarningsSnapshot val={val} fin={fin} pctl={pctl} />
+
+          {/* 下一份财报日 / 一致预期 / 历次发布后首日涨跌 */}
+          <EarningsPreview code={val.code} />
 
           {fin && (fin.revenue || fin.roe) && (
             <GlassCard className="mb-4">
