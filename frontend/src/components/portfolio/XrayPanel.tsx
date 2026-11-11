@@ -136,6 +136,7 @@ export function XrayPanel({ holdings }: { holdings: number }) {
               <div className="flex flex-wrap gap-1.5">
                 {industry.rows.map((row) => (
                   <span key={row.industry}
+                        title={row.members?.map((m) => `${m.name || m.code} ${pct(data.inputs?.weights[m.code])} · ${m.path}`).join("\n")}
                         className={cn("rounded-md border px-2 py-0.5 text-xs",
                           (row.weight ?? 0) >= 0.5 ? "border-danger/40 bg-danger/10 text-danger" : "border-border/50 text-muted-foreground")}>
                     {row.industry} {pct(row.weight)}

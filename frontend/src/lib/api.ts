@@ -402,7 +402,14 @@ export interface XrayReport {
   };
   risk_contribution?: { shares: Record<string, number | null> | null; note?: string };
   asset_vol_annualized?: Record<string, number | null>;
-  industry_exposure?: { rows: { industry: string; weight: number | null }[]; unknown: string[] };
+  industry_exposure?: {
+    rows: {
+      industry: string;
+      weight: number | null;
+      members?: { code: string; name: string; path: string }[];
+    }[];
+    unknown: string[];
+  };
   gaps: { code: string; name?: string; reason: string }[];
   notes?: string[];
   as_of?: string;

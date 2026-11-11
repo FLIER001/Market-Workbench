@@ -114,30 +114,44 @@ def _day(value: Any) -> str:
         return str(value)
 
 
-def _industry(code: str) -> str | None:
-    """东财实时快照的行业字段（f127）；取不到返回 None（进缺口，不当成「其它」）。
+def _industry(code: str) -> dict[str, str] | None:
+    """东财公司资料的行业路径（EM2016，形如「食品饮料-饮料-白酒」）；取不到返回 None。
 
-    走 ``astock.em_get`` 而不是 akshare：它直连优先、与全站同一套限流，
-    而且 akshare 自己建会话会读到系统代理（本机实测 push2 被代理掐断）。
+    走 ``datacenter-web`` 而不是 push2 的 f127：本机实测 push2.eastmoney.com 直接断连
+    （RemoteDisconnected），push2his 与 datacenter-web 正常；akshare 自己建会话还会读到
+    macOS 系统代理 127.0.0.1:7890，那边不通就一律 ProxyError。
+
+    分组用第二级（饮料 / 半导体 / 银行），三级只在悬停提示里逐个列出：
+    白酒和啤酒合成「饮料」才看得出是不是押在同一个行业上。
     """
-    def fetch() -> str | None:
-        prefix = astock.get_prefix(code)
-        if prefix == "bj":  # 北交所不在 f127 的行业口径里，宁可说没取到
+    def fetch() -> dict[str, str] | None:
+        suffix = {"sh": "SH", "sz": "SZ", "bj": "BJ"}.get(astock.get_prefix(code))
+        if suffix is None or not code.isdigit():
             return None
         try:
             resp = astock.em_get(
-                "https://push2.eastmoney.com/api/qt/stock/get",
-                params={"secid": f"{1 if prefix == 'sh' else 0}.{code}", "fields": "f57,f58,f127"},
+                "https://datacenter-web.eastmoney.com/api/data/v1/get",
+                params={
+                    "reportName": "RPT_F10_BASIC_ORGINFO",
+                    "columns": "SECUCODE,EM2016,INDUSTRYCSRC1",
+                    "filter": f'(SECUCODE="{code}.{suffix}")',
+                    "pageSize": "1", "source": "HSF10", "client": "PC",
+                },
                 timeout=10,
             )
-            data = resp.json().get("data") or {}
+            rows = ((resp.json().get("result") or {}).get("data")) or []
         except Exception:  # noqa: BLE001 — 行业只是补充维度，取不到不影响主指标
             return None
-        value = str(data.get("f127") or "").strip()
-        return value or None
+        if not rows:
+            return None
+        raw = str(rows[0].get("EM2016") or rows[0].get("INDUSTRYCSRC1") or "").strip()
+        parts = [part for part in raw.replace("—", "-").split("-") if part]
+        if not parts:
+            return None
+        return {"path": "-".join(parts), "label": parts[1] if len(parts) >= 2 else parts[-1]}
 
     return cache_runtime.get(
-        f"xray:industry:{code}", fetch, valid=lambda v: v is not None,
+        f"xray:industry:v2:{code}", fetch, valid=lambda v: v is not None,
         ttl=24 * 3600, decorate=False,
     )
 
@@ -348,21 +362,33 @@ def _risk_contribution(returns: pd.DataFrame, w: np.ndarray) -> dict[str, Any]:
     }
 
 
-def _industry_exposure(codes: list[str], values: dict[str, float]) -> dict[str, Any]:
-    """按行业汇总权重；认不出行业的单列一组，不并进「其它」当成同一类。"""
-    buckets: dict[str, float] = {}
+def _industry_exposure(codes: list[str], values: dict[str, float],
+                       names: dict[str, str] | None = None) -> dict[str, Any]:
+    """按二级行业汇总权重；认不出行业的单列一组，不并进「其它」当成同一类。"""
+    buckets: dict[str, dict[str, Any]] = {}
     unknown: list[str] = []
     total = sum(values.get(code, 0) for code in codes) or 1.0
     for code in codes:
         industry = _industry(code)
-        if industry is None:
+        if not industry:
             unknown.append(code)
             continue
-        buckets[industry] = buckets.get(industry, 0.0) + values.get(code, 0.0)
-    rows = sorted(
-        ({"industry": k, "weight": _r(v / total)} for k, v in buckets.items()),
-        key=lambda row: -(row["weight"] or 0),
-    )
+        bucket = buckets.setdefault(industry["label"], {
+            "industry": industry["label"], "value": 0.0, "members": [],
+        })
+        bucket["value"] += values.get(code, 0.0)
+        bucket["members"].append({
+            "code": code,
+            "name": (names or {}).get(code, ""),
+            "path": industry["path"],
+        })
+    rows = []
+    for bucket in sorted(buckets.values(), key=lambda b: -b["value"]):
+        rows.append({
+            "industry": bucket["industry"],
+            "weight": _r(bucket["value"] / total),
+            "members": sorted(bucket["members"], key=lambda m: -values.get(m["code"], 0)),
+        })
     return {"rows": rows, "unknown": unknown}
 
 
@@ -598,7 +624,7 @@ def build_xray(user_id: int | None = None, force: bool = False) -> dict[str, Any
         *report.get("notes", []),
     ]
     if report.get("ok"):
-        exposure = _industry_exposure([s for s in report["inputs"]["symbols"]], values)
+        exposure = _industry_exposure([s for s in report["inputs"]["symbols"]], values, names)
         report["industry_exposure"] = exposure
         if exposure["unknown"]:
             unknown = "、".join(f"{c} {names.get(c, '')}".strip() for c in exposure["unknown"])

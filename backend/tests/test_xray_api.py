@@ -41,7 +41,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(pxf.astock, "tencent_kline", fake_kline)
     monkeypatch.setattr(pxf.astock, "index_daily_em", fake_index)
     monkeypatch.setattr(pxf.factor_data, "fetch_stock_history", fake_history)
-    monkeypatch.setattr(pxf, "_industry", lambda code: "银行")
+    monkeypatch.setattr(pxf, "_industry", lambda code: {"path": "金融-银行-股份制与城商行", "label": "银行"})
     return TestClient(app_module.app)
 
 
@@ -59,7 +59,10 @@ def test_xray_endpoint_returns_metrics(client):
     assert data["inputs"]["names"] == {"600000": "浦发银行"}
     assert data["concentration"]["effective_n"] is not None
     assert data["tail_risk"]["var_95"] is not None
-    assert data["industry_exposure"]["rows"] == [{"industry": "银行", "weight": 1.0}]
+    assert data["industry_exposure"]["rows"] == [{
+        "industry": "银行", "weight": 1.0,
+        "members": [{"code": "600000", "name": "浦发银行", "path": "金融-银行-股份制与城商行"}],
+    }]
 
 
 def test_replay_endpoint_returns_five_scenarios(client):
