@@ -38,6 +38,7 @@ import {
   type WatchNotes,
 } from "@/lib/watchlist";
 import { useLiveQuotes, isTradingHours } from "@/hooks/useLiveQuotes";
+import { api, type AbnormalRow } from "@/lib/api";
 import { useValuationPercentiles, type StockValPct } from "@/hooks/useValuationPercentiles";
 import { useHoldingCodes } from "@/hooks/useHoldingCodes";
 import { cn } from "@/lib/utils";
@@ -60,6 +61,7 @@ const W_COLS: { label: string; key: WSortKey | null; title?: string }[] = [
   { label: "代码", key: null },
   { label: "现价", key: "price" },
   { label: "涨跌%", key: "change_pct" },
+  { label: "异动", key: null, title: "离交易所异常波动 / 严重异常波动标准还有多远：区间累计偏离减基准指数同期涨跌，按公开规则推算，以交易所公告为准" },
   { label: "PE(TTM)", key: "pe_ttm", title: "括号内为近5年分位（百度股市通）" },
   { label: "PB", key: "pb", title: "括号内为近5年分位（百度股市通）" },
   { label: "换手%", key: "turnover_pct" },
@@ -68,6 +70,39 @@ const W_COLS: { label: string; key: WSortKey | null; title?: string }[] = [
   { label: "笔记", key: null },
   { label: "", key: null },
 ];
+
+/**
+ * 异动接近度单元格：显示最接近的那条标准（3 / 10 / 30 日的区间累计偏离）。
+ * 只是离规则的距离，不判断方向、不预测；达到标准时交易所会自己公告。
+ */
+function AbnormalCell({ row }: { row: AbnormalRow | undefined }) {
+  if (!row) return <span className="text-muted-foreground/40">—</span>;
+  if (!row.result) {
+    return <span className="text-muted-foreground/40" title={row.skipped ?? undefined}>—</span>;
+  }
+  const r = row.result;
+  const crits = [r.abnormal, r.severe10, r.severe30];
+  const ratio = (c: typeof r.abnormal) =>
+    Math.max(c.up != null ? c.up / c.limit[0] : 0, c.down != null ? c.down / c.limit[1] : 0);
+  const nearest = crits.reduce((a, c) => (ratio(c) > ratio(a) ? c : a));
+  const value = nearest.reached === "down" ? nearest.down : nearest.reached === "up" ? nearest.up : (nearest.up ?? nearest.down);
+  const reached = nearest.reached !== null;
+  const level = ratio(nearest);
+  const cls = reached ? "text-danger" : level >= 0.7 ? "text-warning" : "text-muted-foreground";
+  const detail = [
+    `${row.board_label} · 基准 ${row.index_label} · 数据截至 ${r.as_of}`,
+    ...crits.map((c) =>
+      `${c.days} 日：向上 ${c.up ?? "—"}% / 向下 ${c.down ?? "—"}%（标准 ${c.limit[0]}% / ${c.limit[1]}%）${c.reached ? " ← 已达到" : ""}`),
+    `近 10 个交易日已有同向异常波动：向上 ${r.same_dir.up} 次 / 向下 ${r.same_dir.down} 次（第 ${r.same_dir.need} 次构成严重异常波动）`,
+    ...r.notes,
+    "按交易所公开规则推算，达到标准时以交易所公告为准；不判断方向",
+  ].join("\n");
+  return (
+    <span className={cn("font-mono", cls)} title={detail}>
+      {reached ? "已达标" : `${nearest.days}日 ${value == null ? "—" : `${value > 0 ? "+" : ""}${value}%`}`}
+    </span>
+  );
+}
 
 /** 估值当前值 + 括号内近5年分位。颜色沿用全站口径：<20% 低估区绿 / >80% 高估区红。 */
 function ValuationCell({ label, current, metric }: { label: "PE" | "PB"; current: number | undefined; metric: StockValPct["pe"] }) {
@@ -213,6 +248,35 @@ export function Watchlist() {
       return ((va as number) - (vb as number)) * dir;
     });
   }, [visibleCodes, quotes, wSortKey, wSortDir]);
+
+  // 异动接近度：只算自选股票分组里的 6 位 A 股代码；ETF、基金、港美股由后端列进 gaps。
+  // 盘中日 K 会变，后端缓存 10 分钟，这里只在代码集合变化时取一次。
+  const [abnormalByCode, setAbnormalByCode] = useState<Record<string, AbnormalRow>>({});
+  const abnormalCodes = useMemo(
+    () => (collection === "stock" ? sortedVisibleCodes.filter((code) => /^\d{6}$/.test(code) && !isEtfCode(code)) : []),
+    [collection, sortedVisibleCodes],
+  );
+  useEffect(() => {
+    if (abnormalCodes.length === 0) {
+      setAbnormalByCode({});
+      return;
+    }
+    let alive = true;
+    const timer = setTimeout(() => {
+      api.stockAbnormal(abnormalCodes)
+        .then((data) => {
+          if (!alive) return;
+          const next: Record<string, AbnormalRow> = {};
+          for (const row of data.rows) next[row.code] = row;
+          setAbnormalByCode(next);
+        })
+        .catch(() => { /* 异动只是补充列，取不到就保持原样，不影响行情表 */ });
+    }, 300);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [abnormalCodes]);
 
   const toggleWSort = (key: WSortKey) => {
     if (wSortKey === key) {
@@ -688,7 +752,7 @@ export function Watchlist() {
                 </tr>
                 {collection === "etf" && (
                   <tr>
-                    <td colSpan={11} className="border-b border-border/30 px-2 pb-2 pt-0.5 text-[10px] text-muted-foreground/60">
+                    <td colSpan={12} className="border-b border-border/30 px-2 pb-2 pt-0.5 text-[10px] text-muted-foreground/60">
                       PE/PB 为行情快照值；个股估值历史分位不适用于 ETF
                     </td>
                   </tr>
@@ -721,6 +785,9 @@ export function Watchlist() {
                         <td className="px-2 py-2.5 font-mono text-xs text-muted-foreground">{code}</td>
                         <td className={cn("px-2 py-2.5 font-mono", color(quote?.change_pct))}>{quote ? quote.price : "—"}</td>
                         <td className={cn("px-2 py-2.5 font-mono", color(quote?.change_pct))}>{quote ? pct(quote.change_pct) : "—"}</td>
+                        <td className="px-2 py-2.5 text-xs">
+                          <AbnormalCell row={abnormalByCode[code]} />
+                        </td>
                         <td className="px-2 py-2.5 text-muted-foreground">
                           <ValuationCell label="PE" current={quote?.pe_ttm} metric={vp?.pe} />
                         </td>

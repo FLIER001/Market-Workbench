@@ -28,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import astock
+import abnormal
 import bonds as bonds_layer
 import cache_runtime
 import chat as chat_layer
@@ -50,6 +51,7 @@ import newsradar
 import oil as oil_layer
 import plate_scores as plate_scores_layer
 import portfolio as pf
+import portfolio_xray as pxf
 import pulse.market_pulse as pulse_market_pulse
 import reflection as reflect_layer
 import score_scheduler
@@ -629,6 +631,47 @@ def portfolio_update(h: HoldingIn, request: Request):
         return {"data": pf.update_holding(code, h.shares, h.cost, bd or None, _portfolio_user_id(request))}
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
+
+
+# ---- 持仓风险体检 / 历史情景回放（本币、A 股与场内 ETF；不出综合分、不给操作建议）----
+
+
+@app.get("/api/portfolio/xray")
+def portfolio_xray(request: Request, refresh: bool = Query(False)):
+    """按当前持仓市值加权算集中度、波动、回撤、尾部风险、相关性与行业暴露。"""
+    # 先把登录解出来：HTTPException 是 Exception 的子类，放进下面的 try 会被当成
+    # 「体检失败」包成 502，未登录就拿到了错误的状态码。
+    user_id = _portfolio_user_id(request)
+    try:
+        return {"data": pxf.build_xray(user_id, force=refresh)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"持仓体检失败：{e}") from e
+
+
+@app.get("/api/portfolio/replay")
+def portfolio_replay(request: Request, refresh: bool = Query(False)):
+    """按现在的持仓比例重放几段历史大跌期，与沪深300并排。"""
+    user_id = _portfolio_user_id(request)
+    try:
+        return {"data": pxf.build_replay(user_id, force=refresh)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"历史回放失败：{e}") from e
+
+
+@app.get("/api/stock/abnormal")
+def stock_abnormal(codes: str = Query(""), refresh: bool = Query(False)):
+    """A 股离交易所异常波动 / 严重异常波动标准还有多远（代码用逗号分隔）。"""
+    items = [c.strip() for c in codes.split(",") if c.strip()][:80]
+    if not items:
+        return {"data": {"rows": [], "rules": [], "as_of": None, "intraday": False,
+                         "gaps": ["没有传入代码"], "source": "", "rule_source": ""}}
+    if refresh:
+        for code in items:
+            cache_runtime.invalidate(f"abnormal:stock:{code}")
+    try:
+        return {"data": abnormal.for_codes(items)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"异动接近度计算失败：{e}") from e
 
 
 # ---- 我的研报（用户上传自己的研报，存本地、不上传、不进开源仓库）----
