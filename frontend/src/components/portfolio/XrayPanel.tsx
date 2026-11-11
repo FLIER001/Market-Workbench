@@ -152,7 +152,6 @@ export function XrayPanel({ holdings }: { holdings: number }) {
                 <li key={`gap-${i}`}>· 没算进组合：{gap.name || gap.code} — {gap.reason}</li>
               ))}
               {data.notes?.map((note, i) => <li key={`note-${i}`}>· {note}</li>)}
-              <li>· 只给数字和口径，不出综合分；阈值（集中度、波动、回撤）由你自己定。</li>
             </ul>
           )}
         </>

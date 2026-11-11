@@ -618,17 +618,12 @@ def build_xray(user_id: int | None = None, force: bool = False) -> dict[str, Any
     report["gaps"] = [{**g, "name": g.get("name") or names.get(g["code"], "")} for g in merged]
     report["as_of"] = _day(max((s.index[-1] for s in closes.values()), default="")) if closes else ""
     report["source"] = "腾讯前复权日线（收盘）"
-    report["notes"] = [
-        "按当前持仓市值加权，用的是滚动窗口内的历史收益，不含任何买卖判断",
-        "只给数字，不出综合分；集中度、波动、回撤这些线自己设阈值看",
-        *report.get("notes", []),
-    ]
     if report.get("ok"):
         exposure = _industry_exposure([s for s in report["inputs"]["symbols"]], values, names)
         report["industry_exposure"] = exposure
         if exposure["unknown"]:
             unknown = "、".join(f"{c} {names.get(c, '')}".strip() for c in exposure["unknown"])
-            report["notes"].append(f"行业没取到：{unknown}（不算进行业暴露，也没当成「其它」）")
+            report.setdefault("notes", []).append(f"行业没取到：{unknown}（不算进行业暴露，也没当成「其它」）")
     return report
 
 
