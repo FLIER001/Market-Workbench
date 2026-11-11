@@ -159,7 +159,7 @@ class _Parser:
 
     def expr(self) -> tuple:
         node = self.term()
-        while (tok := self.peek()) and tok == ("sym", "+") or (tok := self.peek()) and tok == ("sym", "-"):
+        while self.peek() in (("sym", "+"), ("sym", "-")):
             op = self.next()[1]
             node = self._bump_or(("bin", op, node, self.term()))
         return node
@@ -178,6 +178,7 @@ class _Parser:
             return self._bump_or(("neg", self.unary()))
         if tok == ("sym", "+"):
             self.next()
+            self._bump()
             return self.unary()
         return self.postfix()
 
@@ -186,12 +187,13 @@ class _Parser:
         while (tok := self.peek()) and tok == ("sym", "["):
             self.next()
             lag_tok = self.next()
-            if lag_tok[0] != "num" or not float(lag_tok[1]).is_integer() or int(lag_tok[1]) < 1:
-                raise ValueError("滞后 [n] 里的 n 必须是正整数")
+            if (lag_tok[0] != "num" or not float(lag_tok[1]).is_integer()
+                    or not 1 <= float(lag_tok[1]) <= MAX_WINDOW):
+                raise ValueError(f"滞后 [n] 里的 n 必须是 1-{MAX_WINDOW} 的正整数")
             close_tok = self.next()
             if close_tok != ("sym", "]"):
                 raise ValueError("滞后写法缺少右括号 ]")
-            node = self._bump_or(("lag", node, int(lag_tok[1])))
+            node = self._bump_or(("lag", node, int(float(lag_tok[1]))))
         return node
 
     def primary(self) -> tuple:
@@ -199,6 +201,7 @@ class _Parser:
         if kind == "num":
             return self._bump_or(("num", float(text)))
         if kind == "sym" and text == "(":
+            self._bump()
             node = self.expr()
             if self.next() != ("sym", ")"):
                 raise ValueError("括号不匹配")
@@ -244,49 +247,150 @@ class _Parser:
 
 def compile_expr(expr: str) -> tuple:
     """解析 + 静态校验，返回 AST。任何非法输入抛 ValueError（不执行任何代码）。"""
-    if not expr or not expr.strip():
+    if not isinstance(expr, str):
+        raise ValueError("公式必须是字符串")
+    expr = expr.strip()
+    if not expr:
         raise ValueError("公式为空")
     if len(expr) > MAX_EXPR_LEN:
         raise ValueError(f"公式过长（>{MAX_EXPR_LEN} 字符）")
     if "import" in expr or "exec" in expr or "eval" in expr or "__" in expr:
         raise ValueError("公式里不允许出现 import/exec/eval/__")
-    return _Parser(tokenize(expr)).parse()
+    try:
+        ast = _Parser(tokenize(expr)).parse()
+        if _collect_fields(ast):
+            _series_expression(ast)
+        return ast
+    except RecursionError as exc:
+        raise ValueError("公式嵌套过深") from exc
+
+
+def _series_expression(node: tuple) -> bool:
+    """静态检查序列算子参数，避免载入面板后才发现标量/序列混用。"""
+    kind = node[0]
+    if kind == "num":
+        return False
+    if kind == "field":
+        return True
+    if kind == "neg":
+        return _series_expression(node[1])
+    if kind == "bin":
+        left, right = _series_expression(node[2]), _series_expression(node[3])
+        return left or right
+    if kind == "lag":
+        if not _series_expression(node[1]):
+            raise ValueError("滞后只能作用于字段/序列表达式")
+        return True
+    name, args = node[1], node[2]
+    sequences = args[:-1] if name in TS_FUNCS else args
+    if not all(_series_expression(arg) for arg in sequences):
+        raise ValueError(f"{name} 只能作用于字段/序列表达式")
+    return True
 
 
 # ---------------------------------------------------------------------------
 # 执行（宽表：index=date, columns=code）
 # ---------------------------------------------------------------------------
 
-def build_fields(panel: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    """日线面板 → 字段宽表字典（价量层；财务/宏观字段无 point-in-time 历史，不纳入）。"""
+# 原始价量字段（直接从面板 pivot）；其余非 fn_* 字段均为派生字段
+_RAW_FIELDS = ("close", "open", "high", "low", "volume", "amount")
+
+# 派生字段 → 依赖的字段名（递归展开到 _RAW_FIELDS）
+_FIELD_DEPS: dict[str, tuple[str, ...]] = {
+    "vwap": ("amount", "volume"),
+    "ret": ("close",),
+    "kmid": ("close", "open"),
+    "klen": ("close", "high", "low"),
+    "kup": ("close", "open", "high"),
+    "klow": ("close", "open", "low"),
+    "ksft": ("close", "open", "high", "low"),
+    "open0": ("open", "close"),
+    "high0": ("high", "close"),
+    "low0": ("low", "close"),
+    "vwap0": ("vwap", "close"),
+    "vol_ratio5": ("volume",),
+    "vol_ratio20": ("volume",),
+    "turnover20": ("amount",),
+}
+for _n in (5, 10, 20, 60, 120):
+    _FIELD_DEPS[f"ret{_n}"] = ("close",)
+
+
+def _build_derived(name: str, get) -> pd.DataFrame:
+    """按名构造派生字段宽表；get(字段名) 取依赖（已递归构建并记忆化）。"""
+    if name == "vwap":
+        return get("amount") / get("volume").replace(0, np.nan)
+    if name == "ret":
+        return get("close").pct_change()
+    if name == "kmid":
+        return (get("close") - get("open")) / get("close")
+    if name == "klen":
+        return (get("high") - get("low")) / get("close")
+    if name == "kup":
+        return (get("high") - get("open").combine(get("close"), np.maximum)) / get("close")
+    if name == "klow":
+        return (get("open").combine(get("close"), np.minimum) - get("low")) / get("close")
+    if name == "ksft":
+        return 2 * (get("close") - get("open")) / (get("high") - get("low") + 1e-12)
+    if name in ("open0", "high0", "low0", "vwap0"):
+        base = get(name[:-1])  # open0 → open；vwap0 → vwap
+        return base / get("close").shift(1)
+    if name.startswith("ret") and name[3:].isdigit():
+        close = get("close")
+        return close / close.shift(int(name[3:])) - 1
+    if name.startswith("vol_ratio"):
+        vol = get("volume")
+        return vol / vol.rolling(int(name[9:])).mean()
+    if name == "turnover20":
+        return get("amount").rolling(20).mean()
+    raise ValueError(f"未实现的字段 {name}")
+
+
+def _add_deps(name: str, acc: set[str]) -> None:
+    acc.add(name)
+    for dep in _FIELD_DEPS.get(name, ()):
+        _add_deps(dep, acc)
+
+
+def field_dependencies(ast: tuple) -> list[str]:
+    """AST 引用的非财务字段及其全部依赖（含中间派生字段与原始价量列），排序去重。"""
+    acc: set[str] = set()
+    for name in _collect_fields(ast):
+        if name not in FUND_FIELDS:
+            _add_deps(name, acc)
+    return sorted(acc)
+
+
+def referenced_fields(ast: tuple) -> set[str]:
+    """AST 直接引用的字段名（含 fn_*）。"""
+    return _collect_fields(ast)
+
+
+def build_fields(panel: pd.DataFrame, names: list[str] | None = None) -> dict[str, pd.DataFrame]:
+    """日线面板 → 字段宽表字典。
+
+    names=None 构建全部字段；传 names 只构建这些字段及其依赖（公式执行只需参考字段，
+    避免为单条公式分配整个字段库）。财务字段（fn_*）不在此构建，由调用方按公告日注入。
+    """
+    want = [f for f in (FIELDS if names is None else names) if f not in FUND_FIELDS]
     wide: dict[str, pd.DataFrame] = {}
-    for f in ("close", "open", "high", "low", "volume", "amount"):
-        wide[f] = panel.pivot(index="date", columns="code", values=f).sort_index()
-    close, open_, high, low = wide["close"], wide["open"], wide["high"], wide["low"]
-    vol = wide["volume"]
-    wide["vwap"] = wide["amount"] / vol.replace(0, np.nan)
-    wide["ret"] = close.pct_change()
+    calendar = sorted(set(factor_data.load_calendar()) | set(panel["date"]))
 
-    # K 线形态（Alpha158 KMID 家族）
-    wide["kmid"] = (close - open_) / close
-    wide["klen"] = (high - low) / close
-    wide["kup"] = (high - open_.combine(close, np.maximum)) / close
-    wide["klow"] = (open_.combine(close, np.minimum) - low) / close
-    wide["ksft"] = 2 * (close - open_) / (high - low + 1e-12)
+    def get(name: str) -> pd.DataFrame:
+        if name in wide:
+            return wide[name]
+        if name not in FIELDS:
+            raise ValueError(f"未知字段 {name!r}")
+        if name in _RAW_FIELDS:
+            wide[name] = panel.pivot(index="date", columns="code", values=name).reindex(calendar)
+        else:
+            for dep in _FIELD_DEPS[name]:
+                get(dep)
+            wide[name] = _build_derived(name, get)
+        return wide[name]
 
-    # 当日相对昨收位置
-    prev = close.shift(1)
-    wide["open0"] = open_ / prev
-    wide["high0"] = high / prev
-    wide["low0"] = low / prev
-    wide["vwap0"] = wide["vwap"] / prev
-
-    # 多周期动量与量比
-    for n in (5, 10, 20, 60, 120):
-        wide[f"ret{n}"] = close / close.shift(n) - 1
-    wide["vol_ratio5"] = vol / vol.rolling(5).mean()
-    wide["vol_ratio20"] = vol / vol.rolling(20).mean()
-    wide["turnover20"] = wide["amount"].rolling(20).mean()
+    for name in want:
+        get(name)
     return wide
 
 
@@ -299,9 +403,9 @@ def evaluate(ast: tuple, fields: dict[str, pd.DataFrame], fund_fields: dict[str,
     w = dict(fields)
     if fund_fields:
         w.update(fund_fields)
-    needed_fund = _collect_fields(ast) & set(FUND_FIELDS)
-    if needed_fund and not fund_fields:
-        raise ValueError(f"公式用到财务字段 {sorted(needed_fund)}：需先构建 PIT 财务数据")
+    missing_fund = (_collect_fields(ast) & set(FUND_FIELDS)) - w.keys()
+    if missing_fund:
+        raise ValueError(f"公式用到财务字段 {sorted(missing_fund)}：需先构建 PIT 财务数据")
     out = _eval(ast, w)
     if not isinstance(out, pd.DataFrame):
         # 纯标量表达式（如 1+2、abs(5)、1/0）→ 没有任何字段引用，无意义
@@ -347,7 +451,7 @@ def _eval(node: tuple, w: dict[str, pd.DataFrame]):
         if op == "*":
             return l * r
         if isinstance(r, (int, float)) and r == 0:
-            return np.nan  # 标量除零：缺失而非异常（DataFrame 除零 pandas 自己出 inf/NaN）
+            return l * np.nan  # 保留序列形状；全缺失因子仍可审计
         return l / r
     if kind == "lag":
         x = _eval(node[1], w)
@@ -432,15 +536,29 @@ def _call(name: str, args: list[tuple], w: dict[str, pd.DataFrame]):
 _CUSTOM_FILE = os.path.join(factor_data.DATA_DIR, "custom_factors.json")
 
 
-def list_custom() -> list[dict]:
-    """已保存自定义因子。读取时清扫 __tmp_ 前缀的临时试跑因子（删除请求失败/关页残留）。"""
+def _read_raw() -> list[dict]:
+    """自定义因子原始列表（不过滤临时项）。解析失败视为空。"""
     try:
         with open(_CUSTOM_FILE, encoding="utf-8") as f:
             data = json.load(f)
-        factors = [f for f in data.get("factors", []) if not str(f.get("id", "")).startswith("__tmp_")]
+        return list(data.get("factors", []))
     except (OSError, ValueError):
         return []
+
+
+def list_custom() -> list[dict]:
+    """已保存自定义因子（目录展示用）。隐藏 __tmp_ 前缀的临时试跑项。
+
+    注意：临时项只是**不展示**，不删——执行路径按 id 直读（lookup_custom），
+    否则试跑/研究执行会在保存与查找之间被这里滤掉而报「因子不存在」。
+    """
+    factors = [f for f in _read_raw() if not str(f.get("id", "")).startswith("__tmp_")]
     return sorted(factors, key=lambda x: x.get("created_at", ""))
+
+
+def lookup_custom(fid: str) -> dict | None:
+    """按 id 直读自定义因子（不过滤临时项）。执行路径必须用这个。"""
+    return next((f for f in _read_raw() if f.get("id") == fid), None)
 
 
 def save_custom(fid: str, name: str, expr: str) -> dict:
@@ -449,7 +567,7 @@ def save_custom(fid: str, name: str, expr: str) -> dict:
         raise ValueError("因子 id 只能是字母/数字/下划线，≤32 字符")
     if not name or len(name) > 40:
         raise ValueError("因子名称不能为空且 ≤40 字符")
-    factors = [f for f in list_custom() if f["id"] != fid]
+    factors = [f for f in _read_raw() if f["id"] != fid]
     factors.append({"id": fid, "name": name, "expr": expr, "created_at": time.strftime("%Y-%m-%d %H:%M:%S")})
     os.makedirs(factor_data.DATA_DIR, exist_ok=True)
     tmp = _CUSTOM_FILE + ".tmp"
@@ -460,7 +578,7 @@ def save_custom(fid: str, name: str, expr: str) -> dict:
 
 
 def delete_custom(fid: str) -> None:
-    factors = [f for f in list_custom() if f["id"] != fid]
+    factors = [f for f in _read_raw() if f["id"] != fid]
     os.makedirs(factor_data.DATA_DIR, exist_ok=True)
     tmp = _CUSTOM_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:

@@ -19,6 +19,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
+from pandas._typing import DtypeArg
 
 import astock
 
@@ -36,12 +37,22 @@ _STATE_LOCK = threading.Lock()
 _STATE: dict = {"building": False, "pre_acquired": False, "fetched": 0, "total": 0, "failed": 0, "started_at": None, "error": None, "done_at": None}
 
 _dates_cache: list[str] | None = None
+_READ_CHUNK_ROWS = 25_000
 
 
 def data_version() -> str:
     """当前可用数据的版本号 = catalog 构建完成时间；无数据返回空串。"""
     catalog = load_catalog()
     return catalog.get("built_at", "") if catalog else ""
+
+
+def stat_key(path: str) -> tuple[int, int] | None:
+    """文件指纹（大小, mtime 纳秒）；不存在返回 None。进程内缓存键用，避免重复 stat。"""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_size, st.st_mtime_ns)
 
 
 def load_catalog() -> dict | None:
@@ -62,53 +73,64 @@ def build_state() -> dict:
 # ---------------------------------------------------------------------------
 
 def fetch_instruments() -> list[dict]:
-    """全市场 A 股列表（东财 push2 clist 分页）：code/name/流通市值。
-
-    剔除北交所（f13=0 沪/1 深，北交所不在沪深市场过滤内）与当前名称含 ST 的股票。
-    """
+    """沪深 A 股列表，按实际收到的唯一代码校验完整性，再过滤 ST/退市名称。"""
     merged: dict[str, dict] = {}
+    seen: set[str] = set()
+    expected_total: int | None = None
     page = 1
-    while page <= 20:
-        payload = None
-        for host in ("push2.eastmoney.com", "push2delay.eastmoney.com"):
+    while True:
+        data = None
+        for host in ("push2.eastmoney.com", "push2delay.eastmoney.com") * 3:
             try:
                 response = astock.em_get(
                     f"https://{host}/api/qt/clist/get",
                     params={
-                        "pn": str(page), "pz": "1000", "po": "1", "np": "1",
-                        "ut": "bd1d9ddb04089700cf9c27f6f7426281", "fltt": "2", "invt": "2",
-                        "fid": "f21", "fields": "f12,f13,f14,f21",
-                        # 沪深 A 股（剔除退市/停牌隐藏），不含北交所
+                        "pn": str(page), "pz": "100", "po": "0", "np": "1",
+                        "fltt": "2", "invt": "2", "fid": "f12", "fields": "f12,f13,f14,f21",
                         "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23",
                     },
-                    headers={"User-Agent": astock.UA},
-                    timeout=15,
+                    headers={"User-Agent": astock.UA}, timeout=15,
                 )
                 payload = response.json()
-                if payload.get("data") is not None:
+                candidate = payload.get("data") if isinstance(payload, dict) else None
+                if isinstance(candidate, dict) and candidate.get("diff"):
+                    data = candidate
                     break
-                payload = None
-            except Exception:  # noqa: BLE001 — 换备用域名重试
-                payload = None
-        data = (payload or {}).get("data") or {}
-        diff = data.get("diff") or []
-        if not diff:
-            break
-        for row in diff:
+            except Exception as exc:  # noqa: BLE001 — 换备用域名重试
+                print(f"[factor-data] 股票池第 {page} 页请求失败：{type(exc).__name__}", flush=True)
+                continue
+        if data is None:
+            raise RuntimeError(f"股票池第 {page} 页拉取失败，未保存不完整数据")
+        total = data.get("total")
+        if isinstance(total, bool) or not isinstance(total, int) or not 0 < total <= 100_000:
+            raise RuntimeError("股票池总数异常，请重试")
+        if expected_total is None:
+            expected_total = total
+        elif total != expected_total:
+            raise RuntimeError("股票池在分页期间变化，请重试")
+        diff = data["diff"]
+        rows = list(diff.values()) if isinstance(diff, dict) else diff
+        if not isinstance(rows, list) or not rows:
+            raise RuntimeError(f"股票池第 {page} 页数据异常，请重试")
+        for row in rows:
+            if not isinstance(row, dict):
+                raise RuntimeError(f"股票池第 {page} 页格式异常，请重试")
             code = str(row.get("f12") or "")
             if len(code) != 6 or not code.isdigit():
-                continue
+                raise RuntimeError(f"股票池第 {page} 页代码异常，请重试")
+            if code in seen:
+                raise RuntimeError("股票池分页重复，无法确认完整性，请重试")
+            seen.add(code)
             name = str(row.get("f14") or code)
             if "ST" in name.upper() or "退" in name:
                 continue
-            merged[code] = {
-                "code": code,
-                "name": name,
-                "float_mcap": astock._number(row.get("f21")) or 0.0,
-            }
-        total = data.get("total") or 0
-        if page * 1000 >= total:
+            merged[code] = {"code": code, "name": name,
+                            "float_mcap": astock._number(row.get("f21")) or 0.0}
+        if len(seen) > expected_total:
+            raise RuntimeError("股票池数量与上游总数不符，请重试")
+        if len(seen) == expected_total:
             break
+        # 按代码排序，避免盘中市值变化导致跨页重复；不假定上游兑现请求页长。
         page += 1
     return sorted(merged.values(), key=lambda item: -item["float_mcap"])
 
@@ -156,8 +178,8 @@ def _tencent_kline_paged(code: str, count: int, end_suffix: str) -> list[dict]:
         rows = astock._parse_tencent_kline(payload, symbol, "day")
         if rows:
             return rows
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        print(f"[factor-data] 日线主接口失败：{type(exc).__name__}", flush=True)
     # 备用域名（proxy.finance.qq.com，2026-08 起 web.ifzq 被 WAF 拦时的实际主力）
     try:
         import requests as _req
@@ -206,7 +228,7 @@ def build_dataset(max_workers: int = 8) -> dict:
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {pool.submit(fetch_stock_history, it["code"]): it for it in instruments}
             for future in as_completed(futures):
-                it = futures[future]
+                it = futures.pop(future)  # 及时释放完成任务及其原始日线，避免全市场构建累积两份数据。
                 try:
                     rows = future.result()
                 except Exception:  # noqa: BLE001 — 单股失败不阻塞全局
@@ -233,15 +255,19 @@ def build_dataset(max_workers: int = 8) -> dict:
         if not frames:
             raise RuntimeError("所有个股日线拉取失败")
 
+        history_stocks = len(frames)
         panel = pd.concat(frames, ignore_index=True)
+        frames.clear()
         # 腾讯 qfq 深历史在分红密集处会把价格折算到 0 附近甚至负数（前复权基准漂移），
         # 这些价格不可用且会产生 ±1000% 的假收益：丢弃 close <= 0.1 元的行，并剔除因此残缺的股票。
-        panel = panel[panel["close"] > 0.1]
-        panel = panel[(panel["high"] >= panel["low"]) & (panel["close"] <= panel["high"] * 1.1)
-                      & (panel["close"] >= panel["low"] * 0.9)]
-        valid_counts = panel.groupby("code")["date"].count()
-        keep_codes = set(valid_counts[valid_counts >= 500].index)  # 至少 ~2 年有效数据
-        panel = panel[panel["code"].isin(keep_codes)]
+        panel = pd.DataFrame(panel.loc[panel["close"] > 0.1])
+        panel = pd.DataFrame(panel.loc[(panel["high"] >= panel["low"]) & (panel["close"] <= panel["high"] * 1.1)
+                                      & (panel["close"] >= panel["low"] * 0.9)])
+        valid_counts = pd.Series(panel.groupby("code")["date"].count())
+        keep_codes = valid_counts.index[valid_counts.to_numpy() >= 500]  # 至少 ~2 年有效数据
+        panel = pd.DataFrame(panel.loc[pd.Series(panel["code"]).isin(keep_codes)])
+        if panel.empty:
+            raise RuntimeError("筛选后无有效日线，保留原数据")
         panel.sort_values(["code", "date"], inplace=True)
 
         # 交易日历 + 指数收盘（贝塔/特质波动的市场基准）：沪深300，全量历史
@@ -249,12 +275,18 @@ def build_dataset(max_workers: int = 8) -> dict:
         calendar = [r["date"] for r in index_rows]
 
         # 首根 K 线日期 = 上市日代理
-        first_bar = panel.groupby("code")["date"].min()
+        first_bar = pd.Series(panel.groupby("code")["date"].min())
+        stocks = len(pd.Series(panel["code"]).unique())
 
         built_at = _now()
         catalog = {
             "built_at": built_at,
-            "stocks": int(panel["code"].nunique()),
+            "stocks": stocks,
+            "universe_stocks": len(instruments),
+            "history_stocks": history_stocks,
+            "failed_stocks": len(instruments) - history_stocks,
+            "filtered_stocks": history_stocks - stocks,
+            "min_valid_bars": 500,
             "rows": int(len(panel)),
             "date_min": str(panel["date"].min()),
             "date_max": str(panel["date"].max()),
@@ -265,7 +297,7 @@ def build_dataset(max_workers: int = 8) -> dict:
 
         _atomic_write_csv(panel, _BARS_FILE)
         inst_df = pd.DataFrame(instruments)
-        inst_df["list_date"] = inst_df["code"].map(first_bar).fillna("")
+        inst_df["list_date"] = pd.Series(inst_df["code"]).map(first_bar).fillna("")
         _atomic_write_csv(inst_df, _INSTRUMENTS_FILE)
         _atomic_write_json({"dates": calendar,
                             "index_close": {r["date"]: r["close"] for r in index_rows},
@@ -297,9 +329,12 @@ def _atomic_write_csv(df: pd.DataFrame, path: str) -> None:
 
 def _atomic_write_json(obj: dict, path: str) -> None:
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except OSError as exc:
+        raise RuntimeError("无法写入因子数据文件") from exc
 
 
 def _now() -> str:
@@ -313,19 +348,32 @@ def _now() -> str:
 def load_panel(start: str | None = None, end: str | None = None) -> pd.DataFrame:
     """日线面板（date,code,open,close,high,low,volume,amount）。
 
-    内存友好：不常驻全量（全 A 全历史 float64 约 2GB），每次读 CSV.gz 过滤后返回，
-    调用方用完即弃。注意 pandas 读 CSV.gz 无谓词下推——start/end 只影响返回行数，
-    峰值仍是全量（~2GB 瞬时）；要降峰值需换 Parquet/DuckDB（见 ponytail 注）。
-    # ponytail: CSV.gz 全量读入后过滤；内存或并发吃紧时上 Parquet 谓词下推
+    指定日期时分块读取、逐块过滤，只保留所需行；仍需扫描整个 gzip 文件，
+    但内存不再随被排除的历史行数增长。不指定日期则直接读取全量。
+    不降低数值精度；调用方用完即弃。全历史计算仍需要容纳完整面板。
     """
     if not os.path.exists(_BARS_FILE):
         raise FileNotFoundError("因子数据未构建：先调 POST /api/factor/build")
-    df = pd.read_csv(_BARS_FILE, dtype={"code": str})
-    if start:
-        df = df[df["date"] >= start]
-    if end:
-        df = df[df["date"] <= end]
-    return df
+    if not start and not end:
+        return pd.read_csv(_BARS_FILE, dtype={"code": str})
+    # 固定数值列为 float64，避免各块的整数/空值推断改变合并后的计算精度。
+    dtype: DtypeArg = {"code": "str", "date": "str",
+                             **dict.fromkeys(("open", "close", "high", "low", "volume", "amount"), "float64")}
+    chunks = []
+    with pd.read_csv(_BARS_FILE, dtype=dtype, chunksize=_READ_CHUNK_ROWS) as reader:
+        for chunk in reader:
+            selected = chunk
+            if start:
+                selected = selected[selected["date"] >= start]
+            if end:
+                selected = selected[selected["date"] <= end]
+            if not selected.empty:
+                chunks.append(selected)
+    if not chunks:
+        return pd.read_csv(_BARS_FILE, dtype=dtype, nrows=0)
+    if len(chunks) == 1:
+        return chunks[0]
+    return pd.concat(chunks)
 
 
 def load_instruments() -> pd.DataFrame:

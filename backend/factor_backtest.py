@@ -1,7 +1,7 @@
 """探索性组合回测：只多、等权、Top N、周/月调仓，T 收盘出信号 → T+1 开盘成交。
 
 约束近似（探索级，非精算撮合）：
-- 涨跌停：一字板（开=高=低）不买不卖，候选顺延下一名；
+- 无可靠历史涨跌停价/开盘排队数据，不模拟涨跌停成交限制；
 - 停牌：执行日无行情的新买跳过；持仓卖不掉则持有到下次调仓再试；
 - 成本：佣金 0.025% 双边 + 印花税 0.05% 卖出 + 过户费 0.001% + 滑点 10bp 双边，按倍数 0/1/2/3 压力测试。
 
@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 import factor_data
-from factors import _factor_frame, MIN_CROSS_SECTION, factor_name_of
+from factors import MIN_CROSS_SECTION, _factor_frame, _validate_window, factor_name_of
 
 COST_BPS = {"commission": 2.5, "stamp_sell": 5.0, "transfer": 0.1, "slippage": 10.0}
 RUNS_DIR = os.path.join(factor_data.DATA_DIR, "runs")
@@ -26,57 +26,82 @@ RUNS_DIR = os.path.join(factor_data.DATA_DIR, "runs")
 def run_backtest(factor: str, start: str | None = None, end: str | None = None,
                  top_n: int = 50, top_pct: float | None = None,
                  freq: str = "monthly", cost: float = 1.0,
-                 min_days_listed: int = 60) -> dict:
-    """跑一次组合回测。freq: weekly/monthly；top_pct 优先于 top_n（Top 20% = 0.2）。"""
+                 min_days_listed: int = 60, *,
+                 frame: pd.DataFrame | None = None, panel: pd.DataFrame | None = None,
+                 save: bool = True, check=None) -> dict:
+    """跑一次组合回测。freq: weekly/monthly；top_pct 优先于 top_n（Top 20% = 0.2）。
+
+    frame/panel/save 是快照路径的增量参数（默认行为不变）：研究快照回测复用已算好的因子帧，
+    不再重复加载全市场面板，且不写共享工件目录。
+    """
     if freq not in ("weekly", "monthly"):
         raise ValueError("freq 必须是 weekly/monthly")
 
-    # 因子需要 ~130 根 K 线预热：区间前多留 200 个交易日
-    panel_all = factor_data.load_panel()
-    dates_all = sorted(panel_all["date"].unique())
-    window_dates = _window(dates_all, start, end)
-    if len(window_dates) < 40:
-        raise ValueError("回测区间太短（<40 交易日）")
-    w_start, w_end = window_dates[0], window_dates[-1]
-    warm_start = _shift_dates(dates_all, w_start, -200)
-    panel = panel_all[(panel_all["date"] >= warm_start) & (panel_all["date"] <= w_end)]
+    _validate_window(start, end)
+    if not 1 <= top_n <= 500 or (top_pct is not None and not 0 < top_pct <= 1):
+        raise ValueError("持仓数需为 1-500，持仓比例需为 (0,1]")
+    if not np.isfinite(cost) or not 0 <= cost <= 3:
+        raise ValueError("成本倍数需为 0-3")
 
-    factors = _factor_frame(panel, factor)
-    factors = factors[factors["days_since_list"] >= min_days_listed]
+    if frame is None:
+        # 保留完整预热历史，支持 250 日内置因子和 500 日公式窗口。
+        panel_all = factor_data.load_panel()
+        window_dates = _window(sorted(panel_all["date"].unique()), start, end)
+        if len(window_dates) < 40:
+            raise ValueError("回测区间太短（<40 交易日）")
+        w_start, w_end = window_dates[0], window_dates[-1]
+        panel = pd.DataFrame(panel_all.loc[panel_all["date"] <= w_end])
+        frame = _factor_frame(panel, factor)
+    else:
+        if panel is None:
+            raise ValueError("传入 frame 时必须同时传入 panel")
+        window_dates = _window(sorted(panel["date"].unique()), start, end)
+        if len(window_dates) < 40:
+            raise ValueError("回测区间太短（<40 交易日）")
+        w_start, w_end = window_dates[0], window_dates[-1]
 
-    close_wide = panel.pivot(index="date", columns="code", values="close").sort_index().ffill(limit=20)
-    open_wide = panel.pivot(index="date", columns="code", values="open").sort_index()
-    high_wide = panel.pivot(index="date", columns="code", values="high").sort_index()
-    low_wide = panel.pivot(index="date", columns="code", values="low").sort_index()
+    if check is not None:
+        check()
+    factors = frame[frame["days_since_list"] >= min_days_listed]
+
+    price_dates = sorted(set(panel["date"]) | set(window_dates))
+    close_wide = panel.pivot(index="date", columns="code", values="close").reindex(price_dates).ffill()
+    open_wide = panel.pivot(index="date", columns="code", values="open").reindex(price_dates)
+    high_wide = panel.pivot(index="date", columns="code", values="high").reindex(price_dates)
+    low_wide = panel.pivot(index="date", columns="code", values="low").reindex(price_dates)
 
     # 基准：窗口起始日前已上市（首根 K 线 ≤ w_start）的存量池等权日收益
-    first_bar = panel_all.groupby("code")["date"].min()
-    bench_codes = set(first_bar[first_bar <= w_start].index) & set(close_wide.columns)
+    first_bar = pd.Series(panel.groupby("code")["date"].min())
+    bench_codes = set(first_bar.loc[first_bar <= w_start].index) & set(close_wide.columns)
 
     rebalance_dates = _rebalance_dates(window_dates, freq)
     candidates_by_exec: dict[str, tuple[int, list[str]]] = {}  # 执行日 → (目标数, 按因子值降序候选)
     for sig in rebalance_dates:
+        if check is not None:
+            check()
         exec_day = _next_day(window_dates, sig)
         if exec_day is None:
             continue
         try:
-            day = factors.xs(sig, level="date")
+            day = pd.DataFrame(factors.xs(sig, level="date"))
         except KeyError:
             continue
-        day = day.dropna(subset=[factor])
+        day = day.replace([np.inf, -np.inf], np.nan).dropna(subset=[factor])
         if len(day) < MIN_CROSS_SECTION:
             continue
         n = max(1, int(round(len(day) * top_pct))) if top_pct else top_n
-        candidates_by_exec[exec_day] = (n, day[factor].nlargest(n + 30).index.tolist())
+        candidates_by_exec[exec_day] = (n, list(pd.Series(day[factor]).nlargest(n + 30).index.astype(str)))
     if not candidates_by_exec:
         raise ValueError("给定区间无有效调仓信号日")
 
     results = {}
     for mult in (0.0, 1.0, 2.0, 3.0):
+        if check is not None:
+            check()
         results[mult] = _run_once(candidates_by_exec, close_wide, open_wide, high_wide, low_wide,
-                                  window_dates, bench_codes, mult * cost)
-    # cost 为任意浮点时取最接近的已算路径（API 校验 0-3，但 1.5 这类值不能 KeyError）
-    chosen = results[min(results, key=lambda k: abs(k - cost))]
+                                  window_dates, bench_codes, mult * cost, check=check)
+    # results 的 key 是压力倍数；1.0 路径才是用户实际选择的成本。
+    chosen = results[1.0]
 
     payload = {
         "factor": factor,
@@ -89,20 +114,16 @@ def run_backtest(factor: str, start: str | None = None, end: str | None = None,
         "cost_stress": {f"{m * cost:g}x": r["metrics"] for m, r in results.items()},
         "nav": {"dates": chosen["dates"], "strategy": chosen["nav"], "benchmark": chosen["bench"]},
         "yearly_returns": chosen["yearly"],
-        "biases": factor_data.BIAS_LABELS + ["探索级撮合：一字板顺延/停牌持仓近似，非精算"],
+        "biases": factor_data.BIAS_LABELS + ["探索级撮合：未模拟涨跌停及开盘排队限制；停牌持仓近似，非精算"],
         "timing_note": "T 日收盘因子排名 → T+1 开盘等权成交",
     }
-    _save_run(payload)
+    if save:
+        _save_run(payload)
     return payload
 
 
-def _one_word_board(o, h, l) -> bool:
-    """一字板：开=高=低（买不进也卖不出）。"""
-    return o is not None and not np.isnan(o) and h == l == o
-
-
 def _run_once(candidates_by_exec: dict, close_wide, open_wide, high_wide, low_wide,
-              window_dates: list[str], bench_codes: set, cost_mult: float) -> dict:
+              window_dates: list[str], bench_codes: set, cost_mult: float, *, check=None) -> dict:
     """单条成本路径的逐日模拟。cost_mult=0 即无成本对照。"""
     buy_cost = (COST_BPS["commission"] + COST_BPS["transfer"] + COST_BPS["slippage"]) * 1e-4 * cost_mult
     sell_cost = (COST_BPS["commission"] + COST_BPS["stamp_sell"] + COST_BPS["transfer"]
@@ -119,10 +140,10 @@ def _run_once(candidates_by_exec: dict, close_wide, open_wide, high_wide, low_wi
     prev_close: pd.Series | None = None
 
     for d in window_dates:
+        if check is not None:
+            check()
         close = close_wide.loc[d]
         opens = open_wide.loc[d]
-        highs = high_wide.loc[d]
-        lows = low_wide.loc[d]
 
         # 1) 调仓日：先卖后买（等权目标 = 可成交候选前 N 只）
         cands = candidates_by_exec.get(d)
@@ -133,21 +154,17 @@ def _run_once(candidates_by_exec: dict, close_wide, open_wide, high_wide, low_wi
             for code in cand_list:
                 if len(target) >= n_target:
                     break
-                o, h, l = opens.get(code), highs.get(code), lows.get(code)
+                o = opens.get(code)
                 if o is None or np.isnan(o):
                     continue  # 停牌
-                if h == l == o:
-                    continue  # 一字板买不进
                 target.append(code)
             target_list = target  # 有序：现金不足时优先买因子值最高的（可复现）
             pending_sell = {c for c in shares if c not in set(target_list)}
 
         for code in list(pending_sell):
-            o, h, l = opens.get(code), highs.get(code), lows.get(code)
+            o = opens.get(code)
             if o is None or np.isnan(o):
                 continue  # 停牌，下个调仓周期再试
-            if h == l == o:
-                continue  # 一字跌板卖不掉
             cash += shares[code] * o * (1 - sell_cost)
             del shares[code]
             pending_sell.discard(code)
@@ -155,13 +172,15 @@ def _run_once(candidates_by_exec: dict, close_wide, open_wide, high_wide, low_wi
         if cands is not None and target_list is not None:
             # 等权重平衡：目标每只 = equity/N。超配的减仓（卖到 budget），欠配的用现金补。
             # 预算不足时按候选顺序（因子值降序）成交——顺序确定，跨进程可复现。
-            equity = cash + sum(q * close.get(c, 0.0) for c, q in shares.items())
+            # 开盘调仓只可使用开盘或前一日估值，不可偷看当日收盘。
+            marks = opens.fillna(prev_close) if prev_close is not None else opens
+            equity = cash + sum(q * marks.get(c, 0.0) for c, q in shares.items())
             budget = equity / max(1, len(target_list))
             for code in target_list:
                 o = opens[code]
-                price_now = close.get(code, o)  # 减仓按开盘近似（与建仓同价）
+                price_now = o
                 cur_value = shares.get(code, 0.0) * price_now
-                if cur_value > budget * 1.05 and not _one_word_board(o, highs.get(code), lows.get(code)):
+                if cur_value > budget * 1.05:
                     # 超配 >5%：减仓到 budget
                     sell_qty = (cur_value - budget) / price_now
                     cash += sell_qty * o * (1 - sell_cost)
@@ -194,7 +213,8 @@ def _run_once(candidates_by_exec: dict, close_wide, open_wide, high_wide, low_wi
     for y in sorted(set(years)):
         idx = [i for i, yy in enumerate(years) if yy == y]
         seg = nav_s.iloc[idx]
-        yearly[y] = round(float(seg.iloc[-1] / seg.iloc[0] - 1.0), 4)
+        base = nav_s.iloc[idx[0] - 1] if idx[0] > 0 else 1.0
+        yearly[y] = round(float(seg.iloc[-1] / base - 1.0), 4)
     metrics = {
         "total_return": round(float(nav_s.iloc[-1] - 1.0), 4),
         "ann_return": round(float((nav_s.iloc[-1]) ** (1 / n_years) - 1.0), 4),
@@ -203,14 +223,15 @@ def _run_once(candidates_by_exec: dict, close_wide, open_wide, high_wide, low_wi
         "max_drawdown": round(float((nav_s / nav_s.cummax() - 1.0).min()), 4),
         "win_rate": round(float((rets > 0).mean()), 4) if len(rets) else None,
         # 单边换手：买入名义累计 / 平均净值权益（组合增值后初始本金分母会低估）
-        "ann_turnover": round(turnover_notional / float(nav_s.mean()) / n_years, 2),
+        "ann_turnover": round(turnover_notional / (float(nav_s.mean()) * 1_000_000.0) / n_years, 2),
         "n_days": len(nav_list),
     }
     return {"metrics": metrics, "dates": dates_out, "nav": nav_list, "bench": bench_list, "yearly": yearly}
 
 
 def _window(dates_all: list[str], start: str | None, end: str | None) -> list[str]:
-    out = dates_all
+    out = sorted(set(dates_all) | {d for d in factor_data.load_calendar()
+                                    if dates_all and dates_all[0] <= d <= dates_all[-1]})
     if start:
         out = [d for d in out if d >= start]
     if end:
@@ -246,9 +267,9 @@ def _next_day(window_dates: list[str], date: str) -> str | None:
 
 
 def _save_run(payload: dict) -> None:
-    os.makedirs(RUNS_DIR, exist_ok=True)
     name = f"{time.strftime('%Y%m%d-%H%M%S')}_{payload['factor']}_{payload['params']['freq']}.json"
     try:
+        os.makedirs(RUNS_DIR, exist_ok=True)
         with open(os.path.join(RUNS_DIR, name), "w", encoding="utf-8") as f:
             json.dump({k: payload[k] for k in ("factor", "params", "data_version", "metrics", "cost_stress")},
                       f, ensure_ascii=False)

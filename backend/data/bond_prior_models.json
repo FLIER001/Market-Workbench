@@ -1,0 +1,135 @@
+{
+  "version": "bond-priors-2026-10-21-v1",
+  "history_sha256": "592bc402d8446b98c1604005dab1d2538ea5adfd6ae2d4815d63d895c2b5ad9b",
+  "history_cutoff": "2026-10-16",
+  "evaluation_periods": [
+    "2020—2022",
+    "2023—2026（已使用）"
+  ],
+  "independent_oos": false,
+  "models": [
+    {
+      "id": "gov3M_60",
+      "group": "short",
+      "label": "3个月国债 · 利率变化",
+      "target": "gov3M",
+      "family": "short_curve",
+      "horizon": 60,
+      "members": [
+        "ridge_curve_1260_1000.0_1.0"
+      ],
+      "evidence": {
+        "audit_r2": 0.22628660710045245,
+        "extension_r2": 0.30143860124517796,
+        "q": 0.37267080745341613,
+        "years": {
+          "2020": 0.2772789205187369,
+          "2021": 0.07503387332614175,
+          "2022": 0.09458602709132102
+        },
+        "strong_evidence": false
+      },
+      "caveat": "曲线点预测不是某只债的可交易收益。"
+    },
+    {
+      "id": "short_index_120",
+      "group": "short",
+      "label": "1年以下综合债指 · 持有收益",
+      "target": "short_index",
+      "family": "short_curve",
+      "horizon": 120,
+      "members": [
+        "ridge_combined_1260_10.0_1.0",
+        "ridge_combined_1260_100.0_1.0",
+        "ridge_curve_1260_100.0_1.0",
+        "ridge_nonlinear_1260_10.0_1.0",
+        "ridge_curve_1260_10.0_1.0"
+      ],
+      "evidence": {
+        "audit_r2": 0.6689097526105745,
+        "extension_r2": 0.7114157239915818,
+        "q": 0.37267080745341613,
+        "years": {
+          "2020": 0.8718987991664975,
+          "2021": 0.8758513419664177,
+          "2022": -1.2572952444641983
+        },
+        "strong_evidence": false
+      },
+      "caveat": "收益估计改善未带来优于一直持有的择时结果。"
+    },
+    {
+      "id": "3-5Y_60",
+      "group": "medium",
+      "label": "3—5年综合债指 · 持有收益",
+      "target": "3-5Y",
+      "family": "long_momentum",
+      "horizon": 60,
+      "members": [
+        "ridge_momentum_1260_1000.0_1.0"
+      ],
+      "evidence": {
+        "audit_r2": 0.0366362880508021,
+        "extension_r2": 0.042538611827690365,
+        "q": null,
+        "years": {
+          "2020": 0.09654214028419528,
+          "2021": -0.749627511927837,
+          "2022": -0.029719740368182812
+        },
+        "strong_evidence": false
+      },
+      "caveat": "按模型族观察的弱线索；2021、2022年退化，改善区间包含零。"
+    },
+    {
+      "id": "7-10Y_20",
+      "group": "long",
+      "label": "7—10年综合债指 · 持有收益",
+      "target": "7-10Y",
+      "family": "long_momentum",
+      "horizon": 20,
+      "members": [
+        "ridge_momentum_1260_1000.0_1.0"
+      ],
+      "evidence": {
+        "audit_r2": 0.06032019166437452,
+        "extension_r2": 0.012058858392472782,
+        "q": null,
+        "years": {
+          "2020": 0.1755661699719635,
+          "2021": -0.22520954874867471,
+          "2022": -0.0747590187990097
+        },
+        "strong_evidence": false
+      },
+      "caveat": "按模型族观察的弱线索；2021、2022年退化，改善区间包含零。"
+    },
+    {
+      "id": "7-10Y_60",
+      "group": "long",
+      "label": "7—10年综合债指 · 持有收益",
+      "target": "7-10Y",
+      "family": "long_momentum",
+      "horizon": 60,
+      "members": [
+        "ridge_momentum_1260_1000.0_1.0"
+      ],
+      "evidence": {
+        "audit_r2": 0.011899001394106268,
+        "extension_r2": 0.03280733143344272,
+        "q": null,
+        "years": {
+          "2020": 0.1492364554047565,
+          "2021": -1.210519598548192,
+          "2022": -0.01921190671589801
+        },
+        "strong_evidence": false
+      },
+      "caveat": "按模型族观察的弱线索；2021、2022年退化，改善区间包含零。"
+    }
+  ],
+  "source_reports": {
+    "research/output/bonds_short_tenor_2026-10-21/result.json": "c49ebf026cd550bd1c5675594f30b21cad9194a7127b3c9a59775bd07cda0834",
+    "research/output/bonds_tuning/positive_family_diagnostics.json": "ee1f897ced804559b28e59926a2104439646be12a93e40055d2ba123dcaadd78"
+  }
+}

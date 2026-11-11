@@ -78,7 +78,9 @@ TOOLS: list[dict] = [
        "查个股 K 线并附区间统计（起止价、区间涨跌幅、最高/最低、振幅）。判断价格位置与趋势用。",
        {**_CODE,
         "period": {"type": "string", "enum": ["day", "week", "month"], "description": "周期，默认 day"},
-        "count": {"type": "integer", "description": "取最近多少根，默认 60，最大 250"}},
+        "count": {"type": "integer", "description": "取最近多少根，默认 60，最大 250"},
+        "detail_count": {"type": "integer", "minimum": 1, "maximum": 250,
+                         "description": "返回最近多少根明细，默认30，最多250且不超过取到的数量；计算MA200时传250"}},
        ["code"],
        "看中远海控最近半年周线走势 → query_kline(code='601919', period='week', count=26)"),
 
@@ -91,7 +93,7 @@ TOOLS: list[dict] = [
        "这家公司是做什么的、盘子多大 → query_company_info(code='002594')"),
     _t("query_reports", "查个股近期研报列表（标题/机构/评级/日期）。", _CODE, ["code"],
        "卖方最近怎么评论恒瑞医药 → query_reports(code='600276')"),
-    _t("query_news", "查个股近期新闻（标题/时间/来源）。", _CODE, ["code"],
+    _t("query_news", "查个股近期新闻（标题/时间/来源/原文链接/最多300字符摘要），摘要不是全文。", _CODE, ["code"],
        "三一重工最近有什么动静 → query_news(code='600031')"),
 
     # —— 资金面与筹码 ——
@@ -112,9 +114,16 @@ TOOLS: list[dict] = [
        "工商银行历年分红与股息率 → query_dividend(code='601398')"),
 
     # —— 事件与风险 ——
-    _t("query_announcements", "查个股近期公告（标题/日期/类型）。查风险与重大事项先用这个。", _CODE, ["code"],
+    _t("query_announcements", "查个股公告（标题/日期/类型/原文详情链接），支持日期区间和分页。默认返回列表；include_metadata=true另含总数及覆盖信息，空列表不自动等于无事件。",
+       {**_CODE, "start_date": {"type": "string", "description": "起始日期YYYY-MM-DD，可省略"},
+        "end_date": {"type": "string", "description": "结束日期YYYY-MM-DD，可省略"},
+        "page": {"type": "integer", "minimum": 1, "description": "页码，默认1"},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "每页条数，默认15，最大100"},
+        "include_metadata": {"type": "boolean", "description": "是否返回records及coverage，默认false"}}, ["code"],
        "最近有没有减持/并购/业绩预告 → query_announcements(code='601899')"),
-    _t("query_lockup", "查个股限售解禁：历史解禁记录 + 未来 90 天待解禁事件（日期/类型/股数/占比）。", _CODE, ["code"],
+    _t("query_lockup", "查限售解禁：history仅过去、scheduled为已取得的未来计划、upcoming为指定窗口。单批unlock_shares_wan和累计post_unlock_float_wan单位万股；ratio_raw口径不明不直接按百分比评级。",
+       {**_CODE, "trade_date": {"type": "string", "description": "日历划分基准YYYY-MM-DD，默认上海当天；不是历史PIT"},
+        "forward_days": {"type": "integer", "minimum": 0, "maximum": 365, "description": "未来窗口天数，默认90"}}, ["code"],
        "未来三个月有多少限售股要解禁 → query_lockup(code='688981')"),
     _t("query_investor_qa", "查个股投资者互动易问答（公司对投资者提问的官方回复，常含经营细节）。", _CODE, ["code"],
        "公司在互动易上怎么回应订单问题 → query_investor_qa(code='002460')"),
@@ -281,12 +290,23 @@ def _kline_tencent(code: str, period: str, n: int) -> list[dict]:
     return out
 
 
+def _news(args: dict):
+    rows = _pick(astock.stock_news(str(args["code"]), limit=15),
+                 ("新闻标题", "发布时间", "文章来源", "新闻链接", "新闻内容"), 15)
+    for row in rows:
+        row["新闻内容"] = str(row.get("新闻内容") or "")[:300]
+    return rows
+
+
 def _kline(args: dict):
     period = str(args.get("period") or "day")
     if period not in ("day", "week", "month"):
         period = "day"
     cat = {"day": 4, "week": 5, "month": 6}[period]
     n = max(5, min(int(args.get("count") or 60), 250))
+    detail_count = args.get("detail_count", 30)
+    if isinstance(detail_count, bool) or not isinstance(detail_count, int) or not 1 <= detail_count <= 250:
+        raise ValueError("detail_count须为1至250的整数")
     code = str(args["code"])
     # 腾讯优先：HTTP、实测不封 IP、亚秒级返回；mootdx 走 TCP 7709，连不通时要等十几秒超时
     # （实测本机就是这种情况），放在后面当备份而不是主路径。
@@ -315,9 +335,10 @@ def _kline(args: dict):
         if stat["highest"] and stat["lowest"] and stat["lowest"]:
             stat["amplitude_pct"] = round((stat["highest"] - stat["lowest"]) / stat["lowest"] * 100, 2)
             stat["drawdown_from_high_pct"] = round((last - stat["highest"]) / stat["highest"] * 100, 2)
-    # 明细只回最近 30 根，避免长周期请求把上下文撑爆
-    detail = _pick(rows[-30:], ("date", "open", "close", "high", "low", "volume"), 30)
-    return {"summary": stat, "recent": detail}
+    detail = _pick(rows[-min(n, detail_count):], ("date", "open", "close", "high", "low", "volume"), detail_count)
+    return {"summary": stat, "recent": detail,
+            "coverage": {"requested_bars": n, "available_bars": len(rows), "returned_bars": len(detail),
+                         "detail_limit": detail_count, "complete": len(rows) >= n and len(detail) == n}}
 
 
 _FFLOW_DELAY = "https://push2delay.eastmoney.com/api/qt/stock/fflow/daykline/get"
@@ -730,16 +751,16 @@ def _industry_chain(args: dict) -> dict:
 def _gold_score(args: dict):
     """黄金评分：总分/信号 + 五维得分 + 正负贡献因子各取前 5。"""
     d = gold_score.get_gold_score() or {}
-    if not d.get("gold_score"):
-        return {"error": "黄金评分暂不可用"}
-    def _drv(items):
-        return [{k: x.get(k) for k in ("name", "score", "weight", "desc")} for x in (items or [])[:5] if isinstance(x, dict)]
+    if d.get('score_status') != 'complete':
+        return {'score': None, 'score_status': d.get('score_status'), 'data_quality': d.get('data_quality'),
+                'last_complete_score': d.get('last_complete_score'), 'validation_status': 'unverified'}
     return {
         "date": d.get("date"), "score": d.get("gold_score"),
         "signal": d.get("signal"), "confidence": d.get("confidence"),
         "coverage": d.get("coverage"),
-        "top_positive_drivers": _drv(d.get("top_positive_drivers")),
-        "top_negative_drivers": _drv(d.get("top_negative_drivers")),
+        'model_version': d.get('model_version'), 'score_status': d.get('score_status'),
+        'validation_status': d.get('validation_status'), 'driver_agreement': d.get('driver_agreement'),
+        'contributions': d.get('contributions'), 'score_as_of': d.get('score_as_of'),
     }
 
 
@@ -988,8 +1009,7 @@ _HANDLERS = {
     "query_company_info": _company_info,
     "query_reports": lambda a: _pick(astock.eastmoney_reports(str(a["code"]), max_pages=1),
                                      ("title", "publishDate", "orgSName", "emRatingName"), 15),
-    "query_news": lambda a: _pick(astock.stock_news(str(a["code"]), limit=15),
-                                  ("新闻标题", "发布时间", "文章来源"), 15),
+    "query_news": _news,
     "query_fund_flow": _fund_flow,
     "query_margin": lambda a: _pick(astock.margin_trading(str(a["code"])),
                                     ("date", "rzye", "rzmre", "rzche", "rqye", "rzrqye"), 15),
@@ -997,8 +1017,12 @@ _HANDLERS = {
     "query_block_trade": lambda a: _pick(astock.block_trade(str(a["code"])), None, 15),
     "query_dragon_tiger": lambda a: astock.dragon_tiger_board(str(a["code"])),
     "query_dividend": lambda a: _pick(astock.dividend_history(str(a["code"])), None, 12),
-    "query_announcements": lambda a: _pick(astock.announcements(str(a["code"])), ("title", "date", "type"), 15),
-    "query_lockup": lambda a: astock.lockup_expiry(str(a["code"])),
+    "query_announcements": lambda a: astock.announcements(
+        str(a["code"]), limit=a.get("limit", 15), page=a.get("page", 1),
+        start_date=_norm_opt_date(a.get("start_date")), end_date=_norm_opt_date(a.get("end_date")),
+        include_metadata=a.get("include_metadata", False)),
+    "query_lockup": lambda a: astock.lockup_expiry(
+        str(a["code"]), trade_date=_norm_opt_date(a.get("trade_date")), forward_days=a.get("forward_days", 90)),
     "query_investor_qa": _investor_qa,
     "query_concepts": _concepts,
     "query_industry_comparison": lambda a: astock.industry_comparison(top_n=max(5, min(int(a.get("top_n") or 20), 50))),

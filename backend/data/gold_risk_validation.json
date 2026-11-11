@@ -1,0 +1,49 @@
+{
+  "model_version": "gold-risk-prior-1.0",
+  "status": "research_only",
+  "independent_oos": false,
+  "evaluated_at": "2026-10-20T10:42:38.689402+00:00",
+  "sample_start": "2020-05-15",
+  "sample_end": "2026-09-18",
+  "sample_count": 332,
+  "mse_improvement_vs20": 0.2857251479257596,
+  "mse_improvement_vs60": 0.1938597663712709,
+  "tail26_improvement_vs20": 0.3485045282796844,
+  "exclusion2020_improvement_vs20": 0.27208162870848035,
+  "fold_improvement_vs20": [
+    0.3561764545062518,
+    0.3364480366925311,
+    0.25186122303750813
+  ],
+  "nonoverlap_phase_min_improvement": 0.24827059661590112,
+  "nonoverlap_phase_n": [
+    75,
+    75,
+    75,
+    75,
+    74
+  ],
+  "source_hash": "5bc3f1378f7f8240be8162a843ebea58bac977bd68f1b9612c2d2b437d9cfc2b",
+  "limits": [
+    "最新修订数据与发布时点代理，非完整原始历史版本",
+    "第二、三轮根据前轮结果调整候选；尚无独立前瞻验证",
+    "窄参数族同时区间未覆盖全部跨轮调参，不能据此宣布显著性"
+  ],
+  "candidates": [
+    {
+      "label": "三参数方差集合",
+      "mse_improvement_vs20": 0.2857251479257596,
+      "mse_improvement_vs60": 0.1938597663712709
+    },
+    {
+      "label": "EWMA λ=0.97",
+      "mse_improvement_vs20": 0.25116429834973164,
+      "mse_improvement_vs60": 0.1548539253134219
+    },
+    {
+      "label": "EWMA λ=0.99（事后较优对照）",
+      "mse_improvement_vs20": 0.3092840912723641,
+      "mse_improvement_vs60": 0.22044870764272406
+    }
+  ]
+}

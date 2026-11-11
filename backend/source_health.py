@@ -90,7 +90,7 @@ def _probe_em_search() -> str | None:
     try:
         r = astock.em_get(
             "https://searchapi.eastmoney.com/api/suggest/get",
-            params={"input": "600519", "type": 14, "token": "D43BF722C8E33BDC906FB84D85E326E8", "count": 5},
+            params={"input": "600519", "type": 14, "count": 5},
             headers={"User-Agent": astock.UA}, timeout=8,
         )
         rows = (r.json().get("QuotationCodeTable") or {}).get("Data") or []
@@ -108,7 +108,8 @@ def _probe_sws() -> str | None:
             "https://www.swsresearch.com/institute-sw/api/index_analysis/week_month_datetime/",
             params={"page": "1", "pagesize": "1"},
             headers={"User-Agent": astock.UA, "Referer": "https://www.swsresearch.com/"},
-            timeout=8, verify=False,
+            verify=False,  # 与正式抓取同一入口：该站证书链校验失败，sector_scores._request_json 同样关校验
+            timeout=8,
         )
         return None if str(r.json().get("code")) == "200" else f"接口码 {r.json().get('code')}"
     except Exception as e:  # noqa: BLE001
@@ -145,19 +146,21 @@ def _probe_frankfurter() -> str | None:
 
 
 def _probe_eia() -> str | None:
-    """EIA v2 API（油价页周度数据兜底源；DEMO_KEY 限流严格）。"""
+    """EIA 周度石油数据：正式抓取以 bulk zip 为主源（无 key、无限流），v2 仅兜底。
+
+    探 bulk 的前 4 字节（zip 头 PK）：拿 DEMO_KEY 直探 v2 永远是被限流的那条路，
+    测不出真实链路，只会制造「源挂了」的假警报。
+    """
     import requests
 
-    key = __import__("os").environ.get("MW_EIA_API_KEY") or "DEMO_KEY"
+    import oil
+
     try:
         r = requests.get(
-            "https://api.eia.gov/v2/petroleum/sum/sndw/data/",
-            params={"api_key": key, "frequency": "weekly", "data[0]": "value",
-                    "facets[product][]": "WCESTUS1", "length": "1"},
-            timeout=8,
+            oil._EIA_BULK_URL, headers={"Range": "bytes=0-3"}, timeout=8, stream=True
         )
-        body = r.json()
-        return None if body.get("response", {}).get("data") else "无数据返回（可能是 DEMO_KEY 限流）"
+        body = next(r.iter_content(4), b"")
+        return None if body[:2] == b"PK" else f"返回体异常：HTTP {r.status_code}"
     except Exception as e:  # noqa: BLE001
         return f"连接失败：{type(e).__name__}"
 

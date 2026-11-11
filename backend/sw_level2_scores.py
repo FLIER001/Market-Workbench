@@ -23,6 +23,7 @@ from datetime import date, datetime, timedelta, timezone
 import requests
 import urllib3
 import cache_runtime
+import score_worker
 
 from sector_scores import (
     _HEADERS,
@@ -544,11 +545,11 @@ def get_cached_level2_scores() -> dict | None:
 
 
 def get_level2_scores(force: bool = False) -> dict:
-    cached = _load_cache()
+    cached = cache_runtime.peek("sw_level2_scores:v2") or _load_cache()
     return cache_runtime.get(
-        "sw_level2_scores:v2", _build,
+        "sw_level2_scores:v2", lambda: score_worker.rebuild(__name__, _load_cache),
         valid=lambda value: bool(value.get("industries")),
-        ttl=_cache_ttl(cached or {}), warm=_load_cache, save=_save_cache, force=force,
+        ttl=_cache_ttl(cached or {}), warm=lambda: cached, force=force,
     )
 
 

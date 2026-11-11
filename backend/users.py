@@ -22,8 +22,11 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(os.path.expanduser("~"), ".market-workbench")
-os.makedirs(CACHE_DIR, exist_ok=True)
-DB_FILE = os.path.join(CACHE_DIR, "users.db")
+DB_FILE = os.environ.get("MW_USERS_DB") or os.path.join(CACHE_DIR, "users.db")
+try:
+    os.makedirs(os.path.dirname(os.path.abspath(DB_FILE)), exist_ok=True)
+except OSError as exc:
+    raise RuntimeError("无法创建账号数据目录") from exc
 
 _PBKDF2_ROUNDS = 200_000
 _SESSION_TTL = 60 * 60 * 24 * 30  # 30 天
@@ -104,8 +107,8 @@ def register(username: str, password: str) -> dict:
                 (username, pw_hash, salt, time.time()),
             )
             uid = cur.lastrowid
-    except sqlite3.IntegrityError:
-        raise ValueError("用户名已被占用")
+    except sqlite3.IntegrityError as exc:
+        raise ValueError("用户名已被占用") from exc
     return {"id": uid, "username": username}
 
 

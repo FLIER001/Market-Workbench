@@ -45,3 +45,7 @@ frontend/tsconfig.tsbuildinfo
 
 # ── Pi 本地会话数据（只存本地、不上传） ──────────────────────
 .pi/
+
+# ── 研究/回测产物（体积大：outputs 344MB、research/output 530MB，不入库） ──
+outputs/
+research/output/

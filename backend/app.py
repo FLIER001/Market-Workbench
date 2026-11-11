@@ -13,11 +13,11 @@ import hashlib
 import json
 import os
 import subprocess
-import sys
 import threading
 import time as _time
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -26,39 +26,41 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from pathlib import Path
 
 import astock
 import bonds as bonds_layer
+import cache_runtime
 import chat as chat_layer
 import cli_runtime
-import gstock
+import factor_lab as factor_research_layer
+import factor_lab_routes
+import fedwatch as fedwatch_layer
 import fund
 import fund_pfs
 import fund_portfolio as fpf
+import gold_score as gold_score_layer
+import gstock
 import holder_increase
+import industry_chain as industry_chain_layer
+import index_history
+import market
+import mem_watchdog
+import myreports as mr
 import newsradar
+import oil as oil_layer
+import plate_scores as plate_scores_layer
 import portfolio as pf
+import pulse.market_pulse as pulse_market_pulse
+import reflection as reflect_layer
+import score_scheduler
+import score_worker
+import sector_scores as sector_scores_layer
+import stock_cache
+import sw_level2_scores as sw_level2_layer
 import timing
 import timing_alloc
-import users
-import market
-import gold_score as gold_score_layer
-import fedwatch as fedwatch_layer
-import oil as oil_layer
-import myreports as mr
-import reflection as reflect_layer
-import plate_scores as plate_scores_layer
-import sector_scores as sector_scores_layer
-import sw_level2_scores as sw_level2_layer
-import industry_chain as industry_chain_layer
 import tools as tools_layer
-import cache_runtime
-import mem_watchdog
-import stock_cache
-import score_scheduler
-import pulse.market_pulse as pulse_market_pulse
-
+import users
 from version import read_version
 
 __version__ = read_version()
@@ -67,8 +69,13 @@ __version__ = read_version()
 @asynccontextmanager
 async def _lifespan(application: FastAPI):
     # 导入模块只注册路由；调度/预热属于真正的 ASGI 服务启动。
-    _start_background_jobs()
-    yield
+    factor_research_layer.init_db()
+    factor_research_layer.start_worker()
+    try:
+        _start_background_jobs()
+        yield
+    finally:
+        factor_research_layer.stop_worker()
 
 
 app = FastAPI(title="Market Workbench API", version=__version__, lifespan=_lifespan)
@@ -77,27 +84,17 @@ app = FastAPI(title="Market Workbench API", version=__version__, lifespan=_lifes
 def _recalc_in_subprocess(module: str, entry: str, adopt) -> None:
     """评分重算下沉子进程：子进程算完落盘退出，内存随进程归还系统。
 
-    为什么不在主进程算：macOS 上 Python/NumPy 释放的页不还给系统（实测见
-    mem_watchdog），全市场评分每轮重算会在主进程留下几十 MB 永久残渣
-    （实测 4.3MB/min 只涨不跌，105 分钟从 266MB 涨回 711MB）。子进程
-    退出即全额归还，主进程堆上不再出现面板级大分配。
+    全市场评分会分配大型临时面板，释放对象后运行时仍可能保留分配高水位。
+    定时任务与请求路径共用 worker 锁；子进程退出后，只把结果快照换入主进程。
 
     子进程失败（非零退出/超时/OSError）时保留内存旧值，由下轮调度或
     真实请求的 TTL 路径兜底。stdout/stderr 继承主进程，错误进后端日志。
     """
     try:
-        proc = subprocess.run(
-            [sys.executable, "-c", f"import {module}; {module}.{entry}"],
-            cwd=os.path.dirname(os.path.abspath(__file__)),
-            timeout=1800,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        score_worker.rebuild(module, adopt, entry=entry)
+    except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
         print(f"[recalc-subprocess] {module} 执行异常：{exc}", flush=True)
         return
-    if proc.returncode != 0:
-        print(f"[recalc-subprocess] {module} 退出码 {proc.returncode}，保留旧值", flush=True)
-        return
-    adopt()
 
 
 def _warm_holder_increase() -> None:
@@ -1087,6 +1084,18 @@ def market_turnover_top():
         raise HTTPException(502, f"成交额榜异常：{e}") from e
 
 
+@app.get("/api/indices/history")
+def indices_history(symbol: str = Query(..., pattern="^(sh|sz|bj)[0-9]{6}$"), refresh: bool = False):
+    if symbol not in index_history._INDEXES:
+        raise HTTPException(404, "不支持的指数")
+    try:
+        return {"data": _stock_cached("index_history:v2", symbol, 6 * 3600, lambda: index_history.index_history(symbol), refresh)}
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from e
+    except Exception as e:
+        raise HTTPException(502, f"指数历史异常：{e}") from e
+
+
 @app.get("/api/market/liquidity")
 def market_liquidity(refresh: bool = False):
     """资金供给重要指标（国内：两融 / 主力净流入；国外：美债 10Y / 5Y / 3M 与 10Y-3M 利差）。缓存 5 分钟。"""
@@ -1505,7 +1514,9 @@ def lockup(code: str = Query(...)):
     """限售解禁日历：历史解禁 + 未来 90 天待解禁（东财）。缓存 30 分钟。"""
     code = _validate(code)
     try:
-        return {"data": _cached("lockup", code, 1800, lambda: astock.lockup_expiry(code))}
+        return {"data": _stock_cached(
+            "lockup", code, 1800, lambda: astock.lockup_expiry(code),
+            valid=lambda value: isinstance(value, dict) and "scheduled" in value and "coverage" in value)}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"解禁日历异常：{e}") from e
 
@@ -1722,11 +1733,20 @@ def bonds_curve(request: Request, response: Response, refresh: bool = False):
 
 @app.get("/api/bonds/overview")
 def bonds_overview(request: Request, response: Response, refresh: bool = False):
-    """债市页聚合：曲线 / 资金利率 / 政策利率锚 / 中债指数 / 中美对照。各块独立降级。"""
+    """债市统一快照：原始行情、八维观察、现金流情景、品种比较与预测验证；源故障独立标注。"""
     try:
         return _conditional_json(bonds_layer.get_overview(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"债市总览异常：{e}") from e
+
+
+@app.get("/api/bonds/priors")
+def bonds_priors(request: Request, response: Response, refresh: bool = False):
+    """Short/medium/long maturity candidate priors, independently dated and cached."""
+    try:
+        return _conditional_json(bonds_layer.get_priors(force=refresh), request, response)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"债市候选先验异常：{e}") from e
 
 
 @app.get("/api/bonds/framework")
@@ -1740,7 +1760,7 @@ def bonds_framework(request: Request, response: Response, refresh: bool = False)
 
 @app.get("/api/bonds/calc")
 def bonds_calc(refresh: bool = False):
-    """小型计算层：各关键期限 carry / roll / breakeven（曲线推导，确定性公式）。"""
+    """标准化平价债现金流情景：同日融资代理、3个月持有收益、久期/DV01及压力情景。"""
     try:
         return {"data": bonds_layer.get_calc(force=refresh)}
     except Exception as e:  # noqa: BLE001
@@ -1758,7 +1778,7 @@ def bonds_positioning(request: Request, response: Response, refresh: bool = Fals
 
 @app.get("/api/bonds/segments")
 def bonds_segments(request: Request, response: Response, refresh: bool = False):
-    """分品种评分：短债/中短/长债/超长/信用/杠杆套息，八状态加权 + carry 锚 + 失效条件。"""
+    """同一快照的分品种情景与实验指标；未验证分数不作投资排序。"""
     try:
         return _conditional_json(bonds_layer.get_segments(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
@@ -1767,7 +1787,7 @@ def bonds_segments(request: Request, response: Response, refresh: bool = False):
 
 @app.get("/api/bonds/insight")
 async def bonds_insight(refresh: bool = Query(False)):
-    """AI 通俗解读分品种评分（品种优先顺序 + 各品种简要解析）。refresh=true 重新生成并写回快照。"""
+    """绑定输入指纹的AI数据解读；refresh=true重生成，旧版本解读不复用。"""
     try:
         return {"data": await bonds_layer.get_ai_insight(force=refresh) or ""}
     except Exception as e:  # noqa: BLE001
@@ -1800,6 +1820,24 @@ def gold_spot():
         return {"data": gold_score_layer.gold_spot()}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"实时金价异常：{e}") from e
+
+
+@app.get('/api/gold/research')
+def gold_research():
+    """Read-only, versioned research summary. No backtest runs in HTTP handlers."""
+    return {'data': gold_score_layer.get_validation_summary()}
+
+
+@app.get('/api/gold/risk')
+def gold_risk():
+    """Frozen volatility research candidate from cached LBMA PM prices."""
+    return {'data': gold_score_layer.get_risk_forecast()}
+
+
+@app.get('/api/gold/direction')
+def gold_direction():
+    """Fixed exploratory direction prior; no online fitting or parameter search."""
+    return {'data': gold_score_layer.get_direction_forecast()}
 
 
 @app.get("/api/gold/cn-spot")
@@ -1922,6 +1960,10 @@ async def allocation_insight(refresh: bool = Query(False)):
 # 因子实验室：数据构建 / 单因子检验 / 探索性组合回测
 # ---------------------------------------------------------------------------
 
+# Research routes must be registered before the SPA fallback below.
+app.include_router(factor_lab_routes.create_router(_current_user))
+
+
 @app.get("/api/factor/lab")
 def factor_lab():
     """因子实验室元信息：可用因子（分组）、数据状态（日线+PIT 财务）、偏差标签。"""
@@ -1945,12 +1987,12 @@ def _run_full_build():
 
     try:
         factor_data.build_dataset()
-    except Exception:  # noqa: BLE001 — 日线失败也继续试财务（可能已有旧日线）
-        pass
+    except Exception as exc:  # noqa: BLE001 — 日线失败也继续试财务（可能已有旧日线）
+        print(f"[factor-build] 日线构建失败：{type(exc).__name__}", flush=True)
     try:
         factor_pit.build_fundamentals()
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        print(f"[factor-build] 财务构建失败：{type(exc).__name__}", flush=True)
 
 
 @app.post("/api/factor/build")

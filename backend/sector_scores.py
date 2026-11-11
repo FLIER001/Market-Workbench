@@ -29,6 +29,7 @@ import urllib3
 
 import astock
 import cache_runtime
+import score_worker
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -1029,11 +1030,11 @@ def get_cached_sector_scores() -> dict | None:
 
 
 def get_sector_scores(force: bool = False) -> dict:
-    cached = _load_cache()
+    cached = cache_runtime.peek("sector_scores:v6") or _load_cache()
     return cache_runtime.get(
-        "sector_scores:v6", _build,
+        "sector_scores:v6", lambda: score_worker.rebuild(__name__, _load_cache),
         valid=lambda value: bool(value.get("industries")),
-        ttl=_cache_ttl(cached or {}), warm=_load_cache, save=_save_cache, force=force,
+        ttl=_cache_ttl(cached or {}), warm=lambda: cached, force=force,
     )
 
 

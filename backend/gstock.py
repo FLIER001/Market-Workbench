@@ -325,8 +325,8 @@ def _search(q: str) -> dict | None:
     搜 BABA 混入 05593(窝轮)，且 SecurityType 分不开(正股与 ETF 同为 Type7、正股港股与窝轮同为 Type6)。
     正股的 Code 恰好等于查询词，故精确匹配 Code==q 最稳；无精确匹配(名称查询)才退回第一条。
     """
-    params = {"input": q, "type": 14,
-              "token": "D43BF722C8E33BDC906FB84D85E326E8", "count": 10}
+    # 搜索建议接口可匿名访问，不发送固定 token。
+    params = {"input": q, "type": 14, "count": 10}
 
     rows, last_error = None, None
     for url in _SEARCH_ENDPOINTS:

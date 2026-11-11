@@ -1,9 +1,9 @@
-"""黄金价格多维评分系统（方案 V2.1，沿用 research/黄金价格多维评分系统技术方案_V2.0.md）。
+"""黄金环境监测 V3（方法见 research/gold_methodology_v3.md）。
 
 5 维 8 指标，总分 100：
   G01 美国10年期TIPS实际收益率        美国财政部（日；FRED兜底/校验）
   G02 广义贸易加权美元指数            FRED DTWEXBGS（日）
-  G03 全球实物黄金ETF超预期流量      WGC 100+基金（周，吨）
+  G03 ETF相对动量模型的流量残差      WGC 100+基金（周，吨）
   G04 COMEX管理基金净多头动量         CFTC Disaggregated COT 官方年报（周）
   G05 OFR金融压力（剔除安全资产）      OFR 官方 fsi.csv（日）
   G06 全球已报告央行滚动储备变动      IMF IFS（月，吨）
@@ -11,11 +11,12 @@
   G08 黄金中期风险调整动量           WGC/ICE LBMA PM USD/oz（日）
 
 单项得分 = 原始信号历史分位 × 100（G06 用 2010 年以来月度序列，其余 5 年日/周频）；
-G04 带拥挤度上限修正；G05 带美元+实际利率同升状态修正；缺失指标权重归一化。
+G04 带拥挤度上限修正；G05 带美元+实际利率同升状态修正；核心指标无效时暂停新总分；固定权重，不重归一化。
 """
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 import math
@@ -46,7 +47,11 @@ _GOLD_SERIES_TTL = 6 * 3600          # 外部日/周频序列 6h 内 0 外呼
 
 # payload 结构版本。只用于「关键字段能力探测」的降级判断，
 # 不再作为快照可用性的硬门槛（见 _load_gold_snapshot）。
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
+MODEL_VERSION = "gold-environment-3.0"
+_RECORD_DIR = os.path.join(os.path.dirname(_SNAPSHOT), "gold_records", MODEL_VERSION)
+_INPUT_DIR = os.path.join(os.path.dirname(_SNAPSHOT), "gold_inputs")
+_GOLD_BUILD_LOCK = threading.RLock()
 # 历史序列下发点数上限。这些序列只喂前端 Sparkline，渲染宽度数百 px，
 # 500 点/指标纯属过采样：抽稀到 200 点后 payload 约 180KB → 60KB。
 # 而前端持久化层按 UTF-16 计费（180KB ≈ 360KB 配额占用），
@@ -93,7 +98,7 @@ _SOURCE_MAX_AGE_DAYS = {
 _META = {
     "g01_real_rate": ("美国10年期实际利率", "机会成本与美元", 0.25, "{:.2f}%"),
     "g02_dollar":    ("广义贸易加权美元指数", "机会成本与美元", 0.15, "{:.1f}"),
-    "g03_etf":       ("全球实物黄金ETF持仓", "投资资金与仓位", 0.15, "{:.1f} 吨"),
+    "g03_etf":       ("ETF流量残差", "投资资金与仓位", 0.15, "{:.1f} 吨"),
     "g04_comex":     ("COMEX管理基金净多头", "投资资金与仓位", 0.10, "{:+.1f}% OI"),
     "g05_stress":    ("OFR金融压力（剔除安全资产）", "金融风险与避险", 0.10, "{:+.2f}"),
     "g06_cb":        ("全球已报告央行滚动储备变动", "结构性需求", 0.10, "{:+.0f} 吨/12月"),
@@ -167,6 +172,7 @@ _TROY_OZ_GRAMS = 31.1034768
 _USDCNY_URL = "https://hq.sinajs.cn/list=fx_susdcny"
 _USDCNY_TTL = 600  # 秒；汇率日内波动远小于金价，10 分钟足够
 _USDCNY_CACHE: dict[str, tuple[float, float]] = {}
+_USDCNY_META: dict = {}
 _USDCNY_LOCK = threading.Lock()
 
 
@@ -508,6 +514,7 @@ def usdcny_rate() -> float | None:
             if not math.isfinite(rate) or not 5 <= rate <= 9:
                 raise ValueError(f"USDCNY 异常：{rate}")
             _USDCNY_CACHE["usdcny"] = (now, rate)
+            _USDCNY_META['fetched_at'] = datetime.now(BEIJING).isoformat(timespec='seconds')
             return rate
         except Exception:  # noqa: BLE001 — 汇率缺失只降级折算字段，不影响 USD 行情
             return hit[1] if hit else None
@@ -522,10 +529,10 @@ def _paxg_to_cny_gram(usd_per_oz: float | None, fx: float | None) -> float | Non
 
 
 def paxg_usd_spot() -> dict:
-    """PAXG-USD 暗盘现货：7×24 实时行情 + 当日分时。
+    """PAXG/USDT交易所代理：7×24 实时行情 + 当日分时。
 
     数据源：Binance 公共行情镜像（data-api.binance.vision）。每枚 PAXG 锚定 1
-    盎司伦敦金 Good Delivery，与现货黄金同口径、暗盘时段也连续出价。失败回退
+    盎司伦敦金权益；交易所USDT报价不是伦敦现货定盘，失败回退
     最近一次成功结果（stale 标记）。
     """
     now = time.time()
@@ -590,7 +597,12 @@ def paxg_usd_spot() -> dict:
             chart_points = [{"time": p["time"], "price": p["price"], "volume": p["volume"]}
                            for p in points]
             payload = {
-                "name": "PAXG-USD（现货黄金暗盘）",
+                "name": "PAXG/USDT · Binance交易所代理",
+                'quote_currency': 'USDT',
+                'fx_as_of': _USDCNY_META.get('fetched_at'),
+                'fx_time_basis': 'fetched_at',
+                'fx_stale': bool(_USDCNY_CACHE.get('usdcny') and now - _USDCNY_CACHE['usdcny'][0] > _USDCNY_TTL),
+                'conversion_assumption': 'USDT≈USD；使用同一汇率折算，不代表人民币实际收益',
                 "price": last_price,
                 "prev_close": prev_close,
                 "change": change,
@@ -668,6 +680,8 @@ def _source_status(key: str, stale: bool, fetched_at: float | None,
         "latest_period": latest_period,
         "age_days": age_days,
         "max_age_days": max_age_days,
+        "usable": bool(rows) and not observation_lag,
+        "fetch_status": "fallback" if stale else "ok",
     }
 
 
@@ -809,7 +823,7 @@ def _ofr_fsi() -> list[tuple[str, float]]:
         raw = _curl(_OFR_CSV).decode("utf-8", "ignore")
         if not raw.startswith("Date,"):
             return []
-        return _parse_ofr_ex_safe(raw)[-1300:]
+        return _parse_ofr_ex_safe(raw)[-2400:]
     return _series_cached("gold:ofr", fetch)
 
 
@@ -889,7 +903,7 @@ def _usd_cny() -> list[tuple[str, float]]:
         import akshare as ak
         fx = ak.currency_boc_safe()
         return [(str(d)[:10], float(v) / 100) for d, v in zip(fx["日期"], fx["美元"])
-                if v == v and float(v) > 0][-1300:]
+                if v == v and float(v) > 0][-2400:]
     return _series_cached("gold:fx", fetch)
 
 
@@ -983,21 +997,33 @@ def _pct_rank(series: list[float], current: float) -> float:
     if len(xs) < 20:
         return 0.5
     below = sum(1 for v in xs if v < current)
-    return below / len(xs)
+    equal = sum(1 for v in xs if v == current)
+    return (below + 0.5 * equal) / len(xs)
 
 
-def _score_history(rows: list[tuple[str, float]], reference: list[float] | None = None) -> list[tuple[str, float]]:
-    """逐点扩展窗口分位：每个历史时点只用截至当日的数据，避免前视偏差。
+def _score_history(rows: list[tuple[str, float]], reference=None, *, expanding=False) -> list[tuple[str, float]]:
+    """Same calendar-window midrank for current and historical observations.
 
-    reference 仅约束参照窗口的截止范围（如近 5 年），窗口左端仍随时间推进；
-    最后一点的分位与当前实盘评分一致。"""
-    values = [v for _, v in rows]
-    ref = reference or values
-    ref_limit = len(ref)
-    out: list[tuple[str, float]] = []
-    for i, (d, v) in enumerate(rows):
-        end = min(i + 1, ref_limit)
-        out.append((d, _pct_rank(values[:end], v) * 100))
+    Requires three years of signal observations and minimum density. These are
+    revised-source observation scores, NOT historical release-time predictions.
+    ``reference`` is retained for older callers; it never selects a prefix.
+    """
+    out = []
+    left = 0
+    for i, (day, value) in enumerate(rows):
+        end = date.fromisoformat(day[:10] if len(day) >= 10 else day + "-01")
+        try:
+            cutoff = end.replace(year=end.year - 5).isoformat()
+        except ValueError:  # leap day
+            cutoff = end.replace(year=end.year - 5, day=28).isoformat()
+        if not expanding:
+            while left < i and rows[left][0] < cutoff:
+                left += 1
+        window = rows[left:i + 1]
+        first = date.fromisoformat(window[0][0][:10] if len(window[0][0]) >= 10 else window[0][0] + "-01")
+        min_points = 36 if len(day) == 7 else 104 if (end - first).days / len(window) > 3 else 500
+        if (end - first).days >= 1095 and len(window) >= min_points:
+            out.append((day, _pct_rank([v for _, v in window], value) * 100))
     return out
 
 
@@ -1011,42 +1037,11 @@ def _crowding_cap(score: float, level_pct: float, rising: bool) -> float:
     return score
 
 
-def _dimension_score_history(parts: list[tuple[str, float]], score_histories: dict[str, list[tuple[str, float]]],
-                             weights: dict[str, float]) -> list[dict]:
-    """不同频率指标按截至当日最近得分合成，近一年逐日输出（观测日间沿用最近合成值）。"""
-    series = {key: rows for key, _ in parts if (rows := score_histories.get(key))}
-    if not series:
-        return []
-    latest = max(rows[-1][0] for rows in series.values())
-    latest_day = latest[:10] if len(latest) >= 10 else f"{latest}-01"
-    event_dates = sorted({d for rows in series.values() for d, _ in rows})
-    keys = {key: [d for d, _ in rows] for key, rows in series.items()}
-    daily: dict[str, float] = {}
-    for day in event_dates:
-        got = []
-        for key, rows in series.items():
-            i = bisect_right(keys[key], day) - 1
-            if i >= 0 and weights.get(key, 0) > 0:
-                got.append((rows[i][1], weights[key]))
-        if got:
-            got_day = day if len(day) >= 10 else f"{day}-01"
-            daily[got_day] = sum(value * weight for value, weight in got) / sum(weight for _, weight in got)
-    if not daily:
-        return []
-    cutoff = (date.fromisoformat(latest_day) - timedelta(days=365)).isoformat()
-    out: list[dict] = []
-    first = min(daily)
-    cur = date.fromisoformat(max(first, cutoff))
-    end = date.fromisoformat(latest_day)
-    last: float | None = None
-    while cur <= end:
-        k = cur.isoformat()
-        if k in daily:
-            last = daily[k]
-        if last is not None:
-            out.append({"date": k, "v": round(last, 1)})
-        cur += timedelta(days=1)
-    return out
+def _dimension_score_history(parts, score_histories, weights):
+    """Compose release-date scores only. Observation months are not timestamps."""
+    if any(len(d) != 10 for rows in score_histories.values() for d, _ in rows):
+        raise ValueError('history requires available dates, not observation months')
+    return _compose_gold_history([(k, weights.get(k, 0)) for k, _ in parts], score_histories)
 
 
 def _append_current_score(hist: list[dict], current_date: str, score: float) -> None:
@@ -1185,13 +1180,33 @@ def _signal_label(total: float) -> str:
 # ---------------------------------------------------------------------------
 
 def get_gold_score(force: bool = False) -> dict:
-    return market._layered_get(
+    data = market._layered_get(
         "gold_score_v3", lambda: market._run_source_refresh(_build, force),
-        valid=lambda v: bool(v.get("indicators")),
+        valid=lambda v: v.get('model_version') == MODEL_VERSION or bool(v.get('indicators')),
         warm=_load_gold_snapshot,
         ttl=3600,
         force=force,
     )
+    if data.get('model_version') != MODEL_VERSION:
+        data = {**data, 'gold_score': None, 'signal': '旧版历史参考', 'score_status': 'legacy',
+                'validation_status': 'unverified', 'contributions': [], 'hist': [],
+                'last_complete_score': {'gold_score': data.get('gold_score'), 'score_as_of': data.get('updated'),
+                                        'model_version': data.get('model_version') or 'legacy'}}
+    elif data.get('score_status') == 'complete':
+        # A cached score must expire even if its background rebuild fails.
+        today = datetime.now(BEIJING).date()
+        expired = [s for s in data.get('source_status', []) if s.get('active') and
+                   (_period_age_days(s.get('latest_period'), today) or 0) > (s.get('max_age_days') or 0)]
+        if expired:
+            expired_keys = {s['key'] for s in expired}
+            indicators = [{**i, 'data_status': 'stale', 'effective_weight': 0}
+                          if expired_keys.intersection(i.get('sources', [])) else i for i in data['indicators']]
+            data = {**data, 'last_complete_score': {k: data.get(k) for k in ('gold_score','score_as_of','model_version','input_id')},
+                    'gold_score': None, 'score_status': 'insufficient', 'signal': '数据不足', 'contributions': [],
+                    'indicators': indicators, 'coverage': round(sum(i.get('effective_weight', 0) for i in indicators)*100),
+                    'driver_agreement': None, 'data_quality_status': 'insufficient', 'stale': True,
+                    'data_quality': '缓存观测已超期，暂停当前总分'}
+    return data
 
 
 # ---------------------------------------------------------------------------
@@ -1226,23 +1241,23 @@ async def _build_insight(force: bool = False) -> dict[str, str] | str:
                 stale_tag = "，数据滞后半权"
             lines.append(
                 f"  · {i['label']}（{i['dimension']}，权重{i['weight'] * 100:.0f}%{stale_tag}）："
-                f"{i.get('value_text') or '—'}，分 {i['score']:.0f}/100，观测日 {i.get('date') or '—'}"
+                f"原始水平 {i.get('value_text') or '—'}，计分信号 {i.get('signal')}，细项 {i.get('details')}，分 {i['score']:.0f}/100，观测日 {i.get('date') or '—'}"
             )
         return lines
 
     stale = [s["label"] for s in payload.get("source_status") or []
-             if isinstance(s, dict) and s.get("status") != "fresh"]
+             if isinstance(s, dict) and s.get('active') and not s.get('usable', s.get('status') == 'fresh')]
     prompt = (
         "你是资产管理公司的贵金属策略分析师，为黄金多维评分写三段解读。\n"
         f"模型当前：总分 {payload['gold_score']:.0f}/100、信号「{payload.get('signal')}」、"
-        f"置信度 {payload.get('confidence')}（{payload.get('mode')}）。\n\n"
+        f"驱动一致性 {payload.get('driver_agreement')}%，未经预测校准（{payload.get('mode')}）。\n\n"
         "五维读数如下，仅供你推理——页面已展示全部分数，正文禁止复述：\n"
         "【维度】\n" + "\n".join(_dim_lines()) + "\n"
         "【指标】\n" + "\n".join(_ind_lines()) + "\n"
         "口径（方向语义，引用读数前先核对，禁止照抄读数当方向）：\n"
-        "- 每个指标的 score 已统一为越高越利多黄金（如实际利率大幅上行→机会成本维度分低）。\n"
-        "- ETF 指标是剔除价格动量解释后的超预期流量，不是总持仓；央行指标为已报告口径，实际购金通常更高。\n"
-        "- 分位是历史百分位不是水平值；时效折减（半权）=该数据发布滞后，读数方向仍有效但确定性打折。\n"
+        "- score是相对历史的环境分，不是上涨概率。低COMEX动量分不代表净仓位水平低；用details中的水平分位判断。\n"
+        "- ETF是相对动量回归的流量残差，不是调查预期差或总持仓。央行是已报告储备存量差。\n"
+        "- 固定先验权重，未经收益预测验证。不能给买卖建议或将分位当成信号正负。\n"
         + (f"数据状态：{'、'.join(stale)} 滞后或缺失，置信度已降。\n" if stale else "")
         + "\n输出三段，每段 1-2 句、80 字以内：\n"
         "- opportunity_cost：机会成本与美元维度当前状态（实际利率与美元对黄金的压制或支撑、强度如何）\n"
@@ -1272,7 +1287,15 @@ async def get_ai_insight(force: bool = False) -> dict[str, str] | str:
 
     评分重建后（ai_insight_at 早于评分的 updated）旧解读描述的已不是当前
     读数，非 force 请求也会重生成一次。LLM 失败时保留旧解读，不让页面文字消失。"""
-    return await ai_insight.cached_insight(
+    current = get_gold_score()
+    if current.get('score_status') != 'complete':
+        return ''
+    state_id = current.get('state_id')
+    snap = cache_runtime.peek('gold_score_v3') or {}
+    if snap.get('ai_input_id') != state_id:
+        # Do not fall back to text about a different version, state or input.
+        cache_runtime.update_value('gold_score_v3', lambda s: {**s, 'ai_insight': '', 'ai_input_id': state_id})
+    result = await ai_insight.cached_insight(
         cache_key="gold_score_v3",
         build=lambda: _build_insight(force=False),
         valid=_valid_insight,
@@ -1280,6 +1303,8 @@ async def get_ai_insight(force: bool = False) -> dict[str, str] | str:
         save=lambda snap: market._save_json(_SNAPSHOT, snap),
         force=force,
     )
+    latest = get_gold_score()
+    return result if latest.get('state_id') == state_id and latest.get('score_status') == 'complete' else ''
 
 
 # 快照兜底所需的最小字段集：只要这些在，就够渲染出一版可用的页面。
@@ -1295,308 +1320,404 @@ def _load_gold_snapshot():
     （实测 50s，前端整段显示「首次计算中」）。统一走 cache_runtime.usable_snapshot
     的能力探测，结构演进只降级为兜底骨架（打 degraded 标记）而非作废。
     """
-    return cache_runtime.usable_snapshot(
-        market._load_json(_SNAPSHOT), _SNAPSHOT_REQUIRED, schema_version=_SCHEMA_VERSION)
+    snapshot = market._load_json(_SNAPSHOT)
+    if isinstance(snapshot, dict) and snapshot.get('model_version') == MODEL_VERSION:
+        return snapshot  # an all-missing state is a valid cached response too
+    return cache_runtime.usable_snapshot(snapshot, _SNAPSHOT_REQUIRED, schema_version=_SCHEMA_VERSION)
+
+
+def _proxy_available_day(key: str, period: str) -> str:
+    """Conservative calendar proxy ONLY for revised-source research.
+
+    Not an actual release calendar: holidays, publication disruptions and data
+    revisions are unknown. Real published records use first-seen UTC timestamps.
+    Dates refer to the first subsequent LBMA PM session we allow for research.
+    """
+    if len(period) == 7:
+        y, m = map(int, period.split('-'))
+        next_month = date(y + (m == 12), m % 12 + 1, 1)
+        return (next_month + timedelta(days=100)).isoformat()
+    d = date.fromisoformat(period)
+    if key == 'g02_dollar':
+        d += timedelta(days=8 - d.weekday())  # following Tuesday, after H.10
+    elif key == 'g04_comex':
+        d += timedelta(days=(4 - d.weekday()) % 7 + 1)  # after Friday 15:30 ET
+    elif key == 'g03_etf':
+        d += timedelta(days=7)  # unknown historic release: explicitly lagged proxy
+    else:
+        for _ in range(3 if key == 'g05_stress' else 1):
+            d += timedelta(days=1)
+            while d.weekday() >= 5:
+                d += timedelta(days=1)
+    return d.isoformat()
+
+
+def _compose_gold_history(parts, histories, *, until=None):
+    """Fixed weights; require every part and expire inputs by their own cadence."""
+    if not parts or any(not histories.get(k) for k, _ in parts):
+        return []
+    days = {k: [d for d, _ in histories[k]] for k, _ in parts}
+    start = max(days[k][0] for k, _ in parts)
+    end = until or max(days[k][-1] for k, _ in parts)
+    if start > end:
+        return []
+    cur = date.fromisoformat(start)
+    result = []
+    while cur.isoformat() <= end:
+        day = cur.isoformat()
+        got = []
+        for key, weight in parts:
+            j = bisect_right(days[key], day) - 1
+            # Upper bounds on research carry-forward, not probabilistic penalties.
+            max_age = 100 if key == 'g06_cb' else 14 if key in ('g02_dollar', 'g03_etf', 'g04_comex') else 7
+            if j < 0 or (cur - date.fromisoformat(days[key][j])).days > max_age:
+                break
+            got.append(histories[key][j][1] * weight)
+        if len(got) == len(parts):
+            result.append({'date': day, 'v': round(sum(got) / sum(w for _, w in parts), 3)})
+        cur += timedelta(days=1)
+    return result
+
+
+def calculate_gold(inputs: dict, source_status=None, now: datetime | None = None) -> dict:
+    """Pure model calculation: no network, persistence, or production cache writes."""
+    now = now or datetime.now(BEIJING)
+    if now.tzinfo is None:
+        raise ValueError('now must have a timezone')
+    stamp = now.isoformat(timespec='seconds')
+    today = now.date()
+    def rows(name):
+        return sorted({str(d): float(v) for d, v in inputs.get(name, [])
+                       if isinstance(v, (float, int)) and math.isfinite(v)
+                       and str(d) <= today.isoformat()}.items())
+    real, dollar, etf, cot, stress, cb, fx = [rows(k) for k in ('real', 'dollar', 'etf', 'cot', 'stress', 'cb', 'fx')]
+    reference = inputs.get('reference') or {}
+    prices = {k: sorted((str(d), float(v)) for d, v in reference.get(k, [])
+                       if v and v > 0 and str(d) <= today.isoformat())
+              for k in ('lbma_am_usd', 'lbma_pm_usd', 'sge_pm_cny')}
+    momentum_raw = _risk_adj_momentum_series(prices['lbma_pm_usd'])
+    momentum = [(d, v) for (d, _), v in zip(momentum_raw, _ema([v for _, v in momentum_raw], 3))]
+    indicators, histories = [], {}
+    observation_histories = {}
+    def add(key, raw, signal, note='', *, expanding=False, cap=None, details=None, availability=None):
+        if not signal:
+            return
+        scored = _score_history(signal, expanding=expanding)
+        if cap:
+            scored = [(d, cap(d, s)) for d, s in scored]
+        score = scored[-1][1] if scored and scored[-1][0] == signal[-1][0] else None
+        ind = _mk_indicator(key, raw, score, signal[-1][1], note)
+        ind['score'] = round(score, 3) if score is not None else None
+        ind['signal_date'] = signal[-1][0]
+        ind['signal_hist'] = _thin([{'date': d, 'v': round(v, 6)} for d, v in signal[-500:]])
+        ind['score_hist'] = _thin([{'date': d, 'v': round(v, 3)} for d, v in scored[-500:]])
+        ind['details'] = details or {}
+        ind['history_kind'] = 'revised_observation'
+        ind['available_at'] = stamp  # conservative first seen at this build; persisted input is immutable
+        ind['availability_basis'] = 'first_seen'
+        observation_histories[key] = scored
+        # Proxy dates are never labelled as actual historical availability.
+        dated = [(availability.get(d, _proxy_available_day(key, d)) if availability else _proxy_available_day(key, d), s) for d,s in scored]
+        # A delayed dependency may make multiple observations available together.
+        histories[key] = sorted({d:s for d,s in dated if d <= today.isoformat()}.items())
+        indicators.append(ind)
+    for key, data, log_change in [('g01_real_rate', real, False), ('g02_dollar', dollar, True)]:
+        if len(data) > 60:
+            def change(i, n):
+                return math.log(data[i][1] / data[i-n][1]) if log_change else data[i][1] - data[i-n][1]
+            values = [-(0.6 * change(i, 20) + 0.4 * change(i, 60)) for i in range(60, len(data))]
+            signal = list(zip([d for d, _ in data[60:]], _ema(values, 3)))
+            add(key, data, signal, '20/60日变化经3日EMA；分位表示相对历史位置',
+                details={'change_20': change(len(data)-1, 20) * (100 if not log_change else 100),
+                         'change_60': change(len(data)-1, 60) * 100,
+                         'change_unit': 'bp' if not log_change else '对数%'
+                         })
+    residuals = _etf_surprise_signal(etf, momentum)
+    if residuals:
+        last = residuals[-1]
+        add('g03_etf', etf, [(r['date'], r['smoothed']) for r in residuals],
+            '相对价格动量回归的流量残差，非调查预期差；4周EMA',
+            details={k: round(last[k], 6) for k in ('flow', 'expected', 'residual', 'smoothed', 'beta')})
+    if len(cot) > 4:
+        levels = dict(_score_history(cot))
+        signals = [(cot[i][0], cot[i][1]-cot[i-4][1]) for i in range(4, len(cot))]
+        add('g04_comex', cot, signals, '净多/OI的4周变化；仓位水平与拥挤度独立展示',
+            cap=lambda d, s: _crowding_cap(s, levels.get(d, 50)/100, True),
+            details={'level_percentile': levels.get(cot[-1][0]), 'change_4w_pp': signals[-1][1]})
+    if len(stress) > 20 and len(real) > 20 and len(dollar) > 20:
+        values = [0.7*(stress[i][1]-stress[i-20][1])+0.3*stress[i][1] for i in range(20, len(stress))]
+        sig = list(zip([d for d, _ in stress[20:]], _ema(values, 3)))
+        rd, dd = [d for d, _ in real], [d for d, _ in dollar]
+        stress_availability = {}
+        def stress_cap(day, score):
+            # State inputs are matched at the observation date, never today's state.
+            ri, di = bisect_right(rd, day)-1, bisect_right(dd, day)-1
+            stress_availability[day] = max(_proxy_available_day('g05_stress',day),
+                _proxy_available_day('g01_real_rate',real[ri][0]) if ri>=0 else day,
+                _proxy_available_day('g02_dollar',dollar[di][0]) if di>=0 else day)
+            return min(score, 50) if ri >= 20 and di >= 20 and real[ri][1] > real[ri-20][1] and dollar[di][1] > dollar[di-20][1] else score
+        add('g05_stress', stress, sig, 'OFR剔除安全资产；美元与实际利率同升时封顶50（经验规则）', cap=stress_cap, availability=stress_availability)
+    if len(cb) >= 13:
+        by_month = dict(cb)
+        rolling = [(d, v-by_month[f'{int(d[:4])-1:04d}{d[4:]}']) for d, v in cb
+                   if d >= '2010-01' and f'{int(d[:4])-1:04d}{d[4:]}' in by_month]
+        add('g06_cb', rolling, rolling, '已报告储备存量12月差；不等于同期全部市场净购买量', expanding=True)
+    fx_days, fx_map, am = [d for d, _ in fx], dict(fx), dict(prices['lbma_am_usd'])
+    premium = []
+    for day, cny in prices['sge_pm_cny']:
+        j = bisect_right(fx_days, day)-1
+        # Never backfill before first FX, nor carry a stale FX more than 5 days.
+        if j >= 0 and day in am and (date.fromisoformat(day)-date.fromisoformat(fx_days[j])).days <= 5:
+            premium.append((day, cny*31.1034768/fx_map[fx_days[j]]-am[day]))
+    if len(premium) > 20:
+        from statistics import median
+        sig = []
+        for i in range(19, len(premium)):
+            cutoff = (date.fromisoformat(premium[i][0])-timedelta(days=1096)).isoformat()
+            window = [v for d, v in premium[:i+1] if d >= cutoff]
+            sig.append((premium[i][0], sum(v for _, v in premium[i-19:i+1])/20-median(window)))
+        sig = [(d, v) for (d, _), v in zip(sig, _ema([v for _, v in sig], 3))]
+        add('g07_sglb', premium, sig, 'SHAUPM折USD − LBMA AM；中间价口径，非可交易套利价差')
+    add('g08_momentum', momentum, momentum, '60/120日收益÷各期年化波动，0.6/0.4混合、3日EMA',
+        details={'return_60': prices['lbma_pm_usd'][-1][1]/prices['lbma_pm_usd'][-61][1]-1,
+                 'return_120': prices['lbma_pm_usd'][-1][1]/prices['lbma_pm_usd'][-121][1]-1}
+        if len(prices['lbma_pm_usd']) > 120 else {})
+    source_map = {s['key']: dict(s) for s in source_status or []}
+    active = {**_INDICATOR_SOURCES, 'g01_real_rate': tuple(inputs.get('real_sources') or ('gold:fred:DFII10',))}
+    active['g05_stress'] = ('gold:ofr', 'gold:fred:DTWEXBGS', *active['g01_real_rate'])
+    valid = []
+    for ind in indicators:
+        key = ind['key']
+        states = [source_map.get(s, {'usable': False, 'status': 'missing'}) for s in active[key]]
+        age_limit = 100 if key == 'g06_cb' else 14 if key in ('g02_dollar','g04_comex') else 10 if key == 'g03_etf' else 7
+        timely = (_period_age_days(ind['signal_date'], today) or 0) <= age_limit
+        usable = all(s.get('usable', s.get('status') == 'fresh') for s in states) and timely
+        ind['data_status'] = 'insufficient' if ind['score'] is None else 'fresh' if usable else 'stale'
+        ind['sources'] = list(active[key])
+        ind['effective_weight'] = ind['weight'] if usable and ind['score'] is not None else 0
+        if ind['effective_weight']:
+            valid.append(ind)
+    complete = len(valid) == len(_META)
+    total = round(sum(i['score']*i['weight'] for i in valid), 3) if complete else None
+    contribution = sorted([{'key': i['key'], 'label': i['label'], 'points': round((i['score']-50)*i['weight'], 3)}
+                           for i in valid], key=lambda x: x['points'], reverse=True) if complete else []
+    dims = {}
+    for name, parts in _DIM_PARTS.items():
+        got = [i for i in valid if i['key'] in dict(parts)]
+        score = sum(i['score']*i['weight'] for i in got)/_DIM_WEIGHT[name] if len(got) == len(parts) else None
+        dims[name] = {'score': round(score, 3) if score is not None else None, 'weight': _DIM_WEIGHT[name],
+                      'hist': _thin(_compose_gold_history([(k, _META[k][2]) for k, _ in parts], histories, until=today.isoformat())[-366:])}
+    agreement = None
+    if complete:
+        direction = 1 if total >= 65 else -1 if total < 45 else 0
+        agreement = round(sum(i['weight'] for i in valid if (i['score'] >= 60 if direction > 0 else i['score'] <= 40 if direction < 0 else 40 < i['score'] < 60))*100)
+    active_keys = {s for keys in active.values() for s in keys}
+    for key, s in source_map.items():
+        s['active'] = key in active_keys
+    problems = [f"{i['label']}：{i['data_status']}" for i in indicators if i['data_status'] != 'fresh']
+    problems += [_META[k][0]+'：缺失' for k in _META if k not in {i['key'] for i in indicators}]
+    all_hist = _compose_gold_history([(k, v[2]) for k,v in _META.items()], histories, until=today.isoformat())
+    return {'schema_version': _SCHEMA_VERSION, 'model_version': MODEL_VERSION, 'date': today.isoformat(),
+            'gold_score': total, 'score_status': 'complete' if complete else 'insufficient',
+            'score_as_of': stamp if complete else None, 'history_kind': 'reconstructed_proxy',
+            'hist': _thin(all_hist[-366:]), 'recorded_hist': [],
+            'signal': _signal_label(total).replace('强利多','明显偏强').replace('强利空','明显偏弱').replace('利多','偏强').replace('利空','偏弱') if complete else '数据不足',
+            'confidence': '未经预测校准', 'driver_agreement': agreement,
+            'validation_status': 'unverified', 'data_quality_status': 'complete' if complete else 'insufficient',
+            'coverage': round(sum(i['weight'] for i in valid)*100), 'mode': '五维八指标 · 固定先验权重',
+            'dimensions': dims, 'indicators': indicators, 'contributions': contribution,
+            'top_positive_drivers': [c['label'] for c in contribution if c['points'] > 0][:3],
+            'top_negative_drivers': [c['label'] for c in reversed(contribution) if c['points'] < 0][:3],
+            'data_quality': '；'.join(problems) or '全部核心输入有效', 'source_status': list(source_map.values()),
+            'stale': not complete, 'updated': stamp,
+            'benchmark': {'usd': _thin([{'date':d,'v':v} for d,v in prices['lbma_pm_usd'][-260:]]),
+                          'cny': _thin([{'date':d,'v':v} for d,v in prices['sge_pm_cny'][-260:]])},
+            # Full-resolution internal data is removed before the public response.
+            '_research_histories': histories, '_observation_histories': observation_histories}
+
+
+def _gather_gold_inputs():
+    _SOURCE_STATUS.clear()
+    fred_real = _fred_series('DFII10', 2400)
+    treasury = _treasury_real_yield_10y()
+    ts = _SOURCE_STATUS.get('gold:treasury:DFII10', {})
+    if treasury and ts.get('usable', ts.get('status') == 'fresh') and (not fred_real or treasury[-1][0] >= fred_real[-1][0]):
+        real = sorted({**dict(fred_real), **dict(treasury)}.items())
+        real_sources = ['gold:treasury:DFII10']
+    else:
+        real, real_sources = fred_real, ['gold:fred:DFII10']
+    return {'real': real, 'real_sources': real_sources,
+            'dollar': _fred_series('DTWEXBGS', 2400, ttl=_h10_cache_ttl()),
+            'etf': _etf_holdings(), 'cot': _comex_money_net(), 'stress': _ofr_fsi(),
+            'cb': _cb_gold_monthly_reported(), 'reference': _wgc_reference_prices(), 'fx': _usd_cny()}
+
+
+def _hash_gold(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+
+
+def get_validation_summary():
+    data = market._load_json(os.path.join(os.path.dirname(_SNAPSHOT), 'gold_validation.json'))
+    if not isinstance(data, dict) or data.get('model_version') != MODEL_VERSION:
+        return {'model_version': MODEL_VERSION, 'status': 'not_run', 'independent_oos': False,
+                'conclusion': '当前运行目录尚无此版本的验证报告；原始发布版本不足，预测能力尚未证实。'}
+    return {k: data.get(k) for k in ('model_version','status','independent_oos','evaluated_at','sample_count','conclusion','source_as_of','source_hash','horizons')}
+
+
+RISK_MODEL_VERSION = 'gold-risk-prior-1.0'
+RISK_DECAYS = (.94, .97, .99)
+
+
+def calculate_gold_risk(prices, now=None):
+    """Frozen variance ensemble. Fractions throughout; never a directional signal."""
+    now = now or datetime.now(BEIJING)
+    clean = {}
+    for day, value in prices:
+        try:
+            day, value = date.fromisoformat(str(day)).isoformat(), float(value)
+        except (ValueError, TypeError):
+            continue
+        if day <= now.date().isoformat() and math.isfinite(value) and value > 0:
+            clean[day] = value
+    rows = sorted(clean.items())
+    payload = {'model_version':RISK_MODEL_VERSION, 'status':'insufficient',
+        'research_status':'research_only', 'independent_oos':False,
+        'benchmark':'LBMA PM USD/oz', 'horizon_days':20,
+        'observed_at':rows[-1][0] if rows else None, 'calculated_at':now.isoformat(timespec='seconds'),
+        'annualized_volatility':None, 'horizon_volatility':None,
+        'trailing20_volatility':None, 'trailing60_volatility':None,
+        'components':[], 'decays':list(RISK_DECAYS),
+        'reason':'至少需要121个有效LBMA PM交易日价格；不使用代理金价补足。'}
+    if len(rows) < 121:
+        return payload
+    if (now.date()-date.fromisoformat(rows[-1][0])).days > 7:
+        return {**payload,'status':'stale','reason':'LBMA PM观测已超过7天，暂停生成新风险预测。'}
+    returns = [math.log(b[1]/a[1]) for a,b in zip(rows,rows[1:])]
+    components = []
+    for decay in RISK_DECAYS:
+        numerator = denominator = 0.
+        for r in returns:
+            numerator = decay*numerator+r*r
+            denominator = decay*denominator+1
+        components.append({'decay':decay,'annualized_volatility':math.sqrt(252*numerator/denominator)})
+    annualized = math.sqrt(sum(c['annualized_volatility']**2 for c in components)/len(components))
+    from statistics import stdev
+    return {**payload,'status':'ready','reason':None,
+        'input_id':_hash_gold(rows), 'sample_count':len(rows), 'components':components,
+        'annualized_volatility':annualized, 'horizon_volatility':annualized*math.sqrt(20/252),
+        'trailing20_volatility':stdev(returns[-20:])*math.sqrt(252),
+        'trailing60_volatility':stdev(returns[-60:])*math.sqrt(252)}
+
+
+def _cached_reference_prices():
+    """Shared read-only cache for the two independent gold forecast panels."""
+    key = 'gold:wgc_reference_v3'
+    hit = market._SUB.get(key) or market._SUB_LAST.get(key)
+    snapshot = market._load_json(_WGC_REFERENCE_SNAPSHOT) or {}
+    if snapshot.get('data') and (not hit or float(snapshot.get('ts') or 0)>hit[0]):
+        hit = (float(snapshot.get('ts') or 0), snapshot['data'])
+    prices = (hit[1].get('lbma_pm_usd') or []) if hit else []
+    fetched = datetime.fromtimestamp(hit[0],BEIJING).isoformat(timespec='seconds') if hit else None
+    return prices, fetched
+
+
+def get_risk_forecast():
+    """Read the same reference-price cache as gold; no HTTP-time research or fetch."""
+    prices, fetched = _cached_reference_prices()
+    payload = calculate_gold_risk(prices)
+    payload['fetched_at'] = fetched
+    summary = market._load_json(os.path.join(os.path.dirname(__file__),'data','gold_risk_validation.json'))
+    payload['validation'] = summary if isinstance(summary,dict) and summary.get('model_version')==RISK_MODEL_VERSION else None
+    return payload
+
+
+def get_direction_forecast():
+    from pathlib import Path
+    import gold_direction
+    prices, fetched = _cached_reference_prices()
+    payload = gold_direction.forecast(prices)
+    payload['fetched_at'] = fetched
+    payload['benchmark'] = 'LBMA PM USD/oz'
+    summary = market._load_json(os.path.join(os.path.dirname(__file__),'data','gold_direction_validation.json'))
+    payload['validation'] = summary if isinstance(summary,dict) and summary.get('model_version')==gold_direction.MODEL_VERSION else None
+    payload['recorded_at'] = None
+    payload['record_error'] = None
+    if payload['status'] == 'ready':
+        # First-seen predictions are kept, never backdated or overwritten on refresh.
+        folder = Path(_SNAPSHOT).parent/'gold_direction_records'/gold_direction.MODEL_VERSION
+        path = folder/(payload['source_hash']+'.json')
+        try:
+            folder.mkdir(parents=True,exist_ok=True)
+            record = {'published_at':payload['created_at'],'forecast':payload,
+                      'prices':[(d,v) for d,v in prices if d<=payload['observed_at']]}
+            try:
+                with path.open('x',encoding='utf-8') as output:
+                    json.dump(record,output,ensure_ascii=False,allow_nan=False)
+            except FileExistsError:
+                record = json.loads(path.read_text())
+            payload['recorded_at'] = record['published_at']
+        except (OSError,ValueError,KeyError):
+            payload['record_error'] = '本次预测未能留存，暂不可用于后续真实记录检验。'
+    return payload
+
+
+def _persist_gold(payload, inputs):
+    """Immutable input revisions + first-published states; identical builds dedupe."""
+    old = market._load_json(_SNAPSHOT) or {}
+    input_id = _hash_gold(inputs)
+    payload['input_id'] = input_id
+    input_file = os.path.join(_INPUT_DIR, input_id+'.json')
+    if not os.path.exists(input_file):
+        market._save_json(input_file, {'input_id': input_id, 'first_seen_at': payload['updated'], 'inputs': inputs})
+    else:
+        first = (market._load_json(input_file) or {}).get('first_seen_at')
+        if first:
+            for ind in payload['indicators']:
+                ind['available_at'] = first
+    if (market._load_json(input_file) or {}).get('input_id') != input_id:
+        raise OSError('gold input revision was not persisted')
+    prior = old.get('last_complete_score')
+    if old.get('model_version') == MODEL_VERSION and old.get('score_status') == 'complete':
+        prior = {k: old.get(k) for k in ('gold_score','score_as_of','model_version','input_id')}
+    payload['last_complete_score'] = prior
+    payload['change_vs_previous'] = None
+    if (payload['score_status'] == old.get('score_status') == 'complete'
+            and old.get('model_version') == MODEL_VERSION and old.get('input_id') != input_id):
+        previous = {c['key']: c['points'] for c in old.get('contributions', [])}
+        if len(previous) == len(_META):
+            payload['change_vs_previous'] = {
+                'as_of': old.get('score_as_of'), 'total_points': round(payload['gold_score']-old['gold_score'], 3),
+                'contributions': [{'key':c['key'],'label':c['label'],'points':round(c['points']-previous[c['key']],3)}
+                                  for c in payload['contributions']]}
+    fingerprint = _hash_gold([MODEL_VERSION, input_id, payload['score_status'], payload['coverage'],
+                              [(i['key'], i['data_status'], i['score']) for i in payload['indicators']]])
+    payload['state_id'] = fingerprint
+    record_file = os.path.join(_RECORD_DIR, fingerprint+'.json')
+    if not os.path.exists(record_file):
+        market._save_json(record_file, {'published_at': payload['updated'], 'state_id': fingerprint,
+            'input_id': input_id, 'model_version': MODEL_VERSION, 'gold_score': payload['gold_score'],
+            'score_status': payload['score_status'], 'coverage': payload['coverage'],
+            'source_status': payload['source_status'],
+            'indicator_scores': {i['key']: i['score'] for i in payload['indicators']}})
+    record = market._load_json(record_file) or {}
+    if record.get('state_id') != fingerprint:
+        raise OSError('gold published record was not persisted')
+    if payload['score_status'] == 'complete':
+        payload['score_as_of'] = record.get('published_at', payload['score_as_of'])
+    from pathlib import Path
+    records = [market._load_json(str(p)) for p in Path(_RECORD_DIR).glob('*.json')]
+    payload['recorded_hist'] = _thin([{'date': r['published_at'], 'v':r['gold_score']} for r in sorted(
+        [r for r in records if r and r.get('gold_score') is not None], key=lambda r:r['published_at'])][-500:])
+    payload.pop('_research_histories', None)
+    payload.pop('_observation_histories', None)
+    market._save_json(_SNAPSHOT, payload)
+    if (market._load_json(_SNAPSHOT) or {}).get('state_id') != fingerprint:
+        raise OSError('gold snapshot was not persisted')
+    return payload
 
 
 def _build() -> dict:
-    wall_date = datetime.now(BEIJING).strftime("%Y-%m-%d")
-    _SOURCE_STATUS.clear()
-    fred_real = _fred_series("DFII10", 1300)             # G01 长历史/兜底/交叉校验
-    treasury_real = _treasury_real_yield_10y()            # G01 财政部当年日度主源
-    treasury_fresh = _SOURCE_STATUS.get("gold:treasury:DFII10", {}).get("status") == "fresh"
-    use_treasury = bool(treasury_fresh and treasury_real
-                        and (not fred_real or treasury_real[-1][0] >= fred_real[-1][0]))
-    if use_treasury:
-        real = sorted({**dict(fred_real), **dict(treasury_real)}.items())
-        real_sources = ("gold:treasury:DFII10",)
-    else:
-        real = fred_real
-        real_sources = ("gold:fred:DFII10",)
-    dxy = _fred_series("DTWEXBGS", 1300, ttl=_h10_cache_ttl())  # G02 H.10 周度发布
-    etf = _etf_holdings()                                # G03 全球实物黄金ETF周度持仓
-    cot = _comex_money_net()                             # G04 管理基金净多头%OI
-    ofr = _ofr_fsi()                                     # G05 OFR ex-safe
-    cb_m = _cb_gold_monthly_reported()                   # G06 月度已报告储备
-    reference = _wgc_reference_prices()                  # G07/G08 WGC/ICE真实参考价
-    lbma_am = reference.get("lbma_am_usd") or []         # G07 LBMA AM
-    lbma_pm = reference.get("lbma_pm_usd") or []         # G08 LBMA PM
-    sge_pm = reference.get("sge_pm_cny") or []           # G07 SHAUPM
-    fx = _usd_cny()                                      # G07 汇率
-    momentum_raw = _risk_adj_momentum_series(lbma_pm) if len(lbma_pm) > 120 else []
-    momentum_signal = list(zip(
-        [d for d, _ in momentum_raw], _ema([v for _, v in momentum_raw], 3)
-    )) if momentum_raw else []
-
-    indicators: list[dict] = []
-    notes: list[str] = []
-    scored_keys: dict[str, dict] = {}
-
-    # G01：-(0.6×Δ20 + 0.4×Δ60)，实际利率下降利多
-    if len(real) > 60:
-        raw_sig = [-(0.6 * (real[i][1] - real[i - 20][1]) + 0.4 * (real[i][1] - real[i - 60][1]))
-                   for i in range(60, len(real))]
-        sig = _ema(raw_sig, 3)
-        common = set(dict(fred_real)) & set(dict(treasury_real))
-        crosscheck = (abs(dict(fred_real)[max(common)] - dict(treasury_real)[max(common)])) if common else None
-        note = ("美国财政部日度实际收益率主源，FRED DFII10用于历史与故障兜底"
-                + (f"；最新同日差 {crosscheck:.2f} 个百分点" if crosscheck is not None else ""))
-        ind = _mk_indicator("g01_real_rate", real, _pct_rank(sig, sig[-1]) * 100, sig[-1], note)
-        ind["_score_hist"] = _score_history(list(zip([d for d, _ in real[60:]], sig)))
-        indicators.append(ind); scored_keys["g01_real_rate"] = ind
-    else:
-        notes.append("实际利率缺失")
-
-    # G02：-(0.6×ln20 + 0.4×ln60)，美元贬值利多
-    if len(dxy) > 60:
-        raw_sig = [-(0.6 * math.log(dxy[i][1] / dxy[i - 20][1]) + 0.4 * math.log(dxy[i][1] / dxy[i - 60][1]))
-                   for i in range(60, len(dxy)) if dxy[i - 20][1] > 0 and dxy[i - 60][1] > 0]
-        sig = _ema(raw_sig, 3)
-        ind = _mk_indicator("g02_dollar", dxy, _pct_rank(sig, sig[-1]) * 100, sig[-1])
-        signal_dates = [dxy[i][0] for i in range(60, len(dxy))
-                        if dxy[i - 20][1] > 0 and dxy[i - 60][1] > 0]
-        ind["_score_hist"] = _score_history(list(zip(signal_dates, sig)))
-        indicators.append(ind); scored_keys["g02_dollar"] = ind
-    else:
-        notes.append("美元指数缺失")
-
-    # G03：方案B——ETF 4/12周流量剔除价格动量可解释部分，残差做4周EMA。
-    etf_surprise = _etf_surprise_signal(etf, momentum_signal) if len(etf) > 260 and momentum_signal else []
-    if etf_surprise:
-        latest = etf_surprise[-1]
-        score_hist = [row["smoothed"] for row in etf_surprise[-260:]]
-        note = (f"超预期流量={latest['smoothed']:+.4f}；原始4/12周流量={latest['flow']:+.4f}，"
-                f"价格动量解释值={latest['expected']:+.4f}；滚动回归β={latest['beta']:+.3f}")
-        ind = _mk_indicator("g03_etf", etf[-260:],
-                            _pct_rank(score_hist, latest["smoothed"]) * 100,
-                            latest["smoothed"], note)
-        ind.update({"raw_signal": round(latest["flow"], 4),
-                    "expected_signal": round(latest["expected"], 4),
-                    "model_beta": round(latest["beta"], 4)})
-        ind["_score_hist"] = _score_history(
-            [(row["date"], row["smoothed"]) for row in etf_surprise[-260:]], score_hist)
-        indicators.append(ind); scored_keys["g03_etf"] = ind
-    else:
-        notes.append("ETF超预期流量样本不足")
-
-    # G04：净多头%OI 的 4 周变化，带拥挤度上限修正
-    if len(cot) > 8:
-        sig = [cot[i][1] - cot[i - 4][1] for i in range(4, len(cot))]
-        base = _pct_rank(sig[-260:], sig[-1]) * 100
-        # 拥挤度：当前净多头%OI 的 5 年历史分位
-        level_pct = _pct_rank([v for _, v in cot[-260:]], cot[-1][1])
-        rising = sig[-1] > 0
-        capped = _crowding_cap(base, level_pct, rising)
-        crowd_note = ""
-        if capped < base:
-            crowd_note = f"仓位处于历史 {level_pct * 100:.0f}% 分位，触发拥挤度上限 {capped:.0f}"
-        ind = _mk_indicator("g04_comex", cot, capped, sig[-1],
-                            crowd_note or "CFTC Disaggregated COT 管理基金净多头/未平仓合约")
-        level_values = [v for _, v in cot]
-        ind["_score_hist"] = [
-            (cot[i + 4][0], _crowding_cap(_pct_rank(sig[:i + 1], value) * 100,
-                                          _pct_rank(level_values[:i + 5], cot[i + 4][1]), value > 0))
-            for i, value in enumerate(sig)
-        ]
-        indicators.append(ind); scored_keys["g04_comex"] = ind
-    else:
-        notes.append("COMEX 仓位缺失")
-
-    # G05：0.7×20日变化 + 0.3×当前水平，状态修正：美元与实际利率同升时上限 50
-    if len(ofr) > 60:
-        raw_sig = [0.7 * (ofr[i][1] - ofr[i - 20][1]) + 0.3 * ofr[i][1]
-                   for i in range(60, len(ofr))]
-        sig = _ema(raw_sig, 3)
-        base = _pct_rank(sig, sig[-1]) * 100
-        score = base
-        state_note = "OFR信用、股票估值、融资、波动率四类贡献之和；已剔除含黄金价格的安全资产类"
-        if len(real) > 20 and len(dxy) > 20:
-            dxy_up = dxy[-1][1] > dxy[-21][1]
-            real_up = real[-1][1] > real[-21][1]
-            if dxy_up and real_up:
-                score = min(base, 50)
-                if score < base:
-                    state_note = "美元与实际利率 20 日同升，金融压力信号受限（≤50）"
-        ind = _mk_indicator("g05_stress", ofr, score, sig[-1], state_note)
-        real_dates, dxy_dates = [d for d, _ in real], [d for d, _ in dxy]
-        stress_hist = []
-        sig_dates = [d for d, _ in ofr[60:]]
-        for i, (day, value) in enumerate(zip(sig_dates, sig)):
-            # 逐点扩展窗口分位：只用截至当日的信号，避免前视
-            score_at = _pct_rank(sig[:i + 1], value) * 100
-            ri, di = bisect_right(real_dates, day) - 1, bisect_right(dxy_dates, day) - 1
-            if ri >= 20 and di >= 20 and real[ri][1] > real[ri - 20][1] and dxy[di][1] > dxy[di - 20][1]:
-                score_at = min(score_at, 50)
-            stress_hist.append((day, score_at))
-        ind["_score_hist"] = stress_hist
-        indicators.append(ind); scored_keys["g05_stress"] = ind
-    else:
-        notes.append("OFR 金融压力缺失")
-
-    # G06：IMF 全球月度储备存量的滚动 12 月变化，按 2010 年以来历史分位计分。
-    if len(cb_m) >= 13:
-        rolling = [(cb_m[i][0], cb_m[i][1] - cb_m[i - 12][1]) for i in range(12, len(cb_m))]
-        rolling = [(d, v) for d, v in rolling if d >= "2010-01"]
-        latest_month = cb_m[-1][1] - cb_m[-2][1]
-        ind = _mk_indicator(
-            "g06_cb", rolling, _pct_rank([v for _, v in rolling], rolling[-1][1]) * 100,
-            rolling[-1][1],
-            f"IMF IFS 月度已报告口径，通常滞后约2个月；最新月 {latest_month:+.1f} 吨；"
-            "不含尚未披露交易，历史迟报修订按抓取日留存版本",
-        )
-        ind["_score_hist"] = _score_history(rolling)
-        indicators.append(ind); scored_keys["g06_cb"] = ind
-    else:
-        notes.append("央行储备月度数据缺失")
-
-    # G07：SHAUPM折 USD/oz − LBMA AM，20日均值对3年滚动中位数的偏离。
-    if len(sge_pm) > 130 and len(lbma_am) > 130 and fx:
-        fx_map = dict(fx)
-        # 汇率序列起点晚于 SGE 时，用最近已知汇率前向补齐，避免溢价序列缺日
-        # （20日均值窗口被拉稀为 25-34 个日历日的混合窗口）。
-        fx_days = sorted(fx_map)
-        first_fx = fx_days[0]
-        for d, _ in sge_pm:
-            if d < first_fx and d not in fx_map:
-                fx_map[d] = fx_map[first_fx]
-            elif d not in fx_map:
-                i = bisect_right(fx_days, d) - 1
-                if i >= 0:
-                    fx_map[d] = fx_map[fx_days[i]]
-        lbma_map = dict(lbma_am)
-        prem: list[tuple[str, float]] = []
-        for d, cny_g in sge_pm:
-            rate = fx_map.get(d)
-            lon = lbma_map.get(d)
-            if rate and lon:
-                prem.append((d, cny_g * 31.1034768 / rate - lon))
-        if len(prem) > 130:
-            raw_sig = []
-            for i in range(20, len(prem)):
-                avg20 = sum(v for _, v in prem[i - 19:i + 1]) / 20
-                win = [v for _, v in prem[max(0, i - 750):i + 1]]
-                med = sorted(win)[len(win) // 2]
-                raw_sig.append(avg20 - med)
-            sig = _ema(raw_sig, 3)
-            prem_latest = prem[-1][1]
-            ind = _mk_indicator("g07_sglb", prem, _pct_rank(sig[-1260:], sig[-1]) * 100, sig[-1],
-                                "WGC方法：SGE SHAUPM折USD − ICE LBMA Gold Price AM；方向性理论价差")
-            ind["_score_hist"] = _score_history(
-                list(zip([d for d, _ in prem[20:]], sig)), sig[-1260:])
-            ind["value"] = round(prem_latest, 2)
-            ind["value_text"] = f"{prem_latest:+.1f} USD/oz"
-            indicators.append(ind); scored_keys["g07_sglb"] = ind
-        else:
-            notes.append("上海—伦敦溢价样本不足")
-    else:
-        notes.append("上海金/伦敦金溢价缺失")
-
-    # G08：逐日 0.6×60日 + 0.4×120日风险调整动量，再做3日EMA。
-    if momentum_signal:
-        sig = momentum_signal
-        if sig:
-            score_hist = [v for _, v in sig[-1260:]]
-            # 指标卡口径 = 动量信号本身（value/chg/hist 走 sig）；金价水平不进指标卡
-            ind = _mk_indicator("g08_momentum", sig,
-                                _pct_rank(score_hist, sig[-1][1]) * 100, sig[-1][1],
-                                "WGC/ICE LBMA Gold Price PM；60/120日风险调整动量，3日EMA")
-            ind["_score_hist"] = _score_history(sig, score_hist)
-            indicators.append(ind); scored_keys["g08_momentum"] = ind
-        else:
-            notes.append("动量信号不足")
-    else:
-        notes.append("伦敦金价序列缺失")
-
-    # 抓取成功但观测期超出来源发布节奏时，指标半权并降低置信度。
-    indicator_sources = {**_INDICATOR_SOURCES, "g01_real_rate": real_sources}
-    for ind in indicators:
-        statuses = [_SOURCE_STATUS.get(key, {}).get("status") for key in indicator_sources[ind["key"]]]
-        factor = 0.5 if "stale" in statuses else 1.0
-        ind["effective_weight"] = round(ind["weight"] * factor, 4)
-        ind["data_status"] = "stale" if factor < 1 else "fresh"
-
-    # 总分：缺失指标剔除、陈旧指标半权，其余权重归一化。
-    scored = [i for i in indicators if i["score"] is not None]
-    wsum = sum(i["effective_weight"] for i in scored)
-    total = round(sum(i["score"] * i["effective_weight"] for i in scored) / wsum, 1) if wsum > 0 else None
-
-    # 维度得分
-    score_histories = {ind["key"]: ind.pop("_score_hist", []) for ind in indicators}
-    total_hist = _dimension_score_history(
-        [(ind["key"], ind["effective_weight"]) for ind in scored], score_histories,
-        {ind["key"]: ind["effective_weight"] for ind in scored},
-    )
-    # 当前实时分作为独立时点追加到 wall date（不覆盖最近观测日的历史值）。
-    current_date = wall_date
-    if total is not None:
-        _append_current_score(total_hist, wall_date, total)
-    total_hist = _thin(total_hist)      # 均匀抽稀，保住「近 1 年」跨度，只减顶点
-    dims: dict[str, dict] = {}
-    for name, parts in _DIM_PARTS.items():
-        got = [(scored_keys[k]["score"], scored_keys[k]["effective_weight"])
-               for k, _ in parts if k in scored_keys]
-        if not got:
-            continue
-        w = sum(w for _, w in got)
-        score = round(sum(s * part_w for s, part_w in got) / w, 1)
-        hist = _dimension_score_history(parts, score_histories,
-                                        {k: scored_keys[k]["effective_weight"] for k, _ in parts if k in scored_keys})
-        _append_current_score(hist, wall_date, score)
-        dims[name] = {"score": score, "weight": _DIM_WEIGHT[name],
-                      "effective_weight": round(w, 4), "hist": _thin(hist)}
-
-    # 主要贡献
-    pos = [i["label"] for i in sorted(scored, key=lambda x: -x["score"]) if i["score"] >= 60][:3]
-    neg = [i["label"] for i in sorted(scored, key=lambda x: x["score"]) if i["score"] <= 40][:3]
-
-    # 方向一致性 → 置信度（方案第 9 节）
-    confidence = "低"
-    if total is not None and dims:
-        direction = "up" if total >= 65 else "down" if total <= 44 else None
-        if direction:
-            agree_w = 0.0
-            for name, d in dims.items():
-                if direction == "up" and d["score"] >= 60:
-                    agree_w += d["effective_weight"]
-                elif direction == "down" and d["score"] <= 40:
-                    agree_w += d["effective_weight"]
-            total_w = sum(d["effective_weight"] for d in dims.values()) or 1
-            ratio = agree_w / total_w
-            confidence = "高" if ratio >= 0.75 else "中" if ratio >= 0.5 else "低"
-        else:
-            confidence = "中"
-
-    source_status = list(_SOURCE_STATUS.values())
-    stale_sources = [s for s in source_status if s["status"] == "stale"]
-    missing_sources = [s for s in source_status if s["status"] == "missing"]
-    if stale_sources or missing_sources:
-        confidence = "低"
-    quality = []
-    if stale_sources:
-        quality.append("陈旧来源：" + "、".join(s["label"] for s in stale_sources))
-    if missing_sources:
-        quality.append("缺失来源：" + "、".join(s["label"] for s in missing_sources))
-    quality.extend(notes)
-    stale_times = [s["fetched_at"] for s in stale_sources if s.get("fetched_at")]
-    payload = {
-        "schema_version": _SCHEMA_VERSION,
-        "date": current_date,
-        "gold_score": total,
-        "hist": total_hist,
-        "signal": _signal_label(total) if total is not None else None,
-        "confidence": confidence,
-        "mode": f"5维{len(scored)}指标（方案 V2.1）",
-        "coverage": round(wsum * 100),
-        "dimensions": dims,
-        "indicators": indicators,
-        "top_positive_drivers": pos,
-        "top_negative_drivers": neg,
-        "data_quality": "；".join(quality) if quality else "正常",
-        "source_status": source_status,
-        "stale": bool(stale_sources),
-        "stale_since": min(stale_times) if stale_times else None,
-        "updated": datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M"),
-    }
-    if indicators:
-        market._save_json(_SNAPSHOT, payload)
-    return payload
+    with _GOLD_BUILD_LOCK:
+        inputs = _gather_gold_inputs()
+        payload = calculate_gold(inputs, list(_SOURCE_STATUS.values()))
+        return _persist_gold(payload, inputs)

@@ -32,11 +32,11 @@ def _configured() -> bool:
     return bool(_BASE_URL and _API_KEY and _MODEL)
 
 
-def chat_json(prompt: str) -> dict[str, Any]:
+async def chat_json(prompt: str) -> dict[str, Any]:
     """Public re-export of the shared LLM call (async). Other pages (e.g. 择时
     配置) reuse the same endpoint discovery: env override first, then the
     user's saved 「接入 AI」config."""
-    return _chat_json(prompt)
+    return await _chat_json(prompt)
 
 
 def _user_llm() -> dict[str, str] | None:
@@ -61,7 +61,7 @@ def _user_llm() -> dict[str, str] | None:
     return None
 
 
-def _endpoint() -> tuple[str, dict[str, str], str] | None:
+def _endpoint() -> tuple[str, str, str] | None:
     if _configured():
         return _BASE_URL, _API_KEY, _MODEL
     user = _user_llm()

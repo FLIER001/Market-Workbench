@@ -56,6 +56,39 @@ class DependencyMissing(RuntimeError):
     """惰性依赖未安装时抛出，前端据此提示 pip install。"""
 
 
+class DataSourceError(RuntimeError):
+    """上游明确失败（网络 / HTTP / JSON / 上游报错 / 响应结构异常）。
+
+    与「查询成功但无数据」区分：后者返回空列表；本异常必须向上抛，
+    由 HTTP 层转 502、MCP 层标 isError —— 不静默成空。
+    """
+
+
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _stock_code(code) -> str:
+    """6 位数字代码校验（数据层入参边界）。"""
+    text = str(code or "").strip()
+    if not re.fullmatch(r"[0-9]{6}", text):
+        raise ValueError(f"code 必须是 6 位数字：{code!r}")
+    return text
+
+
+def _iso_date(value, field: str) -> str | None:
+    """YYYY-MM-DD 校验；None / 空串 → None，非法 → ValueError。"""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    text = str(value).strip()
+    if not _ISO_DATE.match(text):
+        raise ValueError(f"{field} 必须是 YYYY-MM-DD：{value!r}")
+    try:
+        datetime.strptime(text, "%Y-%m-%d")
+    except ValueError as e:
+        raise ValueError(f"{field} 不是合法日期：{value!r}") from e
+    return text
+
+
 # ---------------------------------------------------------------------------
 # Layer 1 · 行情（腾讯财经，仅标准库，不封 IP）
 # ---------------------------------------------------------------------------
@@ -300,28 +333,101 @@ def disclosure(code: str) -> list[dict]:
     return df.head(30).to_dict("records") if df is not None and not df.empty else []
 
 
-def announcements(code: str, limit: int = 15) -> list[dict]:
-    """个股近期公告（东财公开接口，仅 requests，稳定）。返回 日期/标题/类型/详情链接。"""
+_ANN_URL = "https://np-anotice-stock.eastmoney.com/api/security/ann"
+
+
+def announcements(code: str, limit: int = 15, *, start_date: str | None = None,
+                  end_date: str | None = None, page: int = 1,
+                  include_metadata: bool = False) -> list[dict] | dict:
+    """个股公告（东财公开接口，仅 requests，稳定）。返回 日期/标题/类型/详情链接。
+
+    参数边界：code 6 位数字；limit 1..100；page ≥ 1；start_date/end_date 为 YYYY-MM-DD
+    （可单边省略，两端都给时要求 start ≤ end）。日期原样透传给上游 begin_time/end_time，
+    不在本地二次过滤（上游即区间过滤）。
+
+    include_metadata=True → {"records": [...], "coverage": {...}}；coverage.complete 仅在
+    「单次请求即完整覆盖所请求区间的全部命中（含 0 条）」时为 True：必须 page=1、无更多、
+    returned==total，且区间两端都给（或 total==0）。
+
+    上游网络 / HTTP / JSON / 结构异常一律抛 DataSourceError —— 与「查询成功但无公告」（返回 []）区分。
+    """
     import requests
 
-    r = requests.get(
-        "https://np-anotice-stock.eastmoney.com/api/security/ann",
-        params={"sr": -1, "page_size": limit, "page_index": 1, "ann_type": "A",
-                "client_source": "web", "stock_list": code, "f_node": 0, "s_node": 0},
-        headers={"User-Agent": UA}, timeout=20,
-    )
-    lst = (r.json().get("data") or {}).get("list") or []
+    code = _stock_code(code)
+    if any(isinstance(v, bool) or not isinstance(v, int) for v in (limit, page)):
+        raise ValueError("limit和page必须为整数")
+    if not isinstance(include_metadata, bool):
+        raise ValueError("include_metadata必须为布尔值")
+    if not 1 <= limit <= 100:
+        raise ValueError(f"limit 必须在 1..100：{limit}")
+    if page < 1:
+        raise ValueError(f"page 必须 ≥ 1：{page}")
+    start_date = _iso_date(start_date, "start_date")
+    end_date = _iso_date(end_date, "end_date")
+    if start_date and end_date and start_date > end_date:
+        raise ValueError(f"start_date 不能晚于 end_date：{start_date} > {end_date}")
+
+    params = {"sr": -1, "page_size": limit, "page_index": page, "ann_type": "A",
+              "client_source": "web", "stock_list": code, "f_node": 0, "s_node": 0}
+    if start_date:
+        params["begin_time"] = start_date
+    if end_date:
+        params["end_time"] = end_date
+    try:
+        r = requests.get(_ANN_URL, params=params, headers={"User-Agent": UA}, timeout=20)
+        r.raise_for_status()
+        payload = r.json()
+    except Exception as e:  # noqa: BLE001 —— 网络/HTTP/JSON 统一转明确的数据源错误
+        raise DataSourceError(f"东财公告接口失败（{code}）：{e}") from e
+    if isinstance(payload, dict) and (payload.get("success") in (False, 0, "0") or payload.get("error")):
+        raise DataSourceError(f"东财公告接口上游报错（{code}）：{str(payload)[:200]}")
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        raise DataSourceError(f"东财公告接口返回结构异常（{code}）：{str(payload)[:200]}")
+    lst = data.get("list")
+    if lst is None:
+        if data.get("total_hits") not in (0, "0"):
+            raise DataSourceError(f"东财公告接口缺少记录列表且未确认零命中（{code}）")
+        lst = []
+    if not isinstance(lst, list):
+        raise DataSourceError(f"东财公告接口 list 不是数组（{code}）：{str(lst)[:200]}")
+
     out = []
     for a in lst:
-        cols = [c.get("column_name") for c in (a.get("columns") or []) if c.get("column_name")]
+        if not isinstance(a, dict):
+            raise DataSourceError(f"东财公告接口条目结构异常（{code}）：{str(a)[:200]}")
+        columns = a.get("columns") or []
+        if not isinstance(columns, list) or not all(isinstance(c, dict) for c in columns):
+            raise DataSourceError(f"东财公告接口分类结构异常（{code}）")
+        cols = [c.get("column_name") for c in columns if c.get("column_name")]
         art = a.get("art_code", "")
+        try:
+            notice_date = _iso_date(str(a.get("notice_date") or "")[:10], "notice_date")
+        except ValueError as e:
+            raise DataSourceError(f"东财公告日期无效（{code}）：{a.get('notice_date')!r}") from e
+        if not notice_date or (start_date and notice_date < start_date) or (end_date and notice_date > end_date):
+            raise DataSourceError(f"东财公告返回缺失日期或区间外记录（{code}）")
         out.append({
-            "date": (a.get("notice_date", "") or "")[:10],
+            "date": notice_date,
             "title": a.get("title", ""),
             "type": cols[0] if cols else "",
             "url": f"https://data.eastmoney.com/notices/detail/{code}/{art}.html" if art else "",
         })
-    return out
+    if not include_metadata:
+        return out
+
+    raw_total = data.get("total_hits")
+    total = int(raw_total) if isinstance(raw_total, (int, float)) and not isinstance(raw_total, bool) \
+        else (int(raw_total) if isinstance(raw_total, str) and raw_total.strip().isdigit() else None)
+    returned = len(out)
+    has_more = None if total is None else (page - 1) * limit + returned < total
+    exact_interval = start_date is not None and end_date is not None
+    complete = bool(total is not None and page == 1 and not has_more and returned == total
+                    and (exact_interval or total == 0))
+    return {"records": out, "coverage": {
+        "start_date": start_date, "end_date": end_date, "page": page, "page_size": limit,
+        "total": total, "returned": returned, "has_more": has_more, "complete": complete,
+    }}
 
 
 # ---------------------------------------------------------------------------
@@ -1061,20 +1167,49 @@ def market_turnover_rank(n: int = 20) -> list[dict]:
 
 def eastmoney_datacenter(report_name: str, columns: str = "ALL", filter_str: str = "",
                          page_size: int = 50, sort_columns: str = "", sort_types: str = "-1",
-                         page_number: int = 1) -> list[dict]:
-    """东财数据中心统一查询 —— 龙虎榜/解禁/融资融券/大宗交易/股东户数/分红 共用（已内置限流）。"""
+                         page_number: int = 1, *, strict: bool = False) -> list[dict]:
+    """东财数据中心统一查询 —— 龙虎榜/解禁/融资融券/大宗交易/股东户数/分红 共用（已内置限流）。
+
+    strict=False（默认，老调用方行为不变）：任何失败都退化为 []。
+    strict=True：网络 / HTTP / JSON 异常、上游 success=False（除实测的 9201=条件无数据）、
+    result.data 不是列表 → 抛 DataSourceError；绝不把失败静默成空。
+    """
     params = {
         "reportName": report_name, "columns": columns, "filter": filter_str,
         "pageNumber": str(page_number), "pageSize": str(page_size),
         "sortColumns": sort_columns, "sortTypes": sort_types, "source": "WEB", "client": "WEB",
     }
-    try:
-        d = em_get(_DATACENTER_URL, params=params, timeout=15).json()
-    except Exception:
+    if not strict:
+        try:
+            d = em_get(_DATACENTER_URL, params=params, timeout=15).json()
+        except Exception:
+            return []
+        if d.get("result") and d["result"].get("data"):
+            return d["result"]["data"]
         return []
-    if d.get("result") and d["result"].get("data"):
-        return d["result"]["data"]
-    return []
+
+    try:
+        r = em_get(_DATACENTER_URL, params=params, timeout=15)
+        r.raise_for_status()
+        d = r.json()
+    except Exception as e:  # noqa: BLE001 —— 网络/HTTP/JSON 均不得静默成空
+        raise DataSourceError(f"东财数据中心请求失败（{report_name}）：{e}") from e
+    if not isinstance(d, dict):
+        raise DataSourceError(f"东财数据中心返回结构异常（{report_name}）：{str(d)[:200]}")
+    code = d.get("code")
+    result = d.get("result")
+    if d.get("success") is False or code not in (None, 0, "0"):
+        # 实测语义：9201 = 该过滤条件下无数据（等同空）；9501 = 上游报错。
+        if str(code) == "9201" and not (isinstance(result, dict) and result.get("data")):
+            return []
+        raise DataSourceError(
+            f"东财数据中心上游报错（{report_name}）：code={code} message={d.get('message')!r}")
+    if not isinstance(result, dict) or "data" not in result:
+        raise DataSourceError(f"东财数据中心缺少result.data（{report_name}）")
+    rows = result["data"]
+    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        raise DataSourceError(f"东财数据中心 result.data 不是对象列表（{report_name}）：{str(rows)[:200]}")
+    return rows
 
 
 def margin_trading(code: str, page_size: int = 30) -> list[dict]:
@@ -1217,31 +1352,94 @@ def dragon_tiger_board(code: str, trade_date: str | None = None, look_back: int 
     return {"records": records, "seats": seats, "institution": institution}
 
 
+_LOCKUP_HISTORY_LIMIT = 15
+_LOCKUP_FUTURE_LIMIT = 20
+
+
 def lockup_expiry(code: str, trade_date: str | None = None, forward_days: int = 90) -> dict:
-    """限售解禁日历：历史解禁记录 + 未来 N 天待解禁事件。
+    """限售解禁日历：历史解禁 + 未来 N 天待解禁事件。
 
     字段随东财 2026 改列名同步（a-stock-data §3.6）：旧 LIMITED_STOCK_TYPE/FREE_SHARES_NUM
-    已废、致 type/shares 恒空 → 改 FREE_SHARES_TYPE/FREE_SHARES，并补 able_shares（实际可流通股数）。
-    """
-    trade_date = trade_date or datetime.now().strftime("%Y-%m-%d")
-    history = [{
-        "date": str(r.get("FREE_DATE", ""))[:10], "type": r.get("FREE_SHARES_TYPE", ""),
-        "shares": r.get("FREE_SHARES", 0), "able_shares": r.get("ABLE_FREE_SHARES", 0),
-        "ratio": r.get("FREE_RATIO", 0),
-    } for r in eastmoney_datacenter(
-        "RPT_LIFT_STAGE", filter_str=f'(SECURITY_CODE="{code}")',
-        page_size=15, sort_columns="FREE_DATE", sort_types="-1")]
+    已废。FREE_SHARES为解禁后累计流通万股，ABLE_FREE_SHARES为本批解禁万股，不能混用。
 
-    end = (datetime.strptime(trade_date, "%Y-%m-%d") + timedelta(days=forward_days)).strftime("%Y-%m-%d")
-    upcoming = [{
-        "date": str(r.get("FREE_DATE", ""))[:10], "type": r.get("FREE_SHARES_TYPE", ""),
-        "shares": r.get("FREE_SHARES", 0), "able_shares": r.get("ABLE_FREE_SHARES", 0),
-        "ratio": r.get("FREE_RATIO", 0),
-    } for r in eastmoney_datacenter(
-        "RPT_LIFT_STAGE",
-        filter_str=f'(SECURITY_CODE="{code}")(FREE_DATE>=\'{trade_date}\')(FREE_DATE<=\'{end}\')',
-        page_size=20, sort_columns="FREE_DATE", sort_types="1")]
-    return {"history": history, "upcoming": upcoming}
+    口径（today = trade_date，缺省当日）：
+      history   上游显式 FREE_DATE < today，取最近 15 条（倒序）
+      scheduled 上游 FREE_DATE >= today、不带结束日，取最早 20 条（正序）= 全部已返回的未来排期
+      upcoming  scheduled 中 FREE_DATE <= today+forward_days（含 today）
+      records   history + scheduled 合并、按日期升序
+    上游忽略日期过滤时多返回的行按 date 重新分桶，错桶的行被排除（计入 excluded_rows）。
+
+    行内旧键 shares/able_shares/ratio 为前端在用，不改；新增显式单位字段
+    unlock_shares_wan=ABLE_FREE_SHARES / post_unlock_float_wan=FREE_SHARES / ratio_raw=FREE_RATIO
+    （数值直取上游、未换算；ratio 为原始值、不是百分数，见 warnings）。缺数一律 None，不补 0。
+    上游失败抛 DataSourceError（经 strict 查询），不吞成空。
+    """
+    code = _stock_code(code)
+    if isinstance(forward_days, bool) or not isinstance(forward_days, int):
+        raise ValueError(f"forward_days 必须是 0..365 的整数：{forward_days!r}")
+    if not 0 <= forward_days <= 365:
+        raise ValueError(f"forward_days 必须在 0..365：{forward_days}")
+    today = _iso_date(trade_date, "trade_date") or datetime.now(BEIJING).strftime("%Y-%m-%d")
+    end = (datetime.strptime(today, "%Y-%m-%d") + timedelta(days=forward_days)).strftime("%Y-%m-%d")
+
+    def _rows(raw: list[dict]) -> list[dict]:
+        out = []
+        for r in raw:
+            try:
+                date = _iso_date(str(r.get("FREE_DATE") or "")[:10], "FREE_DATE")
+            except ValueError as e:
+                raise DataSourceError(f"解禁记录日期无效：{r.get('FREE_DATE')!r}") from e
+            if not date:
+                raise DataSourceError("解禁记录缺少FREE_DATE")
+            out.append({
+                "date": date, "type": r.get("FREE_SHARES_TYPE", ""),
+                "shares": r.get("FREE_SHARES", 0), "able_shares": r.get("ABLE_FREE_SHARES", 0),
+                "ratio": r.get("FREE_RATIO", 0),
+                "unlock_shares_wan": _number(r.get("ABLE_FREE_SHARES")),
+                "post_unlock_float_wan": _number(r.get("FREE_SHARES")),
+                "ratio_raw": _number(r.get("FREE_RATIO")), "quantity_unit": "万股",
+            })
+        return out
+
+    raw_history = eastmoney_datacenter(
+        "RPT_LIFT_STAGE", filter_str=f'(SECURITY_CODE="{code}")(FREE_DATE<\'{today}\')',
+        page_size=_LOCKUP_HISTORY_LIMIT, sort_columns="FREE_DATE", sort_types="-1", strict=True)
+    raw_future = eastmoney_datacenter(
+        "RPT_LIFT_STAGE", filter_str=f'(SECURITY_CODE="{code}")(FREE_DATE>=\'{today}\')',
+        page_size=_LOCKUP_FUTURE_LIMIT, sort_columns="FREE_DATE", sort_types="1", strict=True)
+
+    history = [r for r in _rows(raw_history) if r["date"] and r["date"] < today]
+    scheduled = [r for r in _rows(raw_future) if r["date"] and r["date"] >= today]
+    upcoming = [r for r in scheduled if r["date"] <= end]
+    excluded = (len(raw_history) - len(history)) + (len(raw_future) - len(scheduled))
+    # 两个查询都没被分页上限截断、也没丢掉错桶行 → 才能说这组结果是完整已知的。
+    complete = (excluded == 0 and len(history) < _LOCKUP_HISTORY_LIMIT
+                and len(scheduled) < _LOCKUP_FUTURE_LIMIT)
+    return {
+        "code": code,
+        "as_of": today,
+        "history": history,
+        "upcoming": upcoming,
+        "scheduled": scheduled,
+        "records": sorted(history + scheduled, key=lambda r: r["date"]),
+        "status": "ok" if (history or scheduled) else "empty",
+        "quantity_unit": "万股",
+        "coverage": {
+            "source": "eastmoney:RPT_LIFT_STAGE",
+            "start_date": today,
+            "end_date": end,
+            "history_limit": _LOCKUP_HISTORY_LIMIT,
+            "future_limit": _LOCKUP_FUTURE_LIMIT,
+            "history_count": len(history),
+            "scheduled_count": len(scheduled),
+            "excluded_rows": excluded,
+            "complete": complete,
+        },
+        "warnings": [
+            "ratio / ratio_raw 为上游原始值，不是百分数，请勿直接当百分比展示",
+            "quantity_unit 为与消费端约定的口径，数值直取上游、未换算",
+        ],
+    }
 
 
 def concept_blocks(code: str) -> dict:

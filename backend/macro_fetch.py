@@ -869,7 +869,7 @@ def financial_conditions() -> dict:
             policy = _policy_rate_on(date, schedule)
             if policy is not None and row.get("FDR007") is not None:
                 pts.append((date, (float(row["FDR007"]) - policy) * 100.0))
-        card = _mk("DR007-7天逆回购利差", _series_from_rows(pts, limit=120), unit="bp",
+        card = _mk("FDR007-7天逆回购利差（上午定盘）", _series_from_rows(pts, limit=120), unit="bp",
                    source="中国货币网FDR007+人民银行政策利率")
         if card:
             card["source_url"] = "https://www.chinamoney.com.cn/chinese/bkfrr/"

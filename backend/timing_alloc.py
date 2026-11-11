@@ -19,14 +19,14 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
-import astock
 import ai_insight
+import astock
 import bonds
+import cache_runtime
 import gold_score
 import market
 import oil
 import sector_scores
-import cache_runtime
 
 _BEIJING = timezone(timedelta(hours=8))
 
@@ -90,7 +90,7 @@ def _ranks_from_values(points: list[dict], window: int = 250, min_periods: int =
     return out
 
 
-def _combine(parts: list[tuple[str, float, float, list[dict]]], weights: dict[str, float],
+def _combine(parts: list[tuple[str, float | None, str, list[dict]]], weights: dict[str, float],
              scale: float, replay_today: str | None = None) -> tuple[float | None, list[dict], list[dict]]:
     """按权重合成子成分 → (总分, parts分解, 逐日回放)。
 
@@ -159,7 +159,7 @@ def _zh_parts(parts: list[dict]) -> list[dict]:
     for p in parts:
         q = dict(p)
         q["key"] = p.get("name")
-        q["name"] = _FACTOR_NAMES.get(p.get("name"), p.get("name"))
+        q["name"] = _FACTOR_NAMES.get(str(p.get("name") or ""), p.get("name"))
         out.append(q)
     return out
 
@@ -348,8 +348,8 @@ def _market_confirm(macro: dict, macro_date: str, curve: dict, pos: dict,
     ]
     # 当日占比本身也参与打分（分位 70% + 当日值 30%），避免历史分位滞后
     for i, (name, sc, _t, _h) in enumerate(b_parts):
-        if sc is not None:
-            cur = breadth_sub[0][1] if name == "上涨家数占比" else nh.get("value")
+        cur = breadth_sub[0][1] if name == "上涨家数占比" else nh.get("value")
+        if sc is not None and isinstance(cur, (int, float)):
             b_parts[i] = (name, round(sc * 0.7 + float(cur) * 0.3, 1), _t, _h)
     breadth_score, breadth_parts, breadth_hist = _combine(
         b_parts, {"上涨家数占比": 60.0, "20日新高占比": 40.0}, 1.0)
@@ -393,8 +393,8 @@ def _market_confirm(macro: dict, macro_date: str, curve: dict, pos: dict,
     tf_hist = [{"date": d, "v": round(sum(m[d] for m in tf_rank_maps) / len(tf_rank_maps), 1)}
                for d in sorted(common)] if tf_rank_maps else []
     inds = [i for i in (sector.get("industries") or []) if isinstance(i, dict)]
-    cr = [i.get("crowding", {}).get("risk") for i in inds
-          if isinstance(i.get("crowding"), dict) and isinstance(i.get("crowding").get("risk"), (int, float))]
+    cr = [c["risk"] for i in inds
+          if isinstance(c := i.get("crowding"), dict) and isinstance(c.get("risk"), (int, float))]
     secc = round(sum(cr) / len(cr), 1) if cr else None
     c_parts = [
         ("国债期货持仓", tf, f"{tf:.0f}/100" if tf is not None else "—", _ranks_from_values(tf_hist)),
@@ -562,16 +562,19 @@ _ASSET_SCORE_WEIGHTS = {
 
 
 def _bond_bond_side(segments: dict) -> tuple[float | None, str, list[dict]]:
+    # 融资套息观察行是策略组合不是单一债券品种（bonds.py 改过一次名，按关键词排除）
     rows = [r for r in (segments.get("rows") or [])
-            if r.get("segment") != "杠杆套息(回购+短券)" and isinstance(r.get("score"), (int, float))]
+            if "套息" not in str(r.get("segment") or "") and isinstance(r.get("score"), (int, float))]
     if not rows:
         return None, "债市分品种评分不可用", []
     score = round(_clamp(50.0 + sum(r["score"] for r in rows) / len(rows) * 25.0, 0, 100), 1)
     best = max(rows, key=lambda r: r["score"])
     text = f"五品种均值 {score:.0f}/100，相对占优：{best['segment']}"
-    hist_maps = {r["segment"]: {str(p.get("date")): p.get("v") for p in (r.get("hist") or [])
-                                if isinstance(p, dict) and isinstance(p.get("v"), (int, float))}
-                 for r in rows}
+    hist_maps: dict[str, dict[str, float]] = {}
+    for r in rows:
+        hist_maps[r["segment"]] = {
+            str(p["date"]): float(p["v"]) for p in (r.get("hist") or [])
+            if isinstance(p, dict) and isinstance(p.get("v"), (int, float)) and p.get("date")}
     dates = set.intersection(*(set(m) for m in hist_maps.values())) if hist_maps else set()
     hist = [{"date": d, "v": round(_clamp(50.0 + sum(m[d] for m in hist_maps.values()) / len(hist_maps) * 25.0, 0, 100), 1)}
             for d in sorted(dates)]
@@ -662,11 +665,19 @@ def _asset_scores(macro: dict, macro_date: str, liq_score: float | None, mc: dic
          "与股票低相关（商品自带通胀对冲）", []),
     ]
     cmd_score, cmd_parts_out, _ = _combine(cmd_parts, _ASSET_SCORE_WEIGHTS["commodity"], 1.0)
+    gold_available = gold_data.get('score_status') == 'complete' and gold_s is not None
+    if not gold_available:
+        # Missing gold must not silently turn the commodity model into oil-only.
+        cmd_score = None
+        cmd_parts_out = [{**p, 'score': None, 'contribution': None,
+                          'value': '黄金完整评分不可用，商品主动评分暂停'} for p in cmd_parts_out]
 
     return {
         "equity": {"score": eq_score, "parts": _zh_parts(eq_parts_out), "drivers": _zh_drivers(eq_parts_out)},
         "bond": {"score": bd_score, "parts": _zh_parts(bd_parts_out), "drivers": _zh_drivers(bd_parts_out)},
-        "commodity": {"score": cmd_score, "parts": _zh_parts(cmd_parts_out), "drivers": _zh_drivers(cmd_parts_out)},
+        "commodity": {"score": cmd_score, "parts": _zh_parts(cmd_parts_out), "drivers": _zh_drivers(cmd_parts_out),
+                      'data_status': 'complete' if gold_available else 'insufficient',
+                      'reason': None if gold_available else '黄金完整评分不可用；使用配置锚点，未生成商品主动判断'},
     }
 
 
@@ -694,7 +705,7 @@ def _correlation_summary() -> dict:
         xs = [a[d] for d in dates]
         ys = [b[d] for d in dates]
         mx, my = sum(xs) / len(xs), sum(ys) / len(ys)
-        cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+        cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=False))
         vx = math.sqrt(sum((x - mx) ** 2 for x in xs))
         vy = math.sqrt(sum((y - my) ** 2 for y in ys))
         return round(cov / (vx * vy), 2) if vx > 0 and vy > 0 else None
@@ -707,7 +718,7 @@ def _correlation_summary() -> dict:
             out.append({"date": ds[i - 1], "v": round(math.sqrt(sum(x * x for x in win) / 20 * 252) * 100, 1)})
         return out
 
-    out = {"window": "60/120 日公共样本，20 日年化波动率"}
+    out: dict[str, object] = {"window": "60/120 日公共样本，20 日年化波动率"}
     sb = _corr(stock, bond)
     out["stock_bond_corr_60d"] = sb
     out["stock_bond_corr_120d"] = _corr(stock, bond, 120)
@@ -774,6 +785,24 @@ def _resolve_weights(anchor: dict, scores: dict, cash_floor: float,
     return {k: round(v, 1) for k, v in w.items()}, True, note
 
 
+def _weight_history(timing: dict, target: dict, as_of: str) -> list[dict]:
+    """历史建议持仓：择时分逐日回放 → 当日档位的锚点组合，末尾接当日实际目标。
+
+    资产分没有逐日回放（子成分多为当期快照），所以历史段只有档位锚点、不含 tanh
+    主动偏离；末尾一点是当日真实目标。两段口径不同，前端必须标注。"""
+    out = []
+    for p in timing.get("hist") or []:
+        v, d = p.get("v"), str(p.get("date") or "")[:10]
+        if not isinstance(v, (int, float)) or not d or d >= as_of:
+            continue
+        w = _ANCHOR_WEIGHTS[_regime_of(v)["key"]]
+        out.append({"date": d, "equity": w["equity"], "bond": w["bond"],
+                    "commodity": w["commodity"], "cash": w["cash"]})
+    out.append({"date": as_of, **{k: round(target[k], 1)
+                                for k in ("equity", "bond", "commodity", "cash")}})
+    return out
+
+
 def _explain_assets(scores: dict, timing: dict, corr: dict) -> dict[str, dict]:
     sb = corr.get("stock_bond_corr_60d")
     corr_state = "股债相关性转正，债券分散价值下降" if (sb or 0) > 0.2 else (
@@ -786,7 +815,7 @@ def _explain_assets(scores: dict, timing: dict, corr: dict) -> dict[str, dict]:
         return [_FACTOR_NAMES.get(p.get("name"), p.get("name")) for p in rows[:2]]
 
     out = {}
-    for key, zh in (("equity", "股票"), ("bond", "债券"), ("commodity", "商品"), ("cash", "现金")):
+    for key in ("equity", "bond", "commodity", "cash"):
         if key == "cash":
             out[key] = {
                 "support": ["流动性缓冲", "择时现金底仓约束"],
@@ -800,7 +829,7 @@ def _explain_assets(scores: dict, timing: dict, corr: dict) -> dict[str, dict]:
         if key == "bond":
             constraint = constraint + [corr_state]
         out[key] = {"support": support, "constraint": constraint[:2],
-                    "meaning": f"资产分 {scores[key]['score']:.0f}/100，权重相对锚点按带限偏离调整"}
+                    "meaning": (f"资产分 {scores[key]['score']:.0f}/100，权重相对锚点按带限偏离调整" if scores[key].get('score') is not None else "资产输入不足，暂停主动判断，使用配置锚点")}
     return out
 
 
@@ -896,6 +925,7 @@ def _payload() -> dict:
             "last_weights": last_weights, "last_as_of": (prev or {}).get("as_of"),
             "regime_changed": regime_changed, "rebalance_trigger": rebalance,
             "rows": rows, "resolved": resolved, "resolve_note": resolve_note,
+            "weight_history": _weight_history(timing, target, as_of),
             "asset_scores": scores, "correlation": corr,
             "cash_yield_note": (f"Shibor 1Y {sh_last:.2f}%（现金收益锚）" if sh_last is not None
                                 else "Shibor 序列不可用"),
@@ -914,20 +944,28 @@ def _payload() -> dict:
         ],
         "updated": datetime.now(_BEIJING).strftime("%Y-%m-%d %H:%M"),
     }
-    _write_state({"as_of": as_of, "regime": timing["regime"],
-                  "target_weights": target, "updated_at": time.time()})
+    if resolved:  # 回退锚点不是主动结论，不覆盖「较当前」的基准
+        _write_state({"as_of": as_of, "regime": timing["regime"],
+                      "target_weights": target, "updated_at": time.time()})
     return payload
 
 
 def get_timing_allocation(force: bool = False) -> dict:
+    # 上游瞬时空壳（如曲线正处在刷新窗口）会让资产分缺一项而回退锚点；这种降级结果
+    # 不写快照，且只缓存 10 分钟，避免一个瞬时空壳把结论钉住一小时。
     return cache_runtime.get(
         "timing:allocation", _payload,
         valid=lambda v: bool(v.get("timing", {}).get("regime")),
-        ttl=3600,
+        ttl=600,
         warm=_load_snapshot,
-        save=_save_snapshot,
+        save=_save_if_resolved,
         force=force,
     )
+
+
+def _save_if_resolved(value: dict) -> None:
+    if (value.get("allocation") or {}).get("resolved"):
+        _save_snapshot(value)
 
 
 # ---------------------------------------------------------------------------
@@ -973,7 +1011,7 @@ async def _build_insight(force: bool = False) -> dict[str, str] | str:
         src = (liq_raw.get("parts") if key == "liquidity" else None) or []
         bond_idx = ((market.get_liquidity() or {}).get("cn_indices") or {}).get("bond") or {}
         bond_pct = bond_idx.get("value") if isinstance(bond_idx.get("value"), (int, float)) else None
-        for p, raw in zip(blk.get("parts") or [], src):
+        for p, raw in zip(blk.get("parts") or [], src, strict=False):
             if not (isinstance(p, dict) and p.get("contribution") is not None):
                 continue
             if p.get("value"):
@@ -1036,9 +1074,9 @@ async def _build_insight(force: bool = False) -> dict[str, str] | str:
         '只返回 JSON：{"macro": "...", "liquidity": "...", "market_confirm": "..."}，不要解释或代码块标记。'
     )
     parsed = await chat_json(prompt)
-    out = {k: str(parsed.get(k)).strip()[:_INSIGHT_MAX_CHARS]
+    out = {k: str(v).strip()[:_INSIGHT_MAX_CHARS]
            for k in ("macro", "liquidity", "market_confirm")
-           if isinstance(parsed.get(k), str) and parsed.get(k).strip()}
+           if isinstance(v := parsed.get(k), str) and v.strip()}
     return out if len(out) == 3 else ""
 
 

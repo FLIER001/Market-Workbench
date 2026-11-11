@@ -24,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 
 import astock
 import cache_runtime
+import score_worker
 
 BEIJING = timezone(timedelta(hours=8))
 DATA_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
@@ -1120,11 +1121,11 @@ def get_cached_plate_scores() -> dict | None:
 
 
 def get_plate_scores(force: bool = False) -> dict:
-    cached = _load_cache()
+    cached = cache_runtime.peek("plate_scores:v5") or _load_cache()
     return cache_runtime.get(
-        "plate_scores:v5", _build,
+        "plate_scores:v5", lambda: score_worker.rebuild(__name__, _load_cache),
         valid=lambda value: bool(value.get("boards")),
-        ttl=_cache_ttl(cached or {}), warm=_load_cache, save=_save_cache, force=force,
+        ttl=_cache_ttl(cached or {}), warm=lambda: cached, force=force,
     )
 
 

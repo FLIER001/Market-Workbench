@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import math
+from datetime import date as calendar_date
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -16,7 +18,7 @@ FORWARD_HORIZONS = [1, 5, 10, 20]
 
 MIN_CROSS_SECTION = 30  # 横截面样本少于此数的日子跳过（evaluate 与回测候选共用）
 
-_index_ret_cache: pd.Series | None = None
+_index_ret_cache: tuple[object, pd.Series] | None = None
 
 
 def _index_ret_aligned(df: pd.DataFrame) -> pd.Series | None:
@@ -25,9 +27,12 @@ def _index_ret_aligned(df: pd.DataFrame) -> pd.Series | None:
     idx_close = factor_data.load_index_close()
     if idx_close.empty:
         return None
-    if _index_ret_cache is None or not _index_ret_cache.index.equals(idx_close.index):
-        _index_ret_cache = idx_close.pct_change()
-    m = df["date"].map(_index_ret_cache)
+    # 缓存键用日历文件的 stat，不用 Series.index.equals：重建后新指数仍可能是同一批日期
+    # （补一根新 K 线不会改旧日期序列），只比日期会让旧收益缓存永久存活。
+    key = factor_data.stat_key(factor_data._CALENDAR_FILE)
+    if _index_ret_cache is None or _index_ret_cache[0] != key:
+        _index_ret_cache = (key, idx_close.pct_change())
+    m = cast(pd.Series, df["date"]).map(_index_ret_cache[1])
     return m if m.notna().any() else None
 
 
@@ -43,8 +48,8 @@ def compute_factors(panel: pd.DataFrame, names: list[str] | None = None) -> pd.D
     df = panel.sort_values(["code", "date"]).copy()
     g = df.groupby("code", sort=False)
 
-    close, open_, high, low = df["close"], df["open"], df["high"], df["low"]
-    ret_1d = g["close"].transform(lambda s: s.pct_change())
+    open_, high, low = df["open"], df["high"], df["low"]
+    ret_1d = cast(pd.Series, g["close"].transform(lambda s: s.pct_change()))
     amount = df["amount"]
 
     def mom(skip_end: int, window: int) -> pd.Series:
@@ -78,11 +83,10 @@ def compute_factors(panel: pd.DataFrame, names: list[str] | None = None) -> pd.D
 
     close_g = g["close"]
     high_g = g["high"]
-    vol_g = g["volume"]
 
     def max_ret(window: int) -> pd.Series:
         """MAX 效应（Bali et al. 2011 JFE）：近 n 日最大单日收益（彩票偏好，高值未来收益低）。"""
-        return ret_1d.groupby(df["code"], sort=False).rolling(window).max().reset_index(level=0, drop=True)
+        return pd.Series(ret_1d.groupby(df["code"], sort=False).rolling(window).max().reset_index(level=0, drop=True))
 
     def dist_52w_high() -> pd.Series:
         """52 周高点距离（George & Hwang 2004 JF）：close/252 日最高收盘 - 1（接近高点→动量强）。"""
@@ -94,22 +98,22 @@ def compute_factors(panel: pd.DataFrame, names: list[str] | None = None) -> pd.D
         """隔夜收益（Lou-Polk-Skouras 2019 RFS）：Σ open/prev_close-1，情绪/散户主导段。"""
         def _o(o: pd.Series, c: pd.Series) -> pd.Series:
             return (o / c.shift(1) - 1.0).rolling(window).sum()
-        return pd.concat([open_, df["close"]], axis=1, keys=["o", "c"]).groupby(df["code"], sort=False) \
-            .apply(lambda x: _o(x["o"], x["c"])).reset_index(level=0, drop=True).sort_index()
+        return cast(pd.Series, pd.concat([open_, df["close"]], axis=1, keys=["o", "c"]).groupby(df["code"], sort=False) \
+            .apply(lambda x: _o(x["o"], x["c"])).reset_index(level=0, drop=True).sort_index())
 
     def intraday(window: int) -> pd.Series:
         """日内收益（Lou-Polk-Skouras 2019）：Σ close/open-1，机构主导段（A股 T+1 下的反向锚）。"""
         def _i(c: pd.Series, o: pd.Series) -> pd.Series:
             return (c / o - 1.0).rolling(window).sum()
-        return pd.concat([df["close"], open_], axis=1, keys=["c", "o"]).groupby(df["code"], sort=False) \
-            .apply(lambda x: _i(x["c"], x["o"])).reset_index(level=0, drop=True).sort_index()
+        return cast(pd.Series, pd.concat([df["close"], open_], axis=1, keys=["c", "o"]).groupby(df["code"], sort=False) \
+            .apply(lambda x: _i(x["c"], x["o"])).reset_index(level=0, drop=True).sort_index())
 
     def frog(window: int, quant: float = 0.2) -> pd.Series:
         """青蛙效应（Wu et al. 2022 JFE）：近 n 日收益在 n*2 日分布中的分位（第一 Pond 跳跃）。"""
         def _f(s: pd.Series) -> pd.Series:
             r = s.pct_change()
             long_win = r.rolling(window * 2, min_periods=window).quantile(quant)
-            return (r.rolling(window).sum() < long_win).astype(float)
+            return cast(pd.Series, (r.rolling(window).sum() < long_win).astype(float))
         return close_g.transform(_f)
 
     def abnormal_turnover(window: int) -> pd.Series:
@@ -120,10 +124,10 @@ def compute_factors(panel: pd.DataFrame, names: list[str] | None = None) -> pd.D
 
     def hl_spread(window: int) -> pd.Series:
         """Parkinson 高低价波动率（Corwin-Schultz 前置）：σ² = Σ(ln(high/low))²/(4ln2·n)。"""
-        def _p(h: pd.Series, l: pd.Series) -> pd.Series:
-            return ((np.log(h / l) ** 2).rolling(window).sum() / (4 * np.log(2) * window)) ** 0.5
-        return pd.concat([high, low], axis=1, keys=["h", "l"]).groupby(df["code"], sort=False) \
-            .apply(lambda x: _p(x["h"], x["l"])).reset_index(level=0, drop=True).sort_index()
+        def _p(high_price: pd.Series, low_price: pd.Series) -> pd.Series:
+            return ((np.log(high_price / low_price) ** 2).rolling(window).sum() / (4 * np.log(2) * window)) ** 0.5
+        return cast(pd.Series, pd.concat([high, low], axis=1, keys=["h", "l"]).groupby(df["code"], sort=False) \
+            .apply(lambda x: _p(x["h"], x["l"])).reset_index(level=0, drop=True).sort_index())
 
     def corr_market(window: int) -> pd.Series:
         """与市场相关（Malkiel-Xu 2006 / Herskovic et al. 2016 JF）：个股收益与指数收益的滚动相关。"""
@@ -131,9 +135,9 @@ def compute_factors(panel: pd.DataFrame, names: list[str] | None = None) -> pd.D
         if idx_ret is None:
             return pd.Series(np.nan, index=df.index)
         def _c(r: pd.Series, m: pd.Series) -> pd.Series:
-            return r.rolling(window).corr(m)
-        return pd.concat([ret_1d, idx_ret], axis=1, keys=["r", "m"]).groupby(df["code"], sort=False) \
-            .apply(lambda x: _c(x["r"], x["m"])).reset_index(level=0, drop=True).sort_index()
+            return cast(pd.Series, r.rolling(window).corr(m))
+        return cast(pd.Series, pd.concat([ret_1d, idx_ret], axis=1, keys=["r", "m"]).groupby(df["code"], sort=False) \
+            .apply(lambda x: _c(x["r"], x["m"])).reset_index(level=0, drop=True).sort_index())
 
     def beta_market(window: int) -> pd.Series:
         """市场贝塔（Frazzini-Pedersen 2014 JFE BAB）：低贝塔异象，低 β 风险调整后收益更高。"""
@@ -141,11 +145,11 @@ def compute_factors(panel: pd.DataFrame, names: list[str] | None = None) -> pd.D
         if idx_ret is None:
             return pd.Series(np.nan, index=df.index)
         def _b(r: pd.Series, m: pd.Series) -> pd.Series:
-            var = m.rolling(window).var()
+            var = cast(pd.Series, m.rolling(window).var())
             cov = r.rolling(window).cov(m)
             return cov / var.where(var > 0)
-        return pd.concat([ret_1d, idx_ret], axis=1, keys=["r", "m"]).groupby(df["code"], sort=False) \
-            .apply(lambda x: _b(x["r"], x["m"])).reset_index(level=0, drop=True).sort_index()
+        return cast(pd.Series, pd.concat([ret_1d, idx_ret], axis=1, keys=["r", "m"]).groupby(df["code"], sort=False) \
+            .apply(lambda x: _b(x["r"], x["m"])).reset_index(level=0, drop=True).sort_index())
 
     def idio_vol(window: int) -> pd.Series:
         """特质波动（Ang et al. 2006 JF）：对市场回归的残差 std（高特质波动→低收益，谜题）。"""
@@ -153,11 +157,12 @@ def compute_factors(panel: pd.DataFrame, names: list[str] | None = None) -> pd.D
         if idx_ret is None:
             return pd.Series(np.nan, index=df.index)
         def _iv(r: pd.Series, m: pd.Series) -> pd.Series:
-            beta = r.rolling(window).cov(m) / m.rolling(window).var().where(lambda v: v > 0)
+            market_var = cast(pd.Series, m.rolling(window).var())
+            beta = r.rolling(window).cov(m) / market_var.where(lambda v: v > 0)
             resid = r - beta * m
             return resid.rolling(window).std()
-        return pd.concat([ret_1d, idx_ret], axis=1, keys=["r", "m"]).groupby(df["code"], sort=False) \
-            .apply(lambda x: _iv(x["r"], x["m"])).reset_index(level=0, drop=True).sort_index()
+        return cast(pd.Series, pd.concat([ret_1d, idx_ret], axis=1, keys=["r", "m"]).groupby(df["code"], sort=False) \
+            .apply(lambda x: _iv(x["r"], x["m"])).reset_index(level=0, drop=True).sort_index())
 
     def coskew(window: int) -> pd.Series:
         """协偏度（Harvey-Siddique 2000 JF）：个股与市场收益的滚动协偏（系统性偏度定价）。"""
@@ -168,11 +173,10 @@ def compute_factors(panel: pd.DataFrame, names: list[str] | None = None) -> pd.D
             m2 = (m ** 2).rolling(window).mean()
             m3 = (m ** 3).rolling(window).mean()
             rm2 = (r * m ** 2).rolling(window).mean()
-            var = m.rolling(window).var()
             denom = (m3 - m2 ** 2).where(lambda v: v != 0)
             return (rm2 - r.rolling(window).mean() * m2) / denom
-        return pd.concat([ret_1d, idx_ret], axis=1, keys=["r", "m"]).groupby(df["code"], sort=False) \
-            .apply(lambda x: _cs(x["r"], x["m"])).reset_index(level=0, drop=True).sort_index()
+        return cast(pd.Series, pd.concat([ret_1d, idx_ret], axis=1, keys=["r", "m"]).groupby(df["code"], sort=False) \
+            .apply(lambda x: _cs(x["r"], x["m"])).reset_index(level=0, drop=True).sort_index())
 
     def illiq_shock() -> pd.Series:
         """非流动性冲击（Amihud 2002 JFM 突变口径）：近 20 日非流动 / 前 250 日均值。"""
@@ -190,11 +194,11 @@ def compute_factors(panel: pd.DataFrame, names: list[str] | None = None) -> pd.D
 
     def ret_skew(window: int) -> pd.Series:
         """收益偏度（Boyer-Mitton-Vorkink 2010 RFS：预期特质偏度，高偏度未来收益低）。"""
-        return ret_1d.groupby(df["code"], sort=False).rolling(window).skew().reset_index(level=0, drop=True)
+        return pd.Series(ret_1d.groupby(df["code"], sort=False).rolling(window).skew().reset_index(level=0, drop=True))
 
     def ret_kurt(window: int) -> pd.Series:
         """收益峰度（尾部风险，Dittmar 2002 二阶偏好）。"""
-        return ret_1d.groupby(df["code"], sort=False).rolling(window).kurt().reset_index(level=0, drop=True)
+        return pd.Series(ret_1d.groupby(df["code"], sort=False).rolling(window).kurt().reset_index(level=0, drop=True))
 
     def max_min_gap(window: int) -> pd.Series:
         """极值差（Bali et al. MAX-MIN 组合口径）：近 n 日最大收益 - 最小收益。"""
@@ -206,8 +210,8 @@ def compute_factors(panel: pd.DataFrame, names: list[str] | None = None) -> pd.D
         """动量质量（Israel-Moskowitz 2013 JF「信息离散度」：平滑上涨 > 忽上忽下）。"""
         def _q(s: pd.Series) -> pd.Series:
             r = s.pct_change()
-            sign_sum = np.sign(r).rolling(window).sum()
-            abs_sum = r.abs().rolling(window).sum().where(lambda v: v > 0)
+            sign_sum = cast(pd.Series, np.sign(r)).rolling(window).sum()
+            abs_sum = cast(pd.Series, r.abs().rolling(window).sum()).where(lambda v: v > 0)
             return sign_sum / abs_sum
         return close_g.transform(_q)
 
@@ -228,7 +232,7 @@ def compute_factors(panel: pd.DataFrame, names: list[str] | None = None) -> pd.D
     def vol_of_vol(window: int) -> pd.Series:
         """波动率的波动（Wang-Xu 2022 RFS「不确定性」：特质高阶风险）。"""
         v = ret_1d.groupby(df["code"], sort=False).rolling(window).std().reset_index(level=0, drop=True)
-        return v.groupby(df["code"], sort=False).rolling(window).std().reset_index(level=0, drop=True)
+        return pd.Series(v.groupby(df["code"], sort=False).rolling(window).std().reset_index(level=0, drop=True))
 
     def max_corr(window: int) -> pd.Series:
         """同上 corr_market 的短窗口版（15 日）：短期联动（涨跌停潮中的传导）。"""
@@ -236,49 +240,52 @@ def compute_factors(panel: pd.DataFrame, names: list[str] | None = None) -> pd.D
 
     all_factors = {
         # 动量/反转
-        "mom20": mom(5, 20),
-        "mom60": mom(5, 60),
-        "mom120": mom(5, 120),
-        "rev5": g["close"].transform(lambda s: -(s / s.shift(5) - 1.0)),  # 5 日反转：跌得多 → 值大
-        "dist_52w_high": dist_52w_high(),
-        "frog20": frog(20),
-        "mom_quality60": mom_quality(60),
-        "trend60": trend_strength(60),
+        "mom20": lambda: mom(5, 20),
+        "mom60": lambda: mom(5, 60),
+        "mom120": lambda: mom(5, 120),
+        "rev5": lambda: g["close"].transform(lambda s: -(s / s.shift(5) - 1.0)),  # 5 日反转：跌得多 → 值大
+        "dist_52w_high": lambda: dist_52w_high(),
+        "frog20": lambda: frog(20),
+        "mom_quality60": lambda: mom_quality(60),
+        "trend60": lambda: trend_strength(60),
         # 波动/风险
-        "vol20": vol(20),
-        "vol60": vol(60),
-        "downside_vol20": downside_vol(20),
-        "hl_vol20": hl_spread(20),
-        "idio_vol60": idio_vol(60),
-        "vol_of_vol20": vol_of_vol(20),
-        "ret_skew60": ret_skew(60),
-        "ret_kurt60": ret_kurt(60),
-        "max_ret20": max_ret(20),
-        "maxmin20": max_min_gap(20),
+        "vol20": lambda: vol(20),
+        "vol60": lambda: vol(60),
+        "downside_vol20": lambda: downside_vol(20),
+        "hl_vol20": lambda: hl_spread(20),
+        "idio_vol60": lambda: idio_vol(60),
+        "vol_of_vol20": lambda: vol_of_vol(20),
+        "ret_skew60": lambda: ret_skew(60),
+        "ret_kurt60": lambda: ret_kurt(60),
+        "max_ret20": lambda: max_ret(20),
+        "maxmin20": lambda: max_min_gap(20),
         # 市场结构
-        "beta60": beta_market(60),
-        "corr_market60": corr_market(60),
-        "coskew60": coskew(60),
+        "beta60": lambda: beta_market(60),
+        "corr_market60": lambda: corr_market(60),
+        "coskew60": lambda: coskew(60),
         # 流动性/量
-        "amihud20": amihud(20),
-        "illiq_shock": illiq_shock(),
-        "abnormal_turnover20": abnormal_turnover(20),
-        "amount_stab20": amount_stability(20),
-        "turnover_stability": turnover_stab(),
-        "volume_trend20": volume_trend(20),
+        "amihud20": lambda: amihud(20),
+        "illiq_shock": lambda: illiq_shock(),
+        "abnormal_turnover20": lambda: abnormal_turnover(20),
+        "amount_stab20": lambda: amount_stability(20),
+        "turnover_stability": lambda: turnover_stab(),
+        "volume_trend20": lambda: volume_trend(20),
         # 日内结构
-        "overnight20": overnight(20),
-        "intraday20": intraday(20),
+        "overnight20": lambda: overnight(20),
+        "intraday20": lambda: intraday(20),
     }
 
     out = df[["date", "code"]].copy()
-    for name in (names or list(all_factors)):
-        out[name] = all_factors[name]
-    out["ret_fwd_1"] = g["close"].transform(lambda s: s.shift(-1) / s - 1.0)
-    for h in FORWARD_HORIZONS[1:]:
-        out[f"ret_fwd_{h}"] = g["close"].transform(lambda s, h=h: s.shift(-h) / s - 1.0)
-    # T+1 起的收益序列（组合回测与分组收益按日聚合用）
-    out["ret_next_1"] = g["close"].transform(lambda s: s.shift(-1) / s - 1.0)
+    for name in (list(all_factors) if names is None else names):
+        out[name] = all_factors[name]()
+    # 统一交易日历：停牌缺行不能把下一根行情误当成下一交易日。
+    calendar = sorted(set(factor_data.load_calendar()) | set(df["date"]))
+    prices = df.pivot(index="date", columns="code", values="close").reindex(calendar)
+    row_index = pd.MultiIndex.from_arrays([out["date"], out["code"]], names=["date", "code"])
+    for h in FORWARD_HORIZONS:
+        forward = prices.shift(-h) / prices - 1.0
+        out[f"ret_fwd_{h}"] = forward.stack().reindex(row_index).to_numpy()
+    out["ret_next_1"] = out["ret_fwd_1"]
     # 上市天数代理（用于剔除次新股）
     out["days_since_list"] = g.cumcount() + 1
     return out.set_index(["date", "code"])
@@ -328,8 +335,8 @@ def factor_name_of(factor: str) -> str:
         import factor_expr
 
         fid = factor.split(":", 1)[1]
-        saved = {f["id"]: f for f in factor_expr.list_custom()}
-        return saved.get(fid, {}).get("name", fid)
+        saved = factor_expr.lookup_custom(fid)
+        return saved.get("name", fid) if saved is not None else fid
     if factor.startswith("fin_"):
         return FIN_FACTOR_META.get(factor, factor)
     return FACTOR_META.get(factor, factor)
@@ -423,87 +430,73 @@ def _fin_derive(pit: pd.DataFrame, close_w: pd.DataFrame) -> dict[str, pd.DataFr
 
 
 def _quarter_series_factors(fund: pd.DataFrame, close_w: pd.DataFrame) -> tuple:
-    """从 PIT 长表做单季化 + SUE/应计/稳定性/ΔROE。
+    """每个公告事件仅用已可见报告做单季化和历史窗口计算。
 
-    业绩报表为累计口径：单季 = 本期累计 - 上期累计（Q1 直接用）。not_yet_q4 陷阱：年报→一季报
-    跨年时上期累计取 0（年报重置）。字段无总资产/股本，分母用近 4 季均收盘价×股数不可得——
-    应计用「单季净利-单季经营现金流」除以股价（每股价差口径），稳定性用单季序列的 CV。
+    每股累计 EPS/现金流按季度差分；缺季保留空值，Q1 跨年重置。
+    返回 SUE、每股应计差额、盈利/营收稳定性和 ΔROE 的逐股可见序列。
+    更正公告到来时重算依赖窗口，同时保持最新报告期不回退。
     """
-    fund = fund.sort_values(["code", "report_date"]).copy()
+    import factor_pit
 
-    _QUARTERS = ["03-31", "06-30", "09-30", "12-31"]
+    records = []
+    for code, group in fund.groupby("code", sort=False):
+        # Quarterly grid preserves actual lags even when a report is missing.
+        group = group.sort_values(["report_date", "notice_date"]).drop_duplicates("report_date", keep="last")
+        group.index = pd.PeriodIndex(group["report_date"], freq="Q")
+        group = group.reindex(pd.period_range(group.index.min(), group.index.max(), freq="Q"))
+        notices = group["notice_date"].fillna("").to_numpy(dtype=str)
+        events = np.unique(notices[notices != ""])
+        visible = (notices[None, :] != "") & (notices[None, :] <= events[:, None])
+        latest = np.where(visible, np.arange(len(group)), -1).max(axis=1)
 
-    def _next_quarter(rd: str) -> str | None:
-        """rd 的下一个季度报告期；rd 非法返回 None。"""
-        try:
-            year, md = rd[:4], rd[5:]
-            i = _QUARTERS.index(md)
-        except (ValueError, IndexError):
-            return None
-        if i == 3:
-            return f"{int(year) + 1}-03-31"
-        return f"{year}-{_QUARTERS[i + 1]}"
+        def values(column):
+            raw = pd.to_numeric(group[column], errors="coerce").to_numpy(dtype=float)
+            return np.where(visible, raw[None, :], np.nan)
 
-    def quarterize(g: pd.DataFrame) -> pd.DataFrame:
-        g = g.copy()
-        g["prev_rd"] = g["report_date"].shift(1)
-        # 相邻报告期必须恰好差一个季度（东财缺报/跳报时 shift(1) 的差不是单季）
-        contiguous = g["prev_rd"].map(lambda p: bool(p)) & g.apply(
-            lambda r: _next_quarter(r["prev_rd"]) == r["report_date"]
-            if isinstance(r["prev_rd"], str) and r["prev_rd"] else False, axis=1)
-        # 跨年重置（12-31 → 次年 03-31）也是相邻季度，同属 contiguous
-        same_year = g["report_date"].str[:4] == g["prev_rd"].str[:4].fillna("")
-        valid = contiguous  # 相邻季度（含跨年 12-31→03-31）
-        for col in ("net_profit", "revenue", "ocf_ps", "eps"):
-            q_col = f"q_{col}"
-            g[q_col] = g[col]
-            prev = g[col].shift(1)
-            mask = valid & same_year
-            g.loc[mask, q_col] = g.loc[mask, col] - prev[mask]
-            # Q1（跨年首季）单季 = 累计本身；不连续的期置 NaN（跳报无法差分）
-            g.loc[~valid & ~g["report_date"].str.endswith("03-31"), q_col] = np.nan
-        g["roe_prev"] = g["roe"].shift(1)
-        g["eps_std8"] = g["q_eps"].rolling(8, min_periods=6).std()
-        g["eps_mean8"] = g["q_eps"].rolling(8, min_periods=6).mean()
-        g["rev_std8"] = g["q_revenue"].rolling(8, min_periods=6).std()
-        g["rev_mean8"] = g["q_revenue"].rolling(8, min_periods=6).mean()
-        # SUE（Bernard-Thomas）：单季 EPS - 4 期前单季 EPS，除以单季 EPS 的 8 季 std
-        g["sue"] = (g["q_eps"] - g["q_eps"].shift(4)) / g["eps_std8"].where(g["eps_std8"] > 1e-9)
-        # 应计（每股价差口径）：单季净利/股 - 单季经营现金流。无股本 → 用 eps 与 ocf_ps 的差近似
-        g["accr"] = g["q_eps"] - g["q_ocf_ps"]
-        return g
+        def quarter(column):
+            cumulative = values(column)
+            previous = np.roll(cumulative, 1, axis=1)
+            previous[:, 0] = np.nan
+            return np.where((group.index.quarter == 1)[None, :], cumulative, cumulative - previous)
 
-    parts = {c: quarterize(g) for c, g in fund.groupby("code", sort=False)}
-    fund_q = pd.concat(parts.values())
+        row = np.arange(len(events))
+        eps, ocf, revenue, roe = quarter("eps"), quarter("ocf_ps"), quarter("revenue"), values("roe")
+        offsets = latest[:, None] - np.arange(7, -1, -1)
 
-    # 稳定性 / ΔROE 派生列
-    fund_q["earn_stab"] = fund_q["eps_mean8"] / fund_q["eps_std8"].where(fund_q["eps_std8"] > 1e-9)
-    fund_q["rev_stab"] = fund_q["rev_mean8"] / fund_q["rev_std8"].where(fund_q["rev_std8"] > 1e-9)
-    fund_q["droe"] = fund_q["roe"] - fund_q["roe_prev"]
+        def moments(array):
+            history = np.take_along_axis(array, offsets.clip(min=0), axis=1)
+            history[offsets < 0] = np.nan
+            count = np.isfinite(history).sum(axis=1)
+            mean = np.nansum(history, axis=1) / np.maximum(count, 1)
+            variance = np.nansum((history - mean[:, None]) ** 2, axis=1) / np.maximum(count - 1, 1)
+            std = np.sqrt(variance)
+            mean[count < 6] = np.nan
+            std[(count < 6) | (std <= 1e-9)] = np.nan
+            return mean, std
 
-    def to_wide(col: str) -> pd.DataFrame:
-        """报告期序列 → 公告日可见的交易日宽表（向量化：所有股票一次性 asof）。"""
-        sub = fund_q.dropna(subset=["notice_date"]) \
-            .sort_values("notice_date") \
-            .drop_duplicates(subset=["code", "notice_date"], keep="last")
-        # 长表 → (公告日, code) 透视，再按公告日对交易日 asof（每行取最近已公告值）
-        pv = sub.pivot_table(index="notice_date", columns="code", values=col, aggfunc="last")
-        pv.index = pd.DatetimeIndex(pv.index)
-        dates_idx = pd.DatetimeIndex(close_w.index)
-        # pandas 3: DataFrame 无直接 asof；逐列 searchsorted 仍比逐股 groupby 快百倍
-        pos = pv.index.searchsorted(dates_idx, side="right") - 1
-        valid = pos >= 0
-        if pv.empty:
-            return pd.DataFrame(np.nan, index=close_w.index, columns=close_w.columns)
-        safe_pos = np.clip(pos, 0, len(pv.index) - 1)
-        aligned = pv.to_numpy()[safe_pos].astype(float)
-        aligned[~valid] = np.nan
-        wide = pd.DataFrame(aligned, index=close_w.index, columns=pv.columns)
-        return wide.reindex(index=close_w.index, columns=close_w.columns)
+        eps_mean, eps_std = moments(eps)
+        rev_mean, rev_std = moments(revenue)
+        lag_eps = eps[row, (latest - 4).clip(min=0)].copy()
+        lag_eps[latest < 4] = np.nan
+        lag_roe = roe[row, (latest - 1).clip(min=0)].copy()
+        lag_roe[latest < 1] = np.nan
+        derived = {
+            "sue": (eps[row, latest] - lag_eps) / eps_std,
+            "accr": eps[row, latest] - ocf[row, latest],
+            "earn_stab": eps_mean / eps_std,
+            "rev_stab": rev_mean / rev_std,
+            "droe": roe[row, latest] - lag_roe,
+        }
+        for i, event in enumerate(events):
+            records.append({"code": code, "notice_date": event,
+                            "report_date": str(group.index[latest[i]].end_time.date()),
+                            **{name: value[i] for name, value in derived.items()}})
 
-    sue = to_wide("sue")
-    accr = to_wide("accr")
-    return sue, accr, to_wide("earn_stab"), to_wide("rev_stab"), to_wide("droe")
+    columns = ("sue", "accr", "earn_stab", "rev_stab", "droe")
+    if not records:
+        return tuple(pd.DataFrame(np.nan, index=close_w.index, columns=close_w.columns) for _ in columns)
+    aligned = factor_pit._as_of_records(pd.DataFrame(records), list(close_w.index))
+    return tuple(aligned.xs(name, axis=1, level=1).reindex(columns=close_w.columns) for name in columns)
 
 
 def _factor_frame(panel: pd.DataFrame, factor: str) -> pd.DataFrame:
@@ -518,19 +511,67 @@ def _factor_frame(panel: pd.DataFrame, factor: str) -> pd.DataFrame:
     import factor_expr
 
     fid = factor.split(":", 1)[1]
-    saved = {f["id"]: f for f in factor_expr.list_custom()}
-    if fid not in saved:
+    saved = factor_expr.lookup_custom(fid)
+    if saved is None:
         raise KeyError(f"自定义因子 {fid} 不存在")
-    ast = factor_expr.compile_expr(saved[fid]["expr"])
-    fields = factor_expr.build_fields(panel)
-    fund_fields = _fund_wide_fields(fields["close"].index.tolist())
+    return _apply_expr(panel, factor, str(saved["expr"]))
+
+
+def _apply_expr(panel: pd.DataFrame, column: str, expr: str) -> pd.DataFrame:
+    """公式因子：静态编译后在字段宽表上执行，对齐回 compute_factors 的结构。
+
+    只认公式文本本身——不做任何落盘或临时因子登记，因此研究执行不依赖共享因子目录。
+    """
+    import factor_expr
+
+    return _apply_expr_ast(panel, column, factor_expr.compile_expr(expr))
+
+
+def _apply_expr_ast(panel: pd.DataFrame, column: str, ast: tuple) -> pd.DataFrame:
+    import factor_expr
+
+    # 只构建公式真正引用的字段（展开到原始价量列）：不为单条公式分配整个字段库。
+    fields = factor_expr.build_fields(panel, factor_expr.field_dependencies(ast))
+    needed_fund = factor_expr.referenced_fields(ast) & set(factor_expr.FUND_FIELDS)
+    if needed_fund:
+        trade_dates = sorted(set(factor_data.load_calendar()) | set(panel["date"]))
+        fund_fields = _fund_wide_fields(trade_dates, needed_fund)
+    else:
+        fund_fields = None
     fw = factor_expr.evaluate(ast, fields, fund_fields)  # date×code 宽表
     base = compute_factors(panel, [])  # 复用前瞻收益/上市天数的计算口径
-    base[factor] = fw.stack().reindex(base.index)
+    base[column] = fw.stack().reindex(base.index)
     return base
 
 
-def _fund_wide_fields(trade_dates: list[str]) -> dict[str, pd.DataFrame] | None:
+def factor_column(definition: dict) -> str:
+    """研究定义的因子列名：内置/自定义用原 id，公式用内容哈希（同公式同名，便于比对）。"""
+    expr = str(definition.get("expr") or "")
+    if not expr:
+        return str(definition.get("factor") or "")
+    import hashlib
+
+    return "expr_" + hashlib.sha1(expr.encode("utf-8")).hexdigest()[:12]
+
+
+def factor_frame(panel: pd.DataFrame, definition: dict) -> pd.DataFrame:
+    """按定义计算因子帧（含前瞻收益 + 上市天数），列名为 factor_column(definition)。
+
+    定义里 factor 与 expr 恰好一个；expr 是在沙箱解析器里直接执行的公式快照，
+    不产生临时因子记录，也不会被并发运行/目录清扫影响。
+    """
+    factor = str(definition.get("factor") or "")
+    expr = str(definition.get("expr") or "")
+    if factor and expr:
+        raise ValueError("因子定义只能有 factor 或 expr 之一")
+    if factor:
+        return _factor_frame(panel, factor)
+    if not expr:
+        raise ValueError("因子定义缺少 factor 或 expr")
+    return _apply_expr(panel, factor_column(definition), expr)
+
+
+def _fund_wide_fields(trade_dates: list[str], names: set[str] | None = None) -> dict[str, pd.DataFrame] | None:
     """PIT 财务字段宽表（fn_*）。财务数据未构建时返回 None（公式引用即报错提示）。"""
     import factor_expr
     import factor_pit
@@ -543,6 +584,8 @@ def _fund_wide_fields(trade_dates: list[str]) -> dict[str, pd.DataFrame] | None:
         return None
     out: dict[str, pd.DataFrame] = {}
     for fn_name, col in factor_expr.FUND_FIELDS.items():
+        if names is not None and fn_name not in names:
+            continue
         # columns 为 (code, field) MultiIndex → 取对应指标列组成 date×code 宽表
         try:
             sub = pit.xs(col, axis=1, level=1)
@@ -556,14 +599,39 @@ def _fund_wide_fields(trade_dates: list[str]) -> dict[str, pd.DataFrame] | None:
 # 单因子检验
 # ---------------------------------------------------------------------------
 
+def _validate_window(start: str | None, end: str | None) -> None:
+    for value in (start, end):
+        if value is not None:
+            try:
+                valid = calendar_date.fromisoformat(value).isoformat() == value
+            except (TypeError, ValueError):
+                valid = False
+            if not valid:
+                raise ValueError("日期需为 YYYY-MM-DD 格式的有效日期")
+    if start and end and start > end:
+        raise ValueError("开始日期不能晚于结束日期")
+
+
 def evaluate(factor: str, start: str | None = None, end: str | None = None,
              min_days_listed: int = 60) -> dict:
     """Alphalens 口径单因子检验。返回 IC/分组/换手/分年指标。"""
-    panel = factor_data.load_panel(start, end)
+    _validate_window(start, end)
+    # 先算完整历史再截取信号区间，保留预热/上市龄及区间后的收益标签。
+    panel = factor_data.load_panel()
     factors = _factor_frame(panel, factor)
-    factors = factors[factors["days_since_list"] >= min_days_listed]
+    dates = factors.index.get_level_values("date")
+    mask = np.ones(len(factors), dtype=bool)
+    if start:
+        mask &= dates >= start
+    if end:
+        mask &= dates <= end
+    factors = pd.DataFrame(factors.loc[mask])
+    input_rows = len(factors)
+    input_days = factors.index.get_level_values("date").nunique()
+    factors = pd.DataFrame(factors.loc[factors["days_since_list"] >= min_days_listed])
+    eligible_rows = len(factors)
 
-    daily = factors.dropna(subset=[factor])
+    daily = factors.replace([np.inf, -np.inf], np.nan).dropna(subset=[factor])
     if daily.empty:
         raise ValueError(f"因子 {factor} 在给定区间无有效样本")
 
@@ -572,7 +640,8 @@ def evaluate(factor: str, start: str | None = None, end: str | None = None,
     grouped = daily.groupby(level="date")
     n_days = 0
     for date, day in grouped:
-        if len(day) < MIN_CROSS_SECTION:  # 横截面样本太少，跳过
+        day = day.dropna(subset=["ret_fwd_1"])
+        if len(day) < MIN_CROSS_SECTION:  # 检查成对有效样本，不是原始因子覆盖
             continue
         f = day[factor].to_numpy()
         ic = _safe_pearson(f, day["ret_fwd_1"].to_numpy())
@@ -598,6 +667,7 @@ def evaluate(factor: str, start: str | None = None, end: str | None = None,
         col = f"ret_fwd_{h}"
         vals = {}
         for date, day in daily.groupby(level="date"):
+            day = day.dropna(subset=[col])
             if len(day) < MIN_CROSS_SECTION:
                 continue
             r = _safe_spearman(day[factor].to_numpy(), day[col].to_numpy())
@@ -607,6 +677,7 @@ def evaluate(factor: str, start: str | None = None, end: str | None = None,
         decay[h] = {
             "rank_ic_mean": float(s.mean()) if len(s) else None,
             "rank_ic_ir": float(s.mean() / s.std()) if len(s) > 1 and s.std() > 0 else None,
+            "days": int(len(s)),
         }
 
     # 五分组（按因子值分位，Q5=因子值最大）
@@ -614,6 +685,9 @@ def evaluate(factor: str, start: str | None = None, end: str | None = None,
     long_excess, ls_spread = _quantile_vs_benchmark(daily, factor)
 
     by_year = _ic_by_year(rank_ic_s)
+    paired = daily.dropna(subset=["ret_fwd_1"])
+    used = paired[paired.index.get_level_values("date").isin(rank_ic_s.index)]
+    horizon_returns = {h: _quantile_stats(daily, factor, h)[0] for h in FORWARD_HORIZONS[1:]}
 
     return {
         "factor": factor,
@@ -622,64 +696,91 @@ def evaluate(factor: str, start: str | None = None, end: str | None = None,
         "start": str(daily.index.get_level_values("date").min()),
         "end": str(daily.index.get_level_values("date").max()),
         "n_days": n_days,
-        "avg_coverage": float(daily.groupby(level="date").size().mean()),
+        "avg_coverage": float(np.mean(used.groupby(level="date").size().to_numpy())),
+        "sample": {
+            "input_rows": input_rows, "eligible_rows": eligible_rows,
+            "factor_rows": len(daily), "paired_rows": len(paired), "used_rows": len(used),
+            "input_days": int(input_days), "skipped_days": int(input_days - n_days),
+            "loss_ratio": 1.0 - len(used) / input_rows if input_rows else None,
+            "min_cross_section": MIN_CROSS_SECTION,
+        },
         "ic": {
             "ic_mean": float(ic_s.mean()),
             "rank_ic_mean": float(rank_ic_s.mean()),
             "rank_ic_ir": float(rank_ic_s.mean() / rank_ic_s.std()) if rank_ic_s.std() > 0 else None,
             "rank_ic_positive_ratio": float((rank_ic_s > 0).mean()),
-            "ic_std": float(ic_s.std()),
+            "ic_std": float(np.std(ic_s.to_numpy(), ddof=1)) if len(ic_s) > 1 else None,
         },
         "ic_series": {"dates": list(rank_ic_s.index), "values": [round(float(v), 4) for v in rank_ic_s.values]},
         "ic_decay": decay,
         "quantile_returns": quantile_ret,       # Q1..Q5 → 日均收益（bp）
-        "quantile_turnover": turnover,          # Q1..Q5 → 日均换手
+        "quantile_returns_by_horizon": {1: quantile_ret, **horizon_returns},
+        "quantile_turnover": turnover,          # 当期组新增成员数 / 当期组人数
         "long_excess_bp": long_excess,          # Q5 组日均超额（bp）
         "long_short_bp": ls_spread,             # Q5-Q1 日均值（bp）
         "rank_autocorr": rank_autocorr,
         "by_year": by_year,
         "biases": factor_data.BIAS_LABELS,
-        "timing_note": "因子值取 T 日收盘，配对 T+1 起前瞻收益",
+        "timing_note": "T 日收盘信号，检验标签为 T 收盘→T+h 收盘收益（非可成交收益）；结束日期限定信号日",
+        "methodology": {
+            "quantiles": 5, "ties": "同值不拆组；不足五个唯一分位边界的日期跳过",
+            "turnover": "当期组新增成员数 / 当期组人数，相邻有效日期；非组合交易换手",
+            "ic_ir": "日度 IC 均值 / 日度 IC 标准差，未年化；多日前瞻标签重叠",
+            "returns": "各期累计前瞻收益的横截面等权、日期等权均值，单位 bp；未扣交易成本",
+        },
     }
 
 
-def _quantile_stats(daily: pd.DataFrame, factor: str) -> tuple[dict, dict, float]:
+def _quantile_bins(values: pd.Series) -> pd.Series | None:
+    """同值不按股票代码强拆；离散因子无法形成五组时显式跳过。"""
+    try:
+        return pd.Series(pd.qcut(values, 5, labels=False), index=values.index) + 1
+    except ValueError:
+        return None
+
+
+def _quantile_stats(daily: pd.DataFrame, factor: str, horizon: int = 1, *, check=None) -> tuple[dict, dict, float | None]:
     """五分组日均收益（bp）、分组换手、因子秩自相关（相邻两日秩的 Pearson）。"""
     ret_by_q: dict[str, list[float]] = {f"Q{i}": [] for i in range(1, 6)}
-    rank_series: dict[str, pd.Series] = {}
     prev_rank: pd.Series | None = None
     prev_bins: pd.Series | None = None
     autocorrs: list[float] = []
     turnover_acc: dict[str, list[float]] = {f"Q{i}": [] for i in range(1, 6)}
 
-    for date, day in daily.groupby(level="date"):
+    for _date, day in daily.groupby(level="date"):
+        if check is not None:
+            check()
         if len(day) < MIN_CROSS_SECTION:
             prev_rank, prev_bins = None, None
             continue
-        ranks = day[factor].rank()
-        rank_series[date] = ranks
-        bins = pd.qcut(day[factor].rank(method="first"), 5, labels=False) + 1  # 1..5
+        ranks = pd.Series(day[factor]).rank()
+        bins = _quantile_bins(pd.Series(day[factor]))
+        if bins is None:
+            prev_rank, prev_bins = None, None
+            continue
         # 分组收益 = 该组股票 T+1 日收益的等权均值（ret_fwd_1 即 T→T+1 收益）。
         # 尾部日无 T+1 收益（全 NaN → mean 为 NaN），跳过防污染整个均值。
+        paired_count = day[f"ret_fwd_{horizon}"].notna().sum()
         for q in range(1, 6):
             mask = bins == q
-            mean_ret = day.loc[mask.values, "ret_fwd_1"].mean()
-            if mean_ret == mean_ret:  # not NaN
+            mean_ret = day.loc[mask.values, f"ret_fwd_{horizon}"].mean()
+            if paired_count >= MIN_CROSS_SECTION and mean_ret == mean_ret:  # not NaN
                 ret_by_q[f"Q{q}"].append(float(mean_ret) * 1e4)
             if prev_bins is not None:
-                cur_members = set(bins.index[mask.values].get_level_values("code"))
-                prev_members = set(prev_bins.index[prev_bins.values == q].get_level_values("code"))
-                union = cur_members | prev_members
-                if union:
+                cur_members = set(day.index.get_level_values("code")[mask.to_numpy()])
+                prev_members = set(prev_bins.index.get_level_values("code")[prev_bins.to_numpy() == q])
+                if cur_members:
                     turnover_acc[f"Q{q}"].append(
-                        1.0 - len(cur_members & prev_members) / len(union)
+                        len(cur_members - prev_members) / len(cur_members)
                     )
         if prev_rank is not None:
             # 两组秩的索引是 (date,code) MultiIndex，join 前先去掉 date 层（每天 code 唯一）
             joined = pd.concat([prev_rank.droplevel("date"), ranks.droplevel("date")],
                                axis=1, join="inner").dropna()
-            if len(joined) > MIN_CROSS_SECTION:
-                autocorrs.append(_safe_pearson(joined.iloc[:, 0], joined.iloc[:, 1]) or 0.0)
+            if len(joined) >= MIN_CROSS_SECTION:
+                corr = _safe_pearson(joined.iloc[:, 0], joined.iloc[:, 1])
+                if corr is not None:
+                    autocorrs.append(corr)
         prev_rank, prev_bins = ranks, bins
 
     quantile_ret = {k: float(np.mean(v)) if v else None for k, v in ret_by_q.items()}
@@ -687,21 +788,24 @@ def _quantile_stats(daily: pd.DataFrame, factor: str) -> tuple[dict, dict, float
     return quantile_ret, turnover, float(np.mean(autocorrs)) if autocorrs else None
 
 
-def _quantile_vs_benchmark(daily: pd.DataFrame, factor: str) -> tuple[float, float]:
+def _quantile_vs_benchmark(daily: pd.DataFrame, factor: str) -> tuple[float | None, float | None]:
     """Q5 相对全池等权基准的日均超额（bp）与 Q5-Q1 日均价差（bp）。"""
     excess_list: list[float] = []
     spread_list: list[float] = []
-    for date, day in daily.groupby(level="date"):
-        if len(day) < MIN_CROSS_SECTION:
+    for _date, day in daily.groupby(level="date"):
+        if day["ret_fwd_1"].notna().sum() < MIN_CROSS_SECTION:
             continue
-        bins = pd.qcut(day[factor].rank(method="first"), 5, labels=False) + 1
+        bins = _quantile_bins(pd.Series(day[factor]))
+        if bins is None:
+            continue
         bench = day["ret_fwd_1"].mean()
         top = day.loc[(bins == 5).values, "ret_fwd_1"].mean()
         bottom = day.loc[(bins == 1).values, "ret_fwd_1"].mean()
         if bench == bench and top == top and bottom == bottom:  # 跳过尾部无 T+1 收益日
             excess_list.append((top - bench) * 1e4)
             spread_list.append((top - bottom) * 1e4)
-    return float(np.mean(excess_list)), float(np.mean(spread_list))
+    return (float(np.mean(excess_list)) if excess_list else None,
+            float(np.mean(spread_list)) if spread_list else None)
 
 
 def _ic_by_year(rank_ic_s: pd.Series) -> dict[str, dict]:
@@ -739,6 +843,5 @@ def _safe_pearson(a, b) -> float | None:
 
 
 def _safe_spearman(a, b) -> float | None:
-    ra = pd.Series(a).rank().to_numpy()
-    rb = pd.Series(b).rank().to_numpy()
-    return _safe_pearson(ra, rb)
+    paired = pd.DataFrame({"a": a, "b": b}).replace([np.inf, -np.inf], np.nan).dropna()
+    return _safe_pearson(paired["a"].rank(), paired["b"].rank())

@@ -74,6 +74,8 @@ def _fetch_period(report_date: str) -> list[dict]:
     rows: list[dict] = []
     page = 1
     failures = 0
+    expected = None
+    seen = set()
     while page <= 60:
         params = {
             "sortColumns": "SECURITY_CODE", "sortTypes": "1",
@@ -82,23 +84,40 @@ def _fetch_period(report_date: str) -> list[dict]:
             "filter": f"(REPORTDATE='{report_date}')",
         }
         try:
-            d = astock.em_get(url, params=params, timeout=25).json()
-        except Exception:  # noqa: BLE001 — 东财偶发掐连接（见 push2his 同款问题），退避重试
+            payload = astock.em_get(url, params=params, timeout=25).json()
+            result = payload.get("result") if isinstance(payload, dict) else None
+            if not isinstance(result, dict):
+                raise ValueError("财务分页响应无效")
+            pages, count, data = result.get("pages"), result.get("count"), result.get("data")
+            if (type(pages) is not int or not 0 <= pages <= 60 or type(count) is not int
+                    or count < 0 or not isinstance(data, list)):
+                raise ValueError("财务分页元数据无效")
+        except Exception as exc:  # noqa: BLE001 - retry the same page; never return partial records
             failures += 1
             if failures > 3:
-                break
+                raise RuntimeError(f"{report_date} 第 {page} 页拉取失败，未保存不完整财务数据") from exc
             time.sleep(2 * failures)
             continue
         failures = 0
-        res = d.get("result") or {}
-        data = res.get("data") or []
-        if not data:
-            break
+        if expected is None:
+            expected = (pages, count)
+        if expected != (pages, count):
+            raise RuntimeError("财务分页期间总数变化，请重试")
+        if not data and not (page == 1 and count == 0):
+            raise RuntimeError("财务分页提前结束，未保存不完整数据")
+        for item in data:
+            code = str(item.get("SECURITY_CODE") or "") if isinstance(item, dict) else ""
+            if (not code or str(item.get("REPORTDATE") or "")[:10] != report_date
+                    or code in seen):
+                raise RuntimeError("财务分页存在无效或重复记录，请重试")
+            seen.add(code)
         rows.extend(data)
-        if page >= (res.get("pages") or 1):
-            break
+        if page >= pages:
+            if len(rows) != count:
+                raise RuntimeError("财务分页数量与总数不符，请重试")
+            return rows
         page += 1
-    return rows
+    raise RuntimeError("财务分页超出上限，未保存不完整数据")
 
 
 def _row_to_record(row: dict) -> dict | None:
@@ -118,7 +137,7 @@ def _row_to_record(row: dict) -> dict | None:
 
 
 def build_fundamentals() -> dict:
-    """全量构建 PIT 财务表（断点续传：已抓报告期跳过）。"""
+    """构建 PIT 财务表：复用校验过的历史期，重抓最近四期；整包成功后提交。"""
     with _STATE_LOCK:
         if _STATE["building"]:
             return {"already_building": True}
@@ -132,17 +151,23 @@ def build_fundamentals() -> dict:
         with _STATE_LOCK:
             _STATE["periods_total"] = len(periods)
 
-        all_records: list[dict] = list(_load_existing_records()) if meta["periods"] else []
+        all_records: list[dict] = list(_load_existing_records())
         existing_periods = {r["report_date"] for r in all_records}
+        if meta.get("fetch_version") != 2:
+            meta["periods"] = []  # legacy flags may describe partially fetched periods
         for period in periods:
             # 断点续传判据用「记录里实际存在的期」而非 meta 标记——历史 bug：
             # fetch 失败的期曾写入 meta 但记录为空，重启后该期被跳过造成永久缺口
-            if period in meta["periods"] and period in existing_periods:
+            if (meta.get("fetch_version") == 2 and period in meta["periods"]
+                    and period in existing_periods and period not in periods[-4:]):
                 with _STATE_LOCK:
                     _STATE["periods_done"] += 1
                 continue
-            records = [r for r in (_row_to_record(x) for x in _fetch_period(period)) if r]
-            if not records and period not in meta["periods"]:
+            source_rows = _fetch_period(period)
+            records = [r for r in (_row_to_record(x) for x in source_rows) if r]
+            # Source pagination counts all rows; undated records cannot enter PIT evidence.
+            meta.setdefault("excluded_records", {})[period] = len(source_rows) - len(records)
+            if not records:
                 # 完全拉不到（东财不可达）：不写 meta，下轮重试
                 with _STATE_LOCK:
                     _STATE["error"] = f"{period} 拉取为空，将在下次构建重试"
@@ -153,7 +178,6 @@ def build_fundamentals() -> dict:
             with _STATE_LOCK:
                 _STATE["periods_done"] += 1
                 _STATE["rows"] = len(all_records)
-            _save_meta(meta)  # 每期落一次，中断可续
         if not all_records:
             raise RuntimeError("财务数据全部报告期拉取为空")
 
@@ -163,6 +187,8 @@ def build_fundamentals() -> dict:
         tmp = _FUND_FILE + ".tmp"
         df.to_csv(tmp, index=False, compression="gzip")
         os.replace(tmp, _FUND_FILE)
+        meta["fetch_version"] = 2  # legacy completion flags did not verify pagination
+        _save_meta(meta)
 
         with _STATE_LOCK:
             # error 只反映本轮流空期；整体完成即清（否则旧错误永久挂在状态里）
@@ -234,9 +260,14 @@ def as_of_panel(trade_dates: list[str]) -> pd.DataFrame:
     对每个交易日 T，取每只股票 NOTICE_DATE ≤ T 的最新 report_date 记录。
     实现按 (code,notice_date) 排序后 asof 合并——每个交易日只看得到已公告的。
     """
-    fund = pit_table()
-    fund = fund.sort_values(["code", "notice_date"])
-    # 同一股票同一公告日多期（罕见）：留最新报告期
+    return _as_of_records(pit_table(), trade_dates)
+
+
+def _as_of_records(fund: pd.DataFrame, trade_dates: list[str]) -> pd.DataFrame:
+    """Latest visible report per stock; a correction to an older report cannot roll it back."""
+    fund = fund.sort_values(["code", "notice_date", "report_date"])
+    latest = fund.groupby("code")["report_date"].transform(lambda dates: dates.cummax())
+    fund = fund.loc[fund["report_date"] == latest]
     fund = fund.drop_duplicates(subset=["code", "notice_date"], keep="last")
 
     dates_df = pd.DataFrame({"d": pd.DatetimeIndex(trade_dates)})
@@ -270,6 +301,7 @@ def pit_status() -> dict:
         "has_data": bool(info),
         "built": info,
         "periods_fetched": len(meta["periods"]),
+        "excluded_records": sum(meta.get("excluded_records", {}).values()),
         "building": state["building"],
         "progress": {"done": state["periods_done"], "total": state["periods_total"],
                      "rows": state["rows"], "started_at": state["started_at"],
