@@ -58,6 +58,7 @@ import score_scheduler
 import score_worker
 import sector_scores as sector_scores_layer
 import stock_cache
+import stock_events
 import sw_level2_scores as sw_level2_layer
 import timing
 import timing_alloc
@@ -672,6 +673,40 @@ def stock_abnormal(codes: str = Query(""), refresh: bool = Query(False)):
         return {"data": abnormal.for_codes(items)}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"异动接近度计算失败：{e}") from e
+
+
+@app.get("/api/stock/event-study/kinds")
+def stock_event_kinds():
+    """事件回看支持的几类事件（界面按这个列表出 tab，避免前后端各写一份）。"""
+    return {"data": stock_events.kinds_catalog()}
+
+
+@app.get("/api/stock/event-study")
+def stock_event_study(code: str = Query(...), kind: str = Query("earnings_forecast"),
+                     refresh: bool = Query(False)):
+    """一类事件历史上每次前后 20 个交易日相对沪深300的超额收益。"""
+    code = _validate(code)
+    if refresh:
+        for key in (f"events:{kind}:{code}", f"events:kline:{code}"):
+            cache_runtime.invalidate(key)
+    try:
+        return {"data": stock_events.build_event_study(code, kind)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"事件回看失败：{e}") from e
+
+
+@app.get("/api/stock/earnings-preview")
+def stock_earnings_preview(code: str = Query(...), refresh: bool = Query(False)):
+    """下一份定期报告的预约披露日、机构一致预期、历次发布后首日涨跌与预告对照。"""
+    code = _validate(code)
+    if refresh:
+        for key in (f"events:appoint:{code}", f"events:reports:{code}",
+                    f"events:consensus:{code}", f"events:kline:{code}"):
+            cache_runtime.invalidate(key)
+    try:
+        return {"data": stock_events.build_earnings_preview(code)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"财报前瞻失败：{e}") from e
 
 
 # ---- 我的研报（用户上传自己的研报，存本地、不上传、不进开源仓库）----

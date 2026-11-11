@@ -474,6 +474,54 @@ export interface AbnormalData {
   rule_source: string;
 }
 
+// —— 事件回看（个股）：一类事件历史上每次前后 20 个交易日相对沪深300的超额收益 ——
+export interface EventHorizonStats {
+  n: number; mean: number | null; median: number | null; positive_share: number | null;
+}
+export interface EventStudyEvent {
+  date: string; day0: string; label: string; detail: string;
+  direction: "up" | "down" | "large" | "small" | "other" | null;
+  pre: number | null; d0_1: number | null; d0_5: number | null; d0_20: number | null;
+  halted_days: number; days_after: number; path: number[]; overlaps_previous?: boolean;
+}
+export interface EventStudyData {
+  ok: boolean;
+  error?: string;
+  code?: string; kind?: string; kind_label?: string; benchmark_label?: string;
+  window?: { pre: number; post: number }; min_events?: number;
+  horizons: { key: string; from: number; to: number; label: string }[];
+  groups?: Record<string, string>;
+  events: EventStudyEvent[];
+  upcoming?: { date: string; label: string; detail: string }[];
+  summary: { key: string; label: string; events: number; note: string | null; horizons: Record<string, EventHorizonStats> }[];
+  mean_path?: { offsets: number[]; n: number; mean: (number | null)[]; median: (number | null)[] };
+  gaps: { date: string | null; label?: string; reason: string }[];
+  notes: string[];
+  sources?: string[];
+}
+
+// —— 财报前瞻：预约披露日、机构一致预期、历次发布后首日涨跌、实际 vs 预告 ——
+export interface EarningsPreviewHistory {
+  period: string | null; period_label: string; publish_date: string;
+  reaction_day: string | null; reaction: number | null; market: number | null; excess: number | null;
+  eps: number | null; net_profit_yi: number | null; revenue_yi: number | null;
+  same_day_releases?: number; pending?: boolean;
+}
+export interface EarningsPreviewData {
+  ok: boolean;
+  error?: string;
+  next_report: { period: string | null; period_label: string; date: string; first_appointed: string | null;
+                 rescheduled: string[]; days_left: number } | null;
+  consensus: { year: string; analysts: number | null; low: number | null; mean: number | null;
+               high: number | null; unit: string }[];
+  surprise: null | { period_label: string; forecast_low_yi: number | null; forecast_high_yi: number | null;
+                     actual_yi: number | null; position: string; forecast_type: string };
+  history: EarningsPreviewHistory[];
+  gaps: { date: string | null; label?: string; reason: string }[];
+  notes: string[];
+  sources?: string[];
+}
+
 export interface TimingSignal {
   code: string;
   signal: "add" | "reduce" | "watch" | null;
@@ -2157,6 +2205,14 @@ export const api = {
     if (refresh) qs.set("refresh", "true");
     return get<AbnormalData>(`/stock/abnormal?${qs.toString()}`, SLOW_TIMEOUT_MS);
   },
+  eventStudyKinds: () => get<{ key: string; label: string }[]>("/stock/event-study/kinds"),
+  eventStudy: (code: string, kind: string, refresh = false) => {
+    const qs = new URLSearchParams({ code, kind });
+    if (refresh) qs.set("refresh", "true");
+    return get<EventStudyData>(`/stock/event-study?${qs.toString()}`, SLOW_TIMEOUT_MS);
+  },
+  earningsPreview: (code: string, refresh = false) =>
+    get<EarningsPreviewData>(`/stock/earnings-preview?code=${code}${refresh ? "&refresh=true" : ""}`, SLOW_TIMEOUT_MS),
   portfolioLegacyStatus: () => get<LegacyPortfolioStatus>("/portfolio/legacy-status"),
   importLegacyPortfolio: (kind: "securities" | "fund") =>
     request<PortfolioData | FundPortfolioData>(`/portfolio/import-legacy?kind=${kind}`, "POST"),
