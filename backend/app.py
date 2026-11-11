@@ -58,6 +58,7 @@ import score_scheduler
 import score_worker
 import sector_scores as sector_scores_layer
 import stock_cache
+import events_calendar
 import stock_events
 import sw_level2_scores as sw_level2_layer
 import timing
@@ -707,6 +708,16 @@ def stock_earnings_preview(code: str = Query(...), refresh: bool = Query(False))
         return {"data": stock_events.build_earnings_preview(code)}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"财报前瞻失败：{e}") from e
+
+
+@app.get("/api/calendar")
+def event_calendar(codes: str = Query(""), days: int = Query(30)):
+    """自选与持仓接下来 7 / 30 / 90 天的预约披露、限售解禁与除权除息（代码用逗号分隔）。"""
+    items = [c.strip() for c in codes.split(",") if c.strip()][:80]
+    try:
+        return {"data": events_calendar.build_calendar(items, days)}
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"事件日历取数失败：{e}") from e
 
 
 # ---- 我的研报（用户上传自己的研报，存本地、不上传、不进开源仓库）----

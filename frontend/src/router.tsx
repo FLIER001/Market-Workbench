@@ -6,6 +6,7 @@ import { EventAnalysis } from "@/pages/EventAnalysis";
 import { SectorHub } from "@/pages/SectorHub";
 import { SectorDetail } from "@/pages/SectorDetail";
 import { Portfolio } from "@/pages/Portfolio";
+import { EventCalendar } from "@/pages/EventCalendar";
 import { StockData } from "@/pages/StockData";
 import { Liquidity } from "@/pages/Liquidity";
 import { Macro } from "@/pages/Macro";
@@ -41,6 +42,7 @@ export const router = createBrowserRouter([
       { path: "/sectors/:key", element: <SectorDetail /> },
       { path: "/sector-scores", element: <Navigate to="/sectors" replace /> },
       { path: "/portfolio", element: <Portfolio /> },
+      { path: "/calendar", element: <EventCalendar /> },
       { path: "/screening", element: <Screening /> },
       { path: "/factors", element: <Factors /> },
       { path: "/funds", element: <Navigate to="/screening" replace /> },

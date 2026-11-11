@@ -4,7 +4,7 @@ import {
   Activity, Radar, LayoutGrid, Wallet, Settings, Search, Menu, X,
   Moon, Sun, ChevronsLeft, ChevronsRight, LineChart, Github, Globe, Zap,
   Star, FileText, Droplets, Loader2, PieChart, Coins, Gauge, Landmark, Flame, Scale, FlaskConical, Building2,
-  ChevronDown, HeartPulse, LogOut, type LucideIcon,
+  ChevronDown, HeartPulse, LogOut, CalendarDays, type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDarkMode } from "@/hooks/useDarkMode";
@@ -40,20 +40,21 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/watchlist", icon: Star, label: "自选", archive: "05" },
       { to: "/portfolio", icon: Wallet, label: "持仓", archive: "06" },
+      { to: "/calendar", icon: CalendarDays, label: "事件日历", archive: "07" },
     ],
   },
   {
     label: "研究",
     items: [
-      { to: "/factors", icon: FlaskConical, label: "因子研究", archive: "07", match: "/factors" },
-      { to: "/sectors", icon: LayoutGrid, label: "行业研究", archive: "08", match: "/sectors" },
-      { to: "/screening", icon: PieChart, label: "标的筛选", archive: "09", match: "/screening" },
-      { to: "/event-analysis", icon: Zap, label: "事件分析", archive: "10" },
-      { to: "/bonds", icon: Landmark, label: "债市", archive: "11" },
-      { to: "/fedwatch", icon: Building2, label: "美联储", archive: "12" },
-      { to: "/gold", icon: Coins, label: "黄金", archive: "13" },
-      { to: "/oil", icon: Flame, label: "油价", archive: "14" },
-      { to: "/research", icon: FileText, label: "研究", archive: "15", match: "/research" },
+      { to: "/factors", icon: FlaskConical, label: "因子研究", archive: "08", match: "/factors" },
+      { to: "/sectors", icon: LayoutGrid, label: "行业研究", archive: "09", match: "/sectors" },
+      { to: "/screening", icon: PieChart, label: "标的筛选", archive: "10", match: "/screening" },
+      { to: "/event-analysis", icon: Zap, label: "事件分析", archive: "11" },
+      { to: "/bonds", icon: Landmark, label: "债市", archive: "12" },
+      { to: "/fedwatch", icon: Building2, label: "美联储", archive: "13" },
+      { to: "/gold", icon: Coins, label: "黄金", archive: "14" },
+      { to: "/oil", icon: Flame, label: "油价", archive: "15" },
+      { to: "/research", icon: FileText, label: "研究", archive: "16", match: "/research" },
     ],
   },
 ];

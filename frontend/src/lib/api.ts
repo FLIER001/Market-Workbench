@@ -522,6 +522,19 @@ export interface EarningsPreviewData {
   sources?: string[];
 }
 
+// —— 事件日历：自选与持仓接下来 7 / 30 / 90 天的预约披露、限售解禁、除权除息 ——
+export interface EventCalendarItem {
+  code: string; name: string; kind: string; date: string; detail: string; source: string;
+}
+export interface EventCalendarData {
+  as_of: string;
+  window: { start: string; end: string; days: number };
+  items: EventCalendarItem[];
+  codes: number;
+  gaps: string[];
+  sources: string[];
+}
+
 export interface TimingSignal {
   code: string;
   signal: "add" | "reduce" | "watch" | null;
@@ -2206,6 +2219,11 @@ export const api = {
     return get<AbnormalData>(`/stock/abnormal?${qs.toString()}`, SLOW_TIMEOUT_MS);
   },
   eventStudyKinds: () => get<{ key: string; label: string }[]>("/stock/event-study/kinds"),
+  eventCalendar: (codes: string[], days = 30, refresh = false) => {
+    const qs = new URLSearchParams({ codes: codes.join(","), days: String(days) });
+    if (refresh) qs.set("refresh", "true");
+    return get<EventCalendarData>(`/calendar?${qs.toString()}`, SLOW_TIMEOUT_MS);
+  },
   eventStudy: (code: string, kind: string, refresh = false) => {
     const qs = new URLSearchParams({ code, kind });
     if (refresh) qs.set("refresh", "true");
