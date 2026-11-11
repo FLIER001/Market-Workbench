@@ -32,7 +32,9 @@ OpenAPI is available at <http://127.0.0.1:8900/docs> while the service is runnin
 | AI | `/api/chat`, `/api/reflect`, `/api/deep-analysis` |
 | Portfolio and reports | `/api/portfolio*`, `/api/fund-portfolio*`, `/api/myreports*` |
 | Funds | `/api/funds/search`, `/api/funds/quote`, `/api/funds/nav/{code}`, `/api/funds/metrics/{code}`, `/api/funds/profile/{code}`, `/api/funds/screen` |
-| Market and research | `/api/market/*`, `/api/radar*`, `/api/sector-scores*`, `/api/plate-scores*`, `/api/gold/score` |
+| Market and research | `/api/market/*`, `/api/radar*`, `/api/sector-scores*`, `/api/plate-scores*`, `/api/pulse*`, `/api/event*`, `/api/source-health` |
+| Thematic | `/api/gold/*`, `/api/oil/*`, `/api/bonds/*`, `/api/fedwatch`, `/api/allocation*` |
+| Factor research | `/api/factor/research/*` (see [factor lab API](../docs/research/factor-lab-api.md)) |
 | Securities | `/api/search`, `/api/quote`, `/api/kline*`, `/api/valuation*`, `/api/financials`, `/api/reports`, `/api/announcements`, `/api/news` |
 | Capital and events | `/api/margin`, `/api/fund-flow`, `/api/holders`, `/api/dividend`, `/api/dragon-tiger`, `/api/lockup`, `/api/blocks` |
 | Global markets | `/api/global/indices`, `/api/global/minute`, `/api/global/stock`, `/api/global/hk/cashflow` |
@@ -48,7 +50,7 @@ claude mcp add market-workbench -- \
   "$(pwd)/.venv/bin/python" "$(pwd)/mcp_server.py"
 ```
 
-The MCP server reads the same version and uses the same data-tool layer as the HTTP API. It does not need an API key for a local installation.
+The MCP server reads the same version and uses the same data-tool layer as the HTTP API, exposing 42 tools. It does not need an API key for a local installation.
 
 ## Configuration
 
