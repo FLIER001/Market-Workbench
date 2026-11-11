@@ -582,8 +582,11 @@ def build_xray(user_id: int | None = None, force: bool = False) -> dict[str, Any
             continue
         closes[p["code"]] = series
 
-    report = compute_xray(closes, values)
     names = {p["code"]: p["name"] for p in positions}
+    report = compute_xray(closes, values)
+    # 展示用：代码之外再给名称，界面上只写代码看不懂是哪只
+    if report.get("ok"):
+        report["inputs"]["names"] = {c: names.get(c, c) for c in report["inputs"]["symbols"]}
     # compute_xray 只看到能进权重的那些列，没市价 / 没日线的要在外面补齐
     merged = gaps + list(report.get("gaps", []))
     report["gaps"] = [{**g, "name": g.get("name") or names.get(g["code"], "")} for g in merged]

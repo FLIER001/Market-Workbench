@@ -382,6 +382,7 @@ export interface XrayReport {
   error?: string;
   inputs?: {
     symbols: string[];
+    names?: Record<string, string>;
     weights: Record<string, number>;
     values: Record<string, number>;
     total_value: number;

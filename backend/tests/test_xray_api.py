@@ -56,6 +56,7 @@ def test_xray_endpoint_returns_metrics(client):
     data = resp.json()["data"]
     assert data["ok"] is True, data
     assert data["inputs"]["symbols"] == ["600000"]
+    assert data["inputs"]["names"] == {"600000": "浦发银行"}
     assert data["concentration"]["effective_n"] is not None
     assert data["tail_risk"]["var_95"] is not None
     assert data["industry_exposure"]["rows"] == [{"industry": "银行", "weight": 1.0}]

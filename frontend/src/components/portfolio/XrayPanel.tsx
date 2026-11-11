@@ -92,7 +92,7 @@ export function XrayPanel({ holdings }: { holdings: number }) {
                     sub={data.diversification?.note ?? "越高越分散"}
                     title="各资产波动率的加权平均 ÷ 组合波动率；1 = 完全没有分散效果" />
             <Metric label="平均相关性" value={num(corr?.avg_pairwise_abs)}
-                    sub={corr?.max_pair ? `最高 ${corr.max_pair.symbols.join("/")} ${num(corr.max_pair.corr)}` : undefined}
+                    sub={corr?.max_pair ? `最高 ${corr.max_pair.symbols.map((c) => data.inputs?.names?.[c] || c).join("/")} ${num(corr.max_pair.corr)}` : undefined}
                     title="两两相关系数取绝对值后的平均；接近 1 说明涨跌几乎同步" />
             <Metric label="对齐交易日" value={String(data.inputs.aligned_days)}
                     sub={`${data.inputs.first_date} 起`} title="所有持仓都有价格的重叠交易日数量" />
@@ -110,9 +110,10 @@ export function XrayPanel({ holdings }: { holdings: number }) {
                   const share = contrib[code];
                   const weight = data.inputs?.weights[code];
                   const over = share != null && weight != null && share > weight + 0.02;
+                  const name = data.inputs?.names?.[code] || code;
                   return (
                     <div key={code} className="flex items-center gap-2 text-xs">
-                      <span className="w-16 shrink-0 font-mono text-muted-foreground">{code}</span>
+                      <span className="w-24 shrink-0 truncate text-muted-foreground" title={`${name} ${code}`}>{name}</span>
                       <div className="h-1.5 flex-1 rounded-full bg-muted/40">
                         <div className={cn("h-1.5 rounded-full", over ? "bg-danger/70" : "bg-primary/60")}
                              style={{ width: `${Math.min(100, (share ?? 0) * 100)}%` }} />
