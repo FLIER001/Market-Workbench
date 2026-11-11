@@ -10,12 +10,12 @@ import {
   GripVertical,
   NotebookPen,
   Pencil,
-  RefreshCw,
   Star,
   Trash2,
   X,
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { RefreshButton } from "@/components/ui/RefreshButton";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { DeepAnalysisButton } from "@/components/watchlist/DeepAnalysisButton";
@@ -419,7 +419,6 @@ export function Watchlist() {
     <div>
       <PageHeader
         title="自选"
-        subtitle="自选股 / 自选 ETF / 自选基金分开管理"
         actions={
           <div className="flex items-center gap-2">
             {collection !== "fund" && (
@@ -444,12 +443,13 @@ export function Watchlist() {
               <AskAiButton
                 context={aiContext}
                 taskId={`watchlist-${collection}`}
-                label={collection === "stock" ? "让 AI 读自选股" : "让 AI 读自选 ETF"}
+                label="AI 复盘"
                 suggestions={collection === "stock"
                   ? ["按分组比较估值与风险", "哪些分组近期关注度更高", "各组最大的验证点是什么"]
                   : ["按跟踪指数与主题整理", "比较估值与近期活跃度", "各组有哪些重复暴露"]}
               />
             )}
+            <RefreshButton onClick={refresh} loading={loading} />
           </div>
         }
       />
@@ -649,9 +649,7 @@ export function Watchlist() {
                 {updatedAt && <span className="font-mono">{new Date(updatedAt).toLocaleTimeString("zh-CN", { hour12: false })}</span>}
               </>
             )}
-            <button onClick={refresh} disabled={loading} className="text-muted-foreground hover:text-primary" title="立即刷新">
-              <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
-            </button>
+
           </div>
         </div>
 

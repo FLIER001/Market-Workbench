@@ -9,16 +9,24 @@ interface Props {
   title?: string;
 }
 
-// 玻璃卡：半透明填充 + 发丝边框 + 柔投影 + 顶部内高光（科技玻璃暖橙风的基础容器）。
+// 全站共享的数据面板容器；旧组件名保留，避免牵动各研究页面。
 export function GlassCard({ children, className, glow, onClick, title }: Props) {
   return (
     <div
       onClick={onClick}
+      onKeyDown={onClick ? (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onClick();
+        }
+      } : undefined}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
       title={title}
       className={cn(
         "glass p-5",
         glow && "glass-glow",
-        onClick && "cursor-pointer transition-transform hover:-translate-y-0.5",
+        onClick && "cursor-pointer transition-colors hover:border-primary/50",
         className,
       )}
     >

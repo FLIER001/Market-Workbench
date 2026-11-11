@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { PageHeader } from "@/components/ui/PageHeader";
 import { FundScreenPanel } from "@/components/funds/FundScreenPanel";
 import { StockScreenPanel } from "@/components/screening/StockScreenPanel";
 import { cn } from "@/lib/utils";
@@ -46,10 +45,7 @@ export function Screening() {
 
   return (
     <div>
-      <PageHeader
-        title="标的筛选"
-        subtitle="基金筛选 · 个股筛选"
-      />
+
 
       <div className="mb-4 grid max-w-sm grid-cols-2 gap-2 rounded-xl border border-border/50 bg-muted/20 p-1.5">
         {([

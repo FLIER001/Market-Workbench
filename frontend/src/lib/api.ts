@@ -1,6 +1,8 @@
 // Market Workbench 后端 API 客户端。/api → vite 代理到本地 FastAPI（默认 8900）。
 // 后端未启动或数据源异常时抛 ApiError，页面据此优雅降级。
 
+import { markPageData } from "@/lib/dataFreshness";
+
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);
@@ -196,9 +198,13 @@ async function request<T>(
     }
     throw new ApiError("连接不到后端，请先启动 backend（uvicorn app:app --port 8900）", 0);
   }
+  // 顶栏「数据时点」取载荷里后端标注的时点；搜索类端点不算一页的数据
+  const markData = (value: unknown) => {
+    if (method === "GET" && !path.includes("/search")) markPageData(value);
+  };
   // 304 无响应体，必须挡在 resp.json() 之前（否则会被当成解析失败再落到 !resp.ok 分支）
   if (resp.status === 304) {
-    if (cached) return cached.data as T;
+    if (cached) { markData(cached.data); return cached.data as T; }
     throw new ApiError("后端判定内容未变，但本地副本已淘汰，请重新加载", 304);
   }
   let payload: any = null;
@@ -218,6 +224,7 @@ async function request<T>(
     throw new ApiError(payload?.detail || `HTTP ${resp.status}`, resp.status);
   }
   const data = (payload?.data ?? payload) as T;
+  markData(data);
   if (method === "GET") {
     const etag = resp.headers.get("ETag");
     if (etag) rememberConditional(path, etag, data);
@@ -396,8 +403,45 @@ export interface DragonTiger {
   seats: { buy: DtSeat[]; sell: DtSeat[] };
   institution: { buy_amt: number; sell_amt: number; net_amt: number };
 }
-export interface LockupRow { date: string; type: string; shares: number; able_shares: number; ratio: number }
-export interface Lockup { history: LockupRow[]; upcoming: LockupRow[] }
+/** 限售解禁单条。数量原单位为万股；新字段消除旧命名歧义，兼容旧缓存。 */
+export interface LockupRow {
+  date: string; type: string;
+  /** @deprecated 东财 FREE_SHARES（万股），解禁后累计流通量，不是单批解禁量 */
+  shares?: number | null;
+  /** @deprecated 东财 ABLE_FREE_SHARES（万股），本批解禁量；新逻辑用 unlock_shares_wan */
+  able_shares?: number | null;
+  /** @deprecated 东财 FREE_RATIO 原值，单位未校准，禁止直接当百分比展示 */
+  ratio?: number | null;
+  /** 单批解禁数量（万股） */
+  unlock_shares_wan?: number | null;
+  /** 解禁后累计流通（万股） */
+  post_unlock_float_wan?: number | null;
+  /** 未校准的原始比例，仅供对照，不作展示主口径 */
+  ratio_raw?: number | null;
+  /** 数量单位标记，当前固定 "万股" */
+  quantity_unit?: string;
+}
+export interface Lockup {
+  history: LockupRow[];
+  upcoming: LockupRow[];
+  /** 已取得的未来排期（最多20条，不限于90天）；旧响应可能缺省 */
+  scheduled?: LockupRow[];
+  /** 覆盖状态（如样本不足 / 部分批次数缺失） */
+  status?: string | null;
+  as_of?: string;
+  coverage?: {
+    source?: string;
+    start_date?: string;
+    end_date?: string;
+    history_limit?: number;
+    future_limit?: number;
+    history_count?: number;
+    scheduled_count?: number;
+    excluded_rows?: number;
+    complete?: boolean;
+  } | null;
+  warnings?: string[];
+}
 export interface Board { name: string; code: string; change_pct: number | string; lead_stock: string }
 export interface Blocks { total: number; boards: Board[]; concept_tags: string[] }
 export interface HotConcept { concept: string; bk: string; hit: number }
@@ -1110,20 +1154,31 @@ export interface LegacyPortfolioStatus {
 // ---- 黄金多维评分（方案 V2.1）----
 export interface GoldIndicator {
   key: string; label: string; dimension: string; weight: number;
-  effective_weight?: number; data_status?: "fresh" | "stale";
+  effective_weight?: number; data_status?: "fresh" | "stale" | "insufficient";
   value: number | null; value_text: string | null; chg: number | null; date: string | null;
   score: number | null; signal: number | null; hist: HistPoint[]; note: string;
   raw_signal?: number; expected_signal?: number; model_beta?: number;
+  signal_date?: string; signal_hist?: HistPoint[]; score_hist?: HistPoint[];
+  details?: Record<string, number | string | null>; sources?: string[];
+  available_at?: string; availability_basis?: string;
 }
 export interface GoldScoreData {
   schema_version: number;
   date: string; gold_score: number | null; signal: string | null; confidence: string;
   hist?: HistPoint[];
   coverage: number;
-  mode: string; dimensions: Record<string, { score: number; weight: number; effective_weight?: number; hist?: HistPoint[] }>;
+  mode: string; dimensions: Record<string, { score: number | null; weight: number; effective_weight?: number; hist?: HistPoint[] }>;
   indicators: GoldIndicator[];
   top_positive_drivers: string[]; top_negative_drivers: string[];
   data_quality: string; updated: string;
+  model_version?: string; score_status?: "complete" | "insufficient" | "legacy";
+  score_as_of?: string | null; driver_agreement?: number | null;
+  validation_status?: string; history_kind?: string; data_quality_status?: string;
+  input_id?: string; state_id?: string;
+  contributions?: { key: string; label: string; points: number }[];
+  change_vs_previous?: { as_of: string; total_points: number; contributions: {key: string; label: string; points: number}[] } | null;
+  last_complete_score?: { gold_score: number | null; score_as_of: string; model_version: string } | null;
+  benchmark?: { usd: HistPoint[]; cny: HistPoint[] }; recorded_hist?: HistPoint[];
   stale?: boolean; stale_since?: string;
   // 后端分层缓存元信息（cache_runtime._decorate 注入）
   cache_state?: "fresh" | "stale" | "refreshing" | "error";
@@ -1135,7 +1190,48 @@ export interface GoldScoreData {
     fetched_at: string | null; latest_period: string | null;
     stale_reason?: "fallback" | "observation_lag" | null;
     age_days?: number | null; max_age_days?: number | null;
+    usable?: boolean; active?: boolean; fetch_status?: string;
   }>;
+}
+
+export interface GoldResearchSummary {
+  status: string; conclusion: string; model_version?: string; evaluated_at?: string;
+  independent_oos?: boolean; sample_count?: number; source_as_of?: string;
+  horizons?: Record<string, { n?: number; r2_vs_mean?: number; direction_accuracy?: number; unconditional_positive_share?: number }>;
+}
+
+export interface GoldDirectionForecast {
+  model_version: string; status: "ready" | "stale" | "insufficient";
+  evidence: string; independent_oos: boolean; score_is_probability: false;
+  score: number | null; direction: "偏多" | "中性" | "偏空";
+  observed_at: string | null; created_at: string; fetched_at: string | null;
+  recorded_at: string | null; record_error: string | null; reason: string | null;
+  trend_return_60?: number; short_return_5?: number; benchmark: string;
+  parameters: {horizon: number; trend_lookback: number; reversal_lookback: number;
+    volatility_lookback: number; trend_weight: number; reversal_weight: number;
+    shrink_to_neutral: number; bullish_score: number; bearish_score: number};
+  validation: {model_version: string; sample_start: string; sample_end: string; sample_count: number;
+    balanced_accuracy: number; accuracy: number; always_up_accuracy: number; auc: number;
+    brier_skill: number; fold_balanced_accuracy: number[]; tail52_balanced_accuracy: number;
+    balanced_accuracy_ci95: number[]; neighborhood_count: number;
+    neighborhood_balanced_range: number[]; limits: string[];
+  } | null;
+}
+
+export interface GoldRiskForecast {
+  model_version: string; status: "ready" | "stale" | "insufficient";
+  research_status: string; independent_oos: boolean; benchmark: string; horizon_days: number;
+  observed_at: string | null; calculated_at: string; fetched_at: string | null;
+  annualized_volatility: number | null; horizon_volatility: number | null;
+  trailing20_volatility: number | null; trailing60_volatility: number | null;
+  decays: number[]; components: {decay: number; annualized_volatility: number}[]; reason: string | null;
+  validation: {model_version: string; status: string; independent_oos: boolean; evaluated_at: string;
+    sample_start: string; sample_end: string; sample_count: number;
+    mse_improvement_vs20: number; mse_improvement_vs60: number; tail26_improvement_vs20: number;
+    nonoverlap_phase_min_improvement: number; nonoverlap_phase_n: number[];
+    exclusion2020_improvement_vs20: number; fold_improvement_vs20: number[];
+    source_hash: string; limits: string[]; candidates: {label: string; mse_improvement_vs20: number; mse_improvement_vs60: number}[];
+  } | null;
 }
 
 // 沪金主力（AU0）日K收盘序列：评分卡旁国内金价近1年走势
@@ -1200,6 +1296,7 @@ export interface PaxgSpotData {
   fetched_at: string | null;
   stale?: boolean;
   usdcny?: number | null;
+  fx_as_of?: string | null; fx_stale?: boolean; quote_currency?: string; conversion_assumption?: string;
   // 国内金价近似折算（PAXG USD/盎司 × USDCNY ÷ 31.1035 克）；汇率缺失时为 null
   cny?: {
     price: number | null;
@@ -1425,15 +1522,27 @@ export interface BondsGlobalData {
 }
 // —— 债市计算层：carry / roll / breakeven（曲线推导）——
 export interface BondsCalcRow {
+  gross_carry_bp_3m: number;
+  gross_static_bp_3m: number;
+  funding_bp_3m: number | null;
+  modified_duration: number;
+  convexity: number;
+  dv01_per_100: number;
+  remaining_years: number;
+  scenarios: { shift_bp: number; gross_bp: number; net_bp: number | null }[];
   tenor: string;
   years: number;
   yield: number;
-  carry_bp_3m: number;
+  carry_bp_3m: number | null;
   roll_bp_3m: number;
-  total_static_bp_3m: number;
+  total_static_bp_3m: number | null;
   breakeven_bp_3m: number | null;
 }
 export interface BondsCalcData {
+  funding_date?: string;
+  funding_status?: string;
+  funding_observed?: number | null;
+  input_fingerprint?: string;
   date: string;
   funding_cost: number | null;
   horizon_years: number;
@@ -1466,12 +1575,13 @@ export interface BondsSegmentDriver {
 }
 export interface BondsSegmentRow {
   segment: string;
-  score: number;
+  score: number | null;
+  coverage?: number;
   drivers: BondsSegmentDriver[];
   hist?: BondsSeriesPoint[];
   invalidation: string;
   anchor_tenor?: string;
-  carry_roll_bp_3m?: number;
+  carry_roll_bp_3m?: number | null;
   breakeven_bp_3m?: number | null;
 }
 export interface BondsSegmentsData {
@@ -1485,10 +1595,62 @@ export interface BondsSegmentsData {
   refresh_error?: string | null;
 }
 export interface BondsInsight {
+  input_fingerprint?: string;
+  generated_at?: string;
   ranking: string;
   segments: Record<string, string>;
 }
+export interface BondsSourceStatus {
+  key: string; date: string | null; fetched_at: string | null;
+  status: string; calendar_basis: string; source: string; source_url: string;
+  quality: string; error?: string | null;
+}
+export interface BondsValidationResult {
+  target: string; horizon: number; partition?: string; model?: string;
+  n: number; rmse?: number; mae?: number; oos_r2_vs_zero?: number | null;
+  oos_r2_vs_mean?: number | null; mse_improvement_vs_mean_95ci?: (number | null)[];
+  mse_improvement_95ci?: (number | null)[]; status: string;
+}
+export interface BondsValidation {
+  status: string; conclusion: string; generated_at?: string;
+  data_start?: string; data_end?: string; observations?: number;
+  results: BondsValidationResult[]; limitations: string[];
+  economics?: { target: string; horizon: number; results: { model: string; cost_bp: number; trades_n: number; turnover: number; cumulative_excess_pct: number; max_drawdown_excess_pct: number }[] }[];
+}
+export interface BondScorePoint {
+  date: string; score: number | null; index: number;
+  forecast_bp: number | null; baseline_bp: number | null; volatility_bp: number | null;
+}
+export interface BondPriorRow {
+  score?: number | null; score_version?: string; history_kind?: "retrospective";
+  score_history?: BondScorePoint[];
+  id: string; group: "short" | "medium" | "long"; label: string; target: string;
+  model_version: string; horizon: number; members: string[];
+  status: "ready" | "stale" | "missing"; forecast_bp: number | null;
+  historical_estimate_bp: number | null; baseline_bp: number | null;
+  observed_at: string | null; unit: "yield_change_bp" | "total_return_bp";
+  reason: string | null; source_dates: Record<string, string>; caveat: string;
+  evidence: { audit_r2: number; extension_r2: number; q: number | null;
+    years: Record<string, number>; strong_evidence: boolean };
+  training: { member: string; n: number; window: number; alpha: number; shrink: number;
+    last_origin: string; last_label_end: string }[];
+}
+export interface BondPriorsData {
+  status: string; model_version?: string; generated_at: string; input_fingerprint?: string;
+  independent_oos?: boolean; rows: BondPriorRow[]; notes?: string[]; reason?: string;
+  history_cutoff?: string; cache_state?: string;
+}
 export interface BondsOverviewData {
+  schema_version?: number;
+  generated_at?: string;
+  input_fingerprint?: string;
+  sources?: BondsSourceStatus[];
+  updated_sources?: number;
+  total_sources?: number;
+  framework?: BondsFrameworkData;
+  segments?: BondsSegmentsData;
+  validation?: BondsValidation;
+  curve_comparisons?: { label: string; date: string; points: { tenor: string; years: number; value: number }[] }[];
   curve?: BondsCurveData;
   funding?: BondsFundingData;
   policy?: BondsPolicyData;
@@ -1505,12 +1667,26 @@ export interface BondsOverviewData {
 export interface BondsFrameworkPart {
   key: string;
   label: string;
-  pct: number;
-  score: number;
+  pct: number | null;
+  score: number | null;
+  value?: number | null;
+  change?: number | null;
+  date?: string;
+  release_at?: string | null;
+  frequency?: string;
+  sample_size?: number;
+  window?: number;
+  window_start?: string;
+  source?: string;
+  source_url?: string;
+  quality?: string;
+  status?: string;
   weight: number;
   hist?: { date: string | null; v: number | null }[];
 }
 export interface BondsFrameworkState {
+  updated_parts?: number;
+  missing_parts?: string[];
   key: string;
   name: string;
   score: number | null;
@@ -1598,6 +1774,13 @@ export interface AllocationRow {
   constraint: string[];
   meaning: string;
 }
+export interface WeightPoint {
+  date: string;
+  equity: number;
+  bond: number;
+  commodity: number;
+  cash: number;
+}
 export interface AllocationBlock {
   regime: string;
   regime_label: string;
@@ -1611,6 +1794,8 @@ export interface AllocationBlock {
   rows: AllocationRow[];
   resolved: boolean;
   resolve_note: string;
+  // 历史建议持仓：档位锚点逐日回放，末尾一点是当日实际目标（含主动偏离）
+  weight_history?: WeightPoint[];
   asset_scores: Record<string, AssetScoreBlock>;
   correlation: {
     window: string;
@@ -1769,12 +1954,38 @@ export interface HolderIncreaseData {
 
 export type HolderIncreaseWindow = "1d" | "7d" | "30d" | "all";
 
+export interface IndexHistoryPeriod {
+  years: number;
+  observations: number;
+  start: string;
+  end: string;
+  percentile: number | null;
+  history: HistPoint[];
+}
+export interface IndexHistoryData {
+  symbol: string;
+  name: string;
+  periods: Record<string, IndexHistoryPeriod>;
+  valuation: {
+    pe_ttm: number | null;
+    pb: number | null;
+    percentile: number | null;
+    date: string | null;
+    coverage: string | null;
+    source: string | null;
+    dividend_yield?: number;
+    percentiles: Record<string, { percentile: number | null; observations: number; start: string }>;
+  };
+  generated_at: string;
+}
+
 export const api = {
   health: () => get<{ ok: boolean }>("/health"),
   authConfig: () => get<{ registration_open: boolean }>("/auth/config"),
   sourceHealth: (refresh = false, source?: string) =>
     get<SourceHealthData>(`/source-health${refresh ? "?refresh=true" : ""}${source ? `${refresh ? "&" : "?"}source=${encodeURIComponent(source)}` : ""}`),
   indices: () => get<IndexQuote[]>("/indices"),
+  indexHistory: (symbol: string) => get<IndexHistoryData>(`/indices/history?symbol=${symbol}`, SLOW_TIMEOUT_MS),
   holderIncrease: (window: HolderIncreaseWindow, refresh = false) => {
     const qs = new URLSearchParams({ window });
     if (refresh) qs.set("refresh", "true");
@@ -1787,6 +1998,7 @@ export const api = {
   // 评分/债市系列接口后端可能同步冷构建（黄金评分要拉 8 个外源，分钟级），
   // 30s 超时会让前端 persist 层旧值永远得不到替换（页面长期显示旧数据时点）。
   bondsOverview: (refresh = false) => get<BondsOverviewData>(`/bonds/overview${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
+  bondsPriors: (refresh = false) => get<BondPriorsData>(`/bonds/priors${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
   allocation: (refresh = false) => get<AllocationData>(`/allocation${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
   // AI 解读类接口命中后端快照即秒回，只有 LLM 冷生成才慢；150s 超时期间用户
   // 关掉页面 = 写回被放弃，persist 层旧值原样留存。封顶 45s：宁可回退占位，
@@ -1798,8 +2010,11 @@ export const api = {
   bondsPositioning: (refresh = false) => get<BondsPositioningData>(`/bonds/positioning${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
   bondsSegments: (refresh = false) => get<BondsSegmentsData>(`/bonds/segments${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
   bondsInsight: (refresh = false) =>
-    get<BondsInsight | null>(`/bonds/insight${refresh ? "?refresh=true" : ""}`, INSIGHT_TIMEOUT_MS).then((d) => d ?? null),
+    get<BondsInsight | null>(`/bonds/insight${refresh ? "?refresh=true" : ""}`, INSIGHT_TIMEOUT_MS).then((d) => d && typeof d === "object" ? d : null),
   goldScore: (refresh = false) => get<GoldScoreData>(`/gold/score${refresh ? "?refresh=true" : ""}`, SLOW_TIMEOUT_MS),
+  goldResearch: () => get<GoldResearchSummary>('/gold/research'),
+  goldRisk: () => get<GoldRiskForecast>('/gold/risk'),
+  goldDirection: () => get<GoldDirectionForecast>('/gold/direction'),
   goldInsight: (refresh = false) =>
     get<GoldInsight | null>(`/gold/insight${refresh ? "?refresh=true" : ""}`, INSIGHT_TIMEOUT_MS).then((d) => d ?? null),
   au0Hist: (days = 400) => get<Au0HistData>(`/gold/au0-hist?days=${days}`),
@@ -1947,6 +2162,11 @@ export const api = {
 export interface FactorCatalog {
   built_at: string;
   stocks: number;
+  universe_stocks?: number;
+  history_stocks?: number;
+  failed_stocks?: number;
+  filtered_stocks?: number;
+  min_valid_bars?: number;
   rows: number;
   date_min: string;
   date_max: string;
@@ -1983,13 +2203,20 @@ export interface FactorEvaluateData {
   end: string;
   n_days: number;
   avg_coverage: number;
-  ic: { ic_mean: number; rank_ic_mean: number; rank_ic_ir: number | null; rank_ic_positive_ratio: number; ic_std: number };
+  data_version?: string;
+  sample?: {
+    input_rows: number; eligible_rows: number; factor_rows: number; paired_rows: number; used_rows: number;
+    input_days: number; skipped_days: number; loss_ratio: number | null; min_cross_section: number;
+  };
+  methodology?: { quantiles: number; ties: string; turnover: string; ic_ir: string; returns: string };
+  ic: { ic_mean: number; rank_ic_mean: number; rank_ic_ir: number | null; rank_ic_positive_ratio: number; ic_std: number | null };
   ic_series: { dates: string[]; values: number[] };
-  ic_decay: Record<string, { rank_ic_mean: number; rank_ic_ir: number | null }>;
+  ic_decay: Record<string, { rank_ic_mean: number | null; rank_ic_ir: number | null; days?: number }>;
   quantile_returns: Record<string, number | null>;
+  quantile_returns_by_horizon?: Record<string, Record<string, number | null>>;
   quantile_turnover: Record<string, number | null>;
-  long_excess_bp: number;
-  long_short_bp: number;
+  long_excess_bp: number | null;
+  long_short_bp: number | null;
   rank_autocorr: number | null;
   by_year: Record<string, { rank_ic_mean: number; rank_ic_ir: number | null; days: number }>;
   biases: string[];
@@ -2010,6 +2237,7 @@ export interface FactorBacktestMetrics {
 export interface FactorBacktestData {
   factor: string;
   factor_name: string;
+  data_version?: string;
   params: { start: string; end: string; top_n: number; top_pct: number | null; freq: string; cost_multiplier: number };
   metrics: FactorBacktestMetrics;
   cost_stress: Record<string, FactorBacktestMetrics>;

@@ -564,7 +564,7 @@ export function SectorDetail() {
         <Link to="/sectors" className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
           <ArrowLeft className="h-4 w-4" /> 板块
         </Link>
-        <PageHeader title={sector.label} subtitle={sector.tagline} />
+
 
         {chainLoading && (
           <GlassCard className="mb-6">
@@ -618,12 +618,11 @@ export function SectorDetail() {
 
       <PageHeader
         title={sector.label}
-        subtitle={sector.tagline}
         actions={
           <AskAiButton
             context={aiContext}
             taskId={`sector:${sector.key}`}
-            label="让 AI 深入研究"
+            label="AI 复盘"
             suggestions={["核心环节谁更有议价权", "未来半年催化与风险清单", "逐条核验政策影响路径", "代表企业如何分组比较"]}
           />
         }

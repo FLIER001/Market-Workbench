@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { RefreshCw, Droplets, Landmark, TrendingUp, TrendingDown, Activity, Gauge, ChevronDown } from "lucide-react";
+import { Droplets, Landmark, TrendingUp, TrendingDown, Activity, Gauge, ChevronDown } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { RefreshButton } from "@/components/ui/RefreshButton";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { Sparkline } from "@/components/ui/Sparkline";
@@ -359,12 +360,7 @@ export function Liquidity() {
     <div>
       <PageHeader
         title="资金面"
-        subtitle="国内资金状态 · 美国金融条件"
-        actions={
-          <button onClick={load} className="text-muted-foreground hover:text-primary" title="刷新">
-            <RefreshCw className={cn("h-4 w-4", (loading || revalidating) && "animate-spin")} />
-          </button>
-        }
+        actions={<RefreshButton onClick={load} loading={loading || revalidating} />}
       />
 
       {loading && !data && !err && (

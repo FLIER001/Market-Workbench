@@ -1,573 +1,222 @@
-import { useMemo, useState } from "react";
-import { Activity, AlertCircle, Calculator, Coins, Gauge, Globe2, Landmark, Layers, Percent, PieChart, RefreshCw, Scale, Sparkles } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { Activity, AlertCircle, Calculator, Layers, RefreshCw, Sparkles, X } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { RefreshButton } from "@/components/ui/RefreshButton";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { ColdStartNotice, SkeletonBlock } from "@/components/ui/PageSkeleton";
-import { Sparkline } from "@/components/ui/Sparkline";
 import { AskAiButton } from "@/components/ui/AskAiButton";
-import {
-  api,
-  type BondsCalcData,
-  type BondsFrameworkData,
-  type BondsFrameworkState,
-  type BondsInsight,
-  type BondsOverviewData,
-  type BondsPositioningData,
-  type BondsSegmentRow,
-  type BondsSegmentsData,
-  type BondsSeriesPoint,
-  type HistPoint,
-} from "@/lib/api";
+import { BondPriorsPanel } from "@/components/bonds/BondPriorsPanel";
+import { api, type BondsOverviewData, type BondsFrameworkState, type BondsSeriesPoint, type BondsInsight, type BondsCalcRow } from "@/lib/api";
 import { useSWR } from "@/hooks/useSWR";
 import { cn } from "@/lib/utils";
+import { changeBp, numberText as n, breakEvenText, sourceStatus } from "@/lib/bondView";
 
-// 债市页：按研究框架的定价链条组织（政策锚 → 资金 → 曲线/期限 → 信用 → 全球对照）。
-// 只呈现客观数据；解读由用户自己的 AI 给出（AskAiButton 带本页上下文）。
+const SOURCE_LABEL: Record<string, string> = { curve: "收益率曲线", funding: "Shibor", policy: "LPR", index: "财富指数", global: "中美利率", positioning: "期货量仓" };
+const FREQUENCY: Record<string, string> = { daily: "日", monthly: "月", quarterly: "季" };
+const QUALITY: Record<string, string> = { direct: "直接来源", proxy: "代理指标", derived: "派生值", derived_unvalidated: "未验证推导", proxy_unverified_policy: "政策锚待核验的代理" };
 
-const SPREAD_LABEL: Record<string, string> = {
-  "10年-1年": "10Y-1Y 期限利差",
-  "30年-1年": "30Y-1Y 期限利差",
-  "3年-1年": "3Y-1Y 期限利差",
-};
-
-const CREDIT_LABEL: Record<string, string> = {
-  "AAA-1年": "AAA 中短票 · 1Y",
-  "AAA-3年": "AAA 中短票 · 3Y",
-  "AAA-5年": "AAA 中短票 · 5Y",
-  "商行债-1年": "AAA 商行债 · 1Y",
-};
-
-const FUNDING_ORDER = ["O/N", "1W", "1M", "3M", "6M", "1Y"];
-
-function lastN<T>(arr: T[] | undefined, n: number): T[] {
-  return arr && arr.length ? arr.slice(-n) : [];
+function HistoryChart({ points, fixedScore = false }: { points: BondsSeriesPoint[]; fixedScore?: boolean }) {
+  const id = useId();
+  const [selected, setSelected] = useState<number | null>(null);
+  const rows = points.filter(p => p.date && Number.isFinite(p.v)).map(p => ({ ...p, t: Date.parse(p.date) })).filter(p => Number.isFinite(p.t)).sort((a, b) => a.t - b.t);
+  if (rows.length < 2) return <p className="text-xs text-muted-foreground">历史观测不足</p>;
+  const min = fixedScore ? -2 : Math.min(...rows.map(p => p.v));
+  const max = fixedScore ? 2 : Math.max(...rows.map(p => p.v));
+  const span = max - min || 1;
+  const lo = min - (fixedScore ? 0 : span * .08), hi = max + (fixedScore ? 0 : span * .08);
+  const tx = (t: number) => 45 + (t - rows[0].t) / (rows[rows.length - 1].t - rows[0].t || 1) * 600;
+  const vy = (v: number) => 105 - (v - lo) / (hi - lo || 1) * 95;
+  const current = rows[Math.min(selected ?? rows.length - 1, rows.length - 1)];
+  return <div className="min-w-0">
+    <svg viewBox="0 0 660 130" role="img" aria-label={`${rows[0].date}至${rows[rows.length - 1].date}走势`} className="h-28 w-full text-muted-foreground">
+      {[lo, (hi + lo) / 2, hi].map(v => <g key={v}><line x1="45" x2="645" y1={vy(v)} y2={vy(v)} stroke="currentColor" opacity=".15" /><text x="40" y={vy(v) + 4} textAnchor="end" fill="currentColor" fontSize="12">{n(v, 1)}</text></g>)}
+      <path d={rows.map((p, i) => `${i ? "L" : "M"}${tx(p.t)},${vy(p.v)}`).join(" ")} fill="none" stroke="hsl(var(--primary))" strokeWidth="2" />
+      <circle cx={tx(current.t)} cy={vy(current.v)} r="4" fill="hsl(var(--primary))" />
+      <text x="45" y="125" fontSize="12" fill="currentColor">{rows[0].date}</text><text x="645" y="125" textAnchor="end" fontSize="12" fill="currentColor">{rows[rows.length - 1].date}</text>
+    </svg>
+    <label htmlFor={id} className="flex justify-between gap-2 text-xs text-muted-foreground"><span>查看观测</span><span>{current.date} · {n(current.v, 3)}</span></label>
+    <input id={id} type="range" min="0" max={rows.length - 1} value={selected ?? rows.length - 1} onChange={e => setSelected(Number(e.target.value))} className="h-5 w-full accent-primary" />
+  </div>;
 }
 
-function chgOf(hist: { v: number }[] | undefined, days = 1): number | null {
-  if (!hist || hist.length <= days) return null;
-  return hist[hist.length - 1].v - hist[hist.length - 1 - days].v;
-}
-
-function DeltaText({ v, unit = "bp", digits = 1 }: { v: number | null; unit?: string; digits?: number }) {
-  if (v == null) return <span className="text-[11px] text-muted-foreground/60">—</span>;
-  return (
-    <span className={cn("text-[11px] font-semibold tabular-nums", v >= 0 ? "text-danger" : "text-success")}>
-      {v >= 0 ? "+" : ""}{v.toFixed(digits)}{unit}
-    </span>
-  );
-}
-
-function MiniStat({
-  icon: Icon, label, value, chg, hist, suffix = "", color = "--primary",
-}: {
-  icon: typeof Landmark; label: string; value: string; chg?: React.ReactNode;
-  hist?: HistPoint[]; suffix?: string; color?: string;
-}) {
-  return (
-    <div className="flex flex-col gap-1 rounded-xl border border-border/60 bg-background/30 p-3">
-      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-        <Icon className="h-3.5 w-3.5 text-primary/80" /> {label}
-      </div>
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-base font-bold tabular-nums leading-none">{value}{suffix && <span className="text-xs font-medium text-muted-foreground">{suffix}</span>}</span>
-        {chg}
-      </div>
-      {hist && hist.length > 1 && <Sparkline data={hist} height={30} color={color} valueSuffix={suffix} />}
+function StateModal({ state, close }: { state: BondsFrameworkState; close: () => void }) {
+  const dialog = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  useEffect(() => {
+    const prior = document.activeElement as HTMLElement | null;
+    const node = dialog.current;
+    node?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.preventDefault(); close(); }
+      if (e.key !== "Tab" || !node) return;
+      const items = [...node.querySelectorAll<HTMLElement>('button,a[href],input,summary,[tabindex="0"]')].filter(e => e.getClientRects().length > 0);
+      const first = items[0], last = items[items.length - 1];
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === node)) { e.preventDefault(); last?.focus(); }
+      if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
+    };
+    const priorOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("keydown", onKey); document.body.style.overflow = priorOverflow; prior?.focus(); };
+  }, [close]);
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3" onClick={close}>
+    <div ref={dialog} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} onClick={e => e.stopPropagation()} className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-border bg-background p-5 shadow-xl">
+      <div className="flex items-start justify-between gap-4"><div><h2 id={titleId} className="font-semibold">{state.name}</h2><p className="mt-1 text-sm text-muted-foreground">{state.meaning}</p></div><button onClick={close} aria-label="关闭指标明细" className="rounded p-2 hover:bg-muted"><X className="h-5 w-5" /></button></div>
+      <p className="my-3 rounded-lg bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">历史为事后重建；未知发布日期和修订版本不视为当时可得。实验分数未经预测验证。</p>
+      <div className="space-y-4">{state.parts.map(p => <section key={p.key} className="rounded-xl border border-border p-3">
+        <div className="flex flex-wrap justify-between gap-2"><h3 className="text-sm font-medium">{p.label}</h3><span className="text-sm tabular-nums">{n(p.value, 3)} · 变化 {n(p.change, 3, true)}</span></div>
+        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">观察期 {p.date ?? "未知"} · 发布 {p.release_at ?? "未知"} · {sourceStatus[p.status ?? "unknown"] ?? p.status} · {QUALITY[p.quality ?? ""] ?? p.quality}</p>
+        <p className="mt-1 text-xs text-muted-foreground">分位 {p.pct == null ? "—" : n(p.pct * 100, 0) + "%"} · 窗口 {p.window} {FREQUENCY[p.frequency ?? ""] ?? "期"} · 有效 {p.sample_size} 点 · 起点 {p.window_start ?? "—"}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{p.source} {p.source_url && <a href={p.source_url} target="_blank" rel="noreferrer" className="text-primary underline">查看来源</a>}</p>
+        <HistoryChart points={(p.hist ?? []).filter((x): x is BondsSeriesPoint => !!x.date && x.v != null)} />
+        <details className="mt-2 text-xs text-muted-foreground"><summary className="cursor-pointer">实验假设与分数</summary><p className="mt-1">分数 {n(p.score)} · 权重 {p.weight}。数值不代表债价方向或置信度。</p></details>
+      </section>)}</div>
+      {!state.parts.length && <p className="py-8 text-center text-sm text-muted-foreground">此维度数据不足</p>}
+      {state.hist?.length ? <details className="mt-4 text-sm"><summary className="cursor-pointer">事后重建的实验状态历史</summary><HistoryChart points={state.hist} fixedScore /></details> : null}
     </div>
-  );
+  </div>;
 }
 
-function toHist(series: BondsSeriesPoint[] | undefined): HistPoint[] {
-  return (series ?? []).map((p) => ({ date: p.date, v: p.v }));
-}
-
-// —— 研究框架层：八状态仪表盘（§2.2 八个统一状态，[-2,+2]，正分=对债券价格有利）——
-
-const STATE_TONE = (score: number | null) => {
-  if (score == null) return { text: "text-muted-foreground", bg: "bg-muted", label: "数据缺" };
-  if (score >= 0.75) return { text: "text-success", bg: "bg-success", label: "偏多" };
-  if (score >= 0.25) return { text: "text-success/90", bg: "bg-success/80", label: "略偏多" };
-  if (score > -0.25) return { text: "text-muted-foreground", bg: "bg-muted-foreground/50", label: "中性" };
-  if (score > -0.75) return { text: "text-danger/90", bg: "bg-danger/80", label: "略偏空" };
-  return { text: "text-danger", bg: "bg-danger", label: "偏空" };
-};
-
-function StateBar({ score }: { score: number | null }) {
-  // [-2,+2] 映射到横条；中线为 0。正分向右（绿=利好债），负分向左（红=利空债）。
-  const pct = score == null ? 0 : (score / 2) * 50;
-  return (
-    <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-muted">
-      <div className="absolute left-1/2 top-0 h-full w-px bg-border" />
-      {score != null && (
-        <div
-          className={cn("absolute top-0 h-full rounded-full", score >= 0 ? "bg-success left-1/2" : "bg-danger")}
-          style={{ width: `${Math.abs(pct)}%`, ...(score >= 0 ? {} : { left: `${50 - Math.abs(pct)}%` }) }}
-        />
-      )}
-    </div>
-  );
-}
-
-function FrameworkPanel({ fw }: { fw?: BondsFrameworkData }) {
+function FrameworkPanel({ data }: { data: BondsOverviewData }) {
   const [open, setOpen] = useState<BondsFrameworkState | null>(null);
-  if (!fw?.states?.length) return null;
-  return (
-    <GlassCard>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex items-center gap-2 text-sm font-semibold">
-          <Activity className="h-4 w-4 text-primary" /> 研究框架 · 八状态仪表盘
-        </h3>
-        <span className="text-xs text-muted-foreground">
-          [-2, +2] · 正分 = 对债券价格有利 · 点击卡片看明细 · 覆盖 {fw.coverage}% · {fw.date}
-        </span>
-      </div>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        {fw.states.map((s: BondsFrameworkState) => {
-          const tone = STATE_TONE(s.score);
-          return (
-            <button
-              key={s.key}
-              onClick={() => setOpen(s)}
-              className="rounded-xl border border-border/60 bg-background/30 p-3.5 text-left transition-colors hover:border-primary/40"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <span className="text-xs font-medium leading-snug">{s.name}</span>
-                <span className="flex flex-col items-end leading-tight">
-                  <span className={cn("text-lg font-bold tabular-nums", tone.text)}>
-                    {s.score == null ? "—" : (s.score > 0 ? "+" : "") + s.score.toFixed(2)}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground">{tone.label}</span>
-                </span>
-              </div>
-              {s.hist && s.hist.length > 1 && (
-                <div className="mt-2">
-                  <Sparkline data={s.hist} height={44} valueSuffix="" />
-                </div>
-              )}
-            </button>
-          );
-        })}
-      </div>
-      <p className="mt-3 text-[10px] leading-relaxed text-muted-foreground/70">
-        方法：{fw.method}。{fw.notes?.[0]}
-      </p>
-
-      {/* 指标明细弹层 */}
-      {open && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={() => setOpen(null)}
-        >
-          <div
-            className="max-h-[80vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-border bg-background p-5 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="mb-3 flex items-start justify-between gap-3">
-              <div>
-                <h4 className="text-sm font-semibold">{open.name}</h4>
-                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{open.meaning}</p>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className={cn("text-lg font-bold tabular-nums", STATE_TONE(open.score).text)}>
-                  {open.score == null ? "—" : (open.score > 0 ? "+" : "") + open.score.toFixed(2)}
-                </span>
-                <button onClick={() => setOpen(null)} className="rounded-lg border border-border px-2 py-1 text-xs text-muted-foreground hover:border-primary/40 hover:text-primary">
-                  关闭
-                </button>
-              </div>
-            </div>
-            <div className="mb-3"><StateBar score={open.score} /></div>
-            {open.parts.length > 0 ? (
-              <div className="space-y-2">
-                {open.parts.map((p) => {
-                  const hist = (p.hist ?? []).filter((x): x is { date: string; v: number } => x.v != null && !!x.date);
-                  return (
-                    <div key={p.key} className="rounded-lg border border-border/50 px-3 py-2">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-xs">{p.label}</span>
-                        <span className="flex shrink-0 items-center gap-3 text-[11px] tabular-nums">
-                          <span className="text-muted-foreground">分位 {(p.pct * 100).toFixed(0)}%</span>
-                          <span className="text-muted-foreground/60">权重 {p.weight}</span>
-                          <span className={cn("font-semibold", p.score >= 0 ? "text-success" : "text-danger")}>
-                            {p.score >= 0 ? "+" : ""}{p.score.toFixed(2)}
-                          </span>
-                        </span>
-                      </div>
-                      {hist.length > 1 && (
-                        <div className="mt-1">
-                          <Sparkline data={hist} height={44} valueSuffix="" />
-                          <div className="mt-0.5 flex justify-between text-[10px] text-muted-foreground/60">
-                            <span>{hist[0].date}</span>
-                            <span>最新 {hist[hist.length - 1].v.toFixed(2)}</span>
-                            <span>{hist[hist.length - 1].date}</span>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="py-6 text-center text-sm text-muted-foreground">该状态暂无可用指标</p>
-            )}
-            <p className="mt-3 text-[10px] leading-relaxed text-muted-foreground/60">
-              分位 = 该指标近 60 期窗口内的相对位置（0% 最低，100% 最高）；单项分数由分位映射到 [-2,+2] 后按权重合成为状态分。
-            </p>
-          </div>
-        </div>
-      )}
-    </GlassCard>
-  );
+  const close = useCallback(() => setOpen(null), []);
+  const states = data.framework?.states ?? [];
+  return <GlassCard>
+    <h2 className="flex items-center gap-2 text-sm font-semibold"><Activity className="h-4 w-4 text-primary" /> 八维研究观察</h2>
+    <p className="mt-1 text-xs text-muted-foreground">点击查看原始值、变化、频率、来源与研究假设；各维度不等同债价方向。</p>
+    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">{states.map(s => <button key={s.key} onClick={() => setOpen(s)} className="rounded-xl border border-border/60 p-3 text-left hover:border-primary/50 focus-visible:outline focus-visible:outline-primary">
+      <span className="text-sm font-medium">{s.name}</span><p className="mt-2 text-xs leading-relaxed text-muted-foreground">{s.meaning}</p>
+      <p className="mt-3 text-xs">已更新 {s.parts.filter(p => p.status === "fresh").length}/{s.parts.length} 项 · 查看明细</p>
+    </button>)}</div>
+    {open && <StateModal state={open} close={close} />}
+  </GlassCard>;
 }
 
-// —— 分品种评分：短债到杠杆套息（框架 §11.2 权重先验 + §0.2 失效条件）——
-function SegmentPanel({ seg, aiInsight, insightLoading, onRefreshInsight }: {
-  seg?: BondsSegmentsData;
-  aiInsight?: BondsInsight | null;
-  insightLoading?: boolean;
-  onRefreshInsight?: () => void;
-}) {
-  if (!seg?.rows?.length) return null;
-  return (
-    <GlassCard>
-      {/* AI 解读：品种优先顺序 + 逐品种解析（后端存快照，手动重生成） */}
-      {(aiInsight || insightLoading) && (
-        <div className="mb-4 rounded-xl bg-muted/20 p-3.5">
-          <div className="flex items-center gap-2">
-            <Sparkles className="h-3.5 w-3.5 text-primary/90" />
-            <span className="text-xs font-semibold text-primary/90">AI 解读</span>
-            {onRefreshInsight && (
-              <button
-                onClick={onRefreshInsight}
-                disabled={insightLoading}
-                className="ml-auto rounded p-1 text-muted-foreground transition-colors hover:text-primary disabled:opacity-60"
-                title="重新生成 AI 解读">
-                <RefreshCw className={cn("h-3 w-3", insightLoading && "animate-spin")} />
-              </button>
-            )}
-          </div>
-          {aiInsight ? (
-            <div className="mt-2 space-y-1.5">
-              {aiInsight.ranking && (
-                <p className="text-sm font-medium leading-relaxed text-foreground">{aiInsight.ranking}</p>
-              )}
-              <div className="grid gap-1.5 md:grid-cols-2">
-                {seg.rows.map((r) => (
-                  <p key={r.segment} className="text-[12px] leading-relaxed text-foreground/75">
-                    <span className="font-medium text-foreground">{r.segment}</span>
-                    <span className="mx-1 text-muted-foreground/40">·</span>
-                    {aiInsight.segments[r.segment]}
-                  </p>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <p className="mt-2 text-sm text-muted-foreground">AI 正在生成解读…</p>
-          )}
-        </div>
-      )}
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex items-center gap-2 text-sm font-semibold">
-          <PieChart className="h-4 w-4 text-primary" /> 分品种评分 · 短债 → 超长债 → 信用 → 杠杆套息
-        </h3>
-        <span className="text-xs text-muted-foreground">[-2,+2] · 相对排序，非买卖建议 · {seg.date}</span>
-      </div>
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {seg.rows.map((r: BondsSegmentRow) => {
-          const tone = STATE_TONE(r.score);
-          return (
-            <div key={r.segment} className="rounded-xl border border-border/60 bg-background/30 p-3.5">
-              <div className="flex items-start justify-between gap-3">
-                <span className="text-sm font-semibold">{r.segment}</span>
-                <span className="flex flex-col items-end leading-tight">
-                  <span className={cn("text-lg font-bold tabular-nums", tone.text)}>
-                    {r.score > 0 ? "+" : ""}{r.score.toFixed(2)}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground">{tone.label}</span>
-                </span>
-              </div>
-              {r.hist && r.hist.length > 1 && (
-                <div className="mt-2">
-                  <Sparkline data={r.hist} height={44} valueSuffix="" zeroLine showLatest />
-                </div>
-              )}
-              {r.carry_roll_bp_3m != null && (
-                <div className="mt-1.5 text-[11px]">
-                  <span className="text-muted-foreground">静态 carry+roll：</span>
-                  <span className={cn("font-medium tabular-nums", r.carry_roll_bp_3m >= 0 ? "text-success" : "text-danger")}>
-                    {r.carry_roll_bp_3m >= 0 ? "+" : ""}{r.carry_roll_bp_3m.toFixed(0)} bp / 3M
-                  </span>
-                </div>
-              )}
-              <p className="mt-2 border-t border-border/40 pt-2 text-[10px] leading-relaxed text-muted-foreground/70" title={r.invalidation}>
-                <AlertCircle className="mr-0.5 inline h-3 w-3 align-[-1px]" />失效：{r.invalidation}
-              </p>
-            </div>
-          );
-        })}
-      </div>
-      <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground/70">{seg.method}</p>
-    </GlassCard>
-  );
+function SegmentPanel({ data, insight, busy, refreshInsight }: { data: BondsOverviewData; insight: BondsInsight | null; busy: boolean; refreshInsight: () => void }) {
+  const rows = data.segments?.rows ?? [];
+  const [aiSegment, setAiSegment] = useState("");
+  const selectedSegment = rows.find(r => r.segment === aiSegment)?.segment ?? rows[0]?.segment;
+  const segmentLabel = (name: string) => name.replace("短债(1-3Y)", "1—3年债");
+  const calc = data.calc?.rows ?? [];
+  const levered = rows.find(r => r.segment.includes("杠杆"));
+  const card = (r: typeof rows[number]) => {
+    const anchor = calc.find(c => c.tenor === (r.segment.includes("杠杆") ? "1年" : r.anchor_tenor));
+    return <div key={r.segment} className="rounded-xl border border-border/60 bg-background/30 p-4">
+      <h3 className="text-sm font-semibold">{r.segment}</h3>
+      {anchor ? <><div className="mt-3 grid grid-cols-2 gap-2 text-xs"><span className="text-muted-foreground">未融资静态收益</span><span className="text-right tabular-nums">{n(anchor.gross_static_bp_3m, 1, true)} bp / 3M</span><span className="text-muted-foreground">融资后（代理）</span><span className="text-right tabular-nums">{n(anchor.total_static_bp_3m, 1, true)} bp / 3M</span><span className="text-muted-foreground">修正久期</span><span className="text-right">{n(anchor.modified_duration, 2)} 年</span></div><p className="mt-2 text-xs text-muted-foreground">{breakEvenText(anchor.breakeven_bp_3m)}</p></> : <p className="mt-3 text-xs text-muted-foreground">{r.segment.includes("信用") ? "AAA利差观察；缺少单券现金流和融资数据，未生成可交易收益估值。" : "融资套息为独立策略，实际回购成本与杠杆约束尚未接入。"}</p>}
+      <p className="mt-3 border-t border-border/50 pt-3 text-xs leading-relaxed text-muted-foreground"><AlertCircle className="mr-1 inline h-3 w-3" />反证与风险：{r.invalidation}</p>
+      <details className="mt-3 text-xs text-muted-foreground"><summary className="cursor-pointer">实验指标（未验证） · 覆盖 {r.coverage ?? 0}%</summary><p className="mt-2">研究分数 {n(r.score)}，不作投资排序。低覆盖时不输出分数。</p>{r.drivers.map(d => <p key={d.state} className="mt-1">{d.state} · 贡献 {n(d.contribution, 2, true)} · 先验权重 {d.weight}</p>)}{r.hist?.length ? <HistoryChart points={r.hist} fixedScore /> : null}</details>
+    </div>;
+  };
+  return <GlassCard>
+    {/* User preference: keep AI expanded at the top; market/curve panels stay below research. */}
+    <section aria-label="AI解读" className="mb-4 rounded-xl bg-muted/20 p-4">
+      <div className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-primary" /><h2 className="text-sm font-semibold text-primary">AI 数据解读</h2><button onClick={refreshInsight} disabled={busy || !data.input_fingerprint} title="重新生成同一快照解读" aria-label="重新生成AI解读" className="ml-auto rounded p-2 disabled:opacity-40"><RefreshCw className={cn("h-4 w-4", busy && "animate-spin")} /></button></div>
+      {insight ? <><p className="mt-2 text-sm leading-relaxed">{insight.ranking}</p><div className="mt-4 border-t border-border/50 pt-3"><label className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">按品种看解读<select aria-label="选择AI解读品种" value={selectedSegment ?? ""} onChange={e => setAiSegment(e.target.value)} className="max-w-full rounded-lg border border-border bg-background px-3 py-2 text-foreground">{rows.map(r => <option key={r.segment} value={r.segment}>{segmentLabel(r.segment)}</option>)}</select></label>{selectedSegment && <p className="mt-3 text-sm leading-relaxed text-foreground/80">{insight.segments[selectedSegment]}</p>}</div><p className="mt-2 text-xs text-muted-foreground">与当前数据版本一致 · 生成 {insight.generated_at?.slice(0, 19).replace("T", " ")}</p></> : <p className="mt-3 text-sm text-muted-foreground">{busy ? "正在核对数据并生成同版本解读…" : "当前快照暂无可用AI解读，可点击右侧重新生成。"}</p>}
+    </section>
+    <details className="mt-3 border-t border-border/60 pt-4"><summary className="cursor-pointer text-sm text-muted-foreground">利率不变时，持有收益如何计算？</summary><div className="mt-4">
+    <p className="mt-1 text-xs text-muted-foreground">持有3个月；不作预期收益排序。融资后数值仅在资金与曲线同日时提供。</p>
+    <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{rows.filter(r => !r.segment.includes("杠杆")).map(card)}</div>
+    {levered && <details className="mt-3 rounded-xl border border-border/60 p-3 text-sm"><summary className="cursor-pointer font-medium">独立策略观察 · 融资套息</summary><div className="mt-3">{card(levered)}</div></details>}
+    </div></details>
+  </GlassCard>;
 }
 
-// —— 仓位与拥挤度：国债期货量仓（框架 §9.2 Crowding）——
-function PositioningPanel({ pos }: { pos?: BondsPositioningData }) {
-  if (!pos?.contracts?.length) return null;
-  return (
-    <GlassCard>
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex items-center gap-2 text-sm font-semibold">
-          <Layers className="h-4 w-4 text-primary" /> 仓位与拥挤度 · 国债期货量仓
-        </h3>
-        <span className="text-xs text-muted-foreground">持仓分位越高 = 久期越拥挤 · 截至 {pos.date}</span>
-      </div>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        {pos.contracts.map((c) => {
-          const pct = c.oi_pct_1y;
-          const tone = pct >= 0.8 ? "text-danger" : pct >= 0.6 ? "text-warning" : "text-muted-foreground";
-          return (
-            <div key={c.symbol} className="rounded-xl border border-border/60 bg-background/30 p-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-medium">{c.label} 主力</span>
-                <span className="text-[10px] text-muted-foreground">{c.close?.toFixed(2) ?? "—"}</span>
-              </div>
-              <div className="mt-1 flex items-baseline gap-1.5">
-                <span className={cn("text-base font-bold tabular-nums", tone)}>持仓分位 {(pct * 100).toFixed(0)}%</span>
-              </div>
-              <StateBar score={Math.min(2, Math.max(-2, -(pct - 0.5) * 4))} />
-              <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
-                <span>持仓 {(c.oi / 10000).toFixed(1)} 万手</span>
-                <span>成交分位 {c.vol_pct_1y != null ? `${(c.vol_pct_1y * 100).toFixed(0)}%` : "—"}</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground/70">{pos.method}</p>
-    </GlassCard>
-  );
+function SourcePanel({ data }: { data: BondsOverviewData }) {
+  const sources = data.sources ?? [];
+  const issues = sources.filter(s => s.status !== "fresh");
+  return <div className="rounded-xl border border-border bg-background/40 px-4 py-3 text-xs leading-relaxed">
+    <p><strong>数据已更新 {data.updated_sources ?? 0}/{data.total_sources ?? 0} 源</strong> · 生成 {data.generated_at?.slice(0, 19).replace("T", " ") ?? "未知"} · {data.cache_state === "refreshing" ? "后台更新中" : data.cache_state === "error" ? "更新失败，保留旧数据" : "已载入快照"}</p>
+    <p className="mt-1 text-muted-foreground">预测能力未获实盘验证 · 实验分数未校准</p>
+    {issues.length > 0 && <p role="status" className="mt-2 text-warning">{issues.map(s => `${SOURCE_LABEL[s.key] ?? s.key}：${sourceStatus[s.status] ?? s.status}（${s.date ?? "无观察日期"}）`).join("；")}</p>}
+    <details className="mt-2"><summary className="cursor-pointer text-muted-foreground">数据日期与来源明细</summary><p className="mt-2 text-muted-foreground">统一输入版本 {data.input_fingerprint ?? "待生成"}</p><div className="mt-2 space-y-2">{sources.map(s => <p key={s.key}><a className="text-primary underline" href={s.source_url} target="_blank" rel="noreferrer">{SOURCE_LABEL[s.key] ?? s.key}</a> · 观察 {s.date ?? "未知"} · 抓取 {s.fetched_at?.slice(0, 19).replace("T", " ") ?? "未知"} · {QUALITY[s.quality]} · {s.calendar_basis}{s.error ? ` · ${s.error}` : ""}</p>)}</div></details>
+  </div>;
 }
 
-// —— 计算层：carry / roll / breakeven 表（框架 §7.4，纯曲线推导）——
-function CalcPanel({ calc }: { calc?: BondsCalcData }) {
+function MarketStats({ data }: { data: BondsOverviewData }) {
+  const yields = data.curve?.yields ?? {};
+  return <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">{["1年", "5年", "10年", "30年"].map(t => <div key={t} className="rounded-xl border border-border/60 p-3"><p className="text-xs text-muted-foreground">{t}国债 · {yields[t]?.slice(-1)[0]?.date ?? "缺失"}</p><p className="mt-2 text-lg font-semibold tabular-nums">{n(yields[t]?.slice(-1)[0]?.v, 3)}%</p><p className="mt-1 text-xs">较前日 {n(changeBp(yields[t]), 2, true)} bp · 近5日 {n(changeBp(yields[t], 5), 2, true)} bp</p></div>)}{["O/N", "3M"].map(t => <div key={t} className="rounded-xl border border-border/60 p-3"><p className="text-xs text-muted-foreground">Shibor {t} · {data.funding?.date ?? "缺失"}</p><p className="mt-2 text-lg font-semibold">{n(data.funding?.series[t]?.slice(-1)[0]?.v, 3)}%</p><p className="mt-1 text-xs">较前日 {n(changeBp(data.funding?.series[t]), 2, true)} bp · 无担保报价</p></div>)}</div>;
+}
+
+function CurvePanel({ data }: { data: BondsOverviewData }) {
+  const [compare, setCompare] = useState(true);
+  const comparisons = (data.curve_comparisons ?? []).map(c => ({ ...c, points: [...c.points].sort((a, b) => a.years - b.years) }));
+  const series = compare ? comparisons : comparisons.slice(0, 1);
+  const values = series.flatMap(s => s.points.map(p => p.value));
+  const lo = values.length ? Math.min(...values) - .1 : 0, hi = values.length ? Math.max(...values) + .1 : 1;
+  const x = (v: number) => 45 + v / 30 * 600, y = (v: number) => 185 - (v - lo) / (hi - lo) * 160;
+  const colors = ["hsl(var(--primary))", "#38bdf8", "#a78bfa"];
+  const current = comparisons[0];
+  const spread = (a: string, b: string) => { const ap = current?.points.find(p => p.tenor === a), bp = current?.points.find(p => p.tenor === b); return ap && bp ? (ap.value - bp.value) * 100 : null; };
+  return <GlassCard>
+    <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-sm font-semibold">国债收益率曲线 · 当期与历史对照</h2><label className="flex gap-2 text-xs"><input type="checkbox" checked={compare} onChange={e => setCompare(e.target.checked)} />显示历史曲线</label></div>
+    {values.length ? <svg viewBox="0 0 670 225" role="img" aria-label="国债收益率曲线，横轴为真实剩余年限，纵轴为年化收益率百分比" className="mt-3 h-64 w-full text-muted-foreground">
+      {[lo, (lo + hi) / 2, hi].map(v => <g key={v}><line x1="45" x2="645" y1={y(v)} y2={y(v)} stroke="currentColor" opacity=".15" /><text x="40" y={y(v) + 4} textAnchor="end" fill="currentColor" fontSize="12">{n(v, 2)}%</text></g>)}
+      {[0, 1, 5, 10, 20, 30].map(t => <text key={t} x={x(t)} y="211" fill="currentColor" fontSize="12" textAnchor="middle">{t}Y</text>)}
+      {series.map((s, i) => <path key={s.label} d={s.points.map((p, j) => `${j ? "L" : "M"}${x(p.years)},${y(p.value)}`).join(" ")} fill="none" stroke={colors[i]} strokeWidth={i ? 1.5 : 2.5} strokeDasharray={i ? "5 3" : undefined} />)}
+    </svg> : <p className="py-8 text-sm text-muted-foreground">曲线数据不足</p>}
+    <div className="flex flex-wrap gap-4 text-xs">{series.map((s, i) => <span key={s.label} style={{ color: colors[i] }}>{s.label} · {s.date}</span>)}</div>
+    <p className="mt-3 text-sm">10年与2年利差 {n(spread("10年", "2年"), 1)} bp · 30年与10年利差 {n(spread("30年", "10年"), 1)} bp</p>
+    {spread("10年", "2年") == null && <p className="mt-1 text-xs text-muted-foreground">2年观测缺失，2s10s留空；未用插值冒充观测。</p>}
+    <details className="mt-3 text-xs"><summary className="cursor-pointer">精确期限点（支持触摸与键盘）</summary><div className="mt-2 overflow-x-auto"><table className="w-full min-w-[360px] text-left tabular-nums"><thead><tr><th className="p-2">期限</th>{comparisons.map(c => <th key={c.label}>{c.label} %</th>)}</tr></thead><tbody>{current?.points.map(p => <tr key={p.tenor}><td className="p-2">{p.tenor}</td>{comparisons.map(c => <td key={c.label}>{n(c.points.find(x => x.tenor === p.tenor)?.value, 4)}</td>)}</tr>)}</tbody></table></div></details>
+  </GlassCard>;
+}
+
+function ObservationPanel({ data }: { data: BondsOverviewData }) {
+  const groups = [{ title: "期限利差 · bp", rows: data.curve?.spreads }, { title: "AAA信用/品种利差 · bp", rows: data.curve?.credit }];
+  return <GlassCard><h2 className="text-sm font-semibold">资金、期限与信用利差观察</h2><p className="mt-2 text-xs text-muted-foreground">LPR不是OMO政策利率；同业拆借/定盘/回购不可混同。{data.policy?.anchors?.map(a => `${a.label} ${n(a.value)}%（${a.date}）`).join("；")}</p><p className="mt-2 text-xs">中美10Y利差 {n(data.global?.spread?.slice(-1)[0]?.v, 1)} bp · {data.global?.date ?? "缺失"}；没有汇率数据，不作汇率判断。</p><div className="mt-3 grid gap-3 md:grid-cols-2">{groups.map(g => <details key={g.title} className="rounded-xl border border-border/60 p-3"><summary className="cursor-pointer text-sm font-medium">{g.title}</summary>{Object.entries(g.rows ?? {}).map(([label, h]) => <div key={label} className="mt-4"><p className="text-xs">{label} · 最新 {n(h.slice(-1)[0]?.v)} · 较前日 {n(changeBp(h, 1, false), 2, true)} · {h.slice(-1)[0]?.date}</p><HistoryChart points={h} /></div>)}</details>)}</div></GlassCard>;
+}
+
+function CalcPanel({ data }: { data: BondsOverviewData }) {
+  const [net, setNet] = useState(false);
+  const calc = data.calc;
   if (!calc?.rows?.length) return null;
-  const best = calc.rows.reduce((a, b) => (b.total_static_bp_3m > a.total_static_bp_3m ? b : a));
-  return (
-    <GlassCard>
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex items-center gap-2 text-sm font-semibold">
-          <Calculator className="h-4 w-4 text-primary" /> 计算层 · Carry / Roll / Breakeven（3 个月持有，bp）
-        </h3>
-        <span className="text-xs text-muted-foreground">
-          资金成本 Shibor O/N {calc.funding_cost?.toFixed(3) ?? "—"}% · 截至 {calc.date}
-        </span>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[560px] text-xs tabular-nums">
-          <thead>
-            <tr className="border-b border-border/60 text-[10px] text-muted-foreground">
-              <th className="py-1.5 text-left font-medium">期限</th>
-              <th className="text-right font-medium">收益率 %</th>
-              <th className="text-right font-medium">Carry</th>
-              <th className="text-right font-medium">Roll</th>
-              <th className="text-right font-medium">静态合计</th>
-              <th className="text-right font-medium">盈亏平衡上行</th>
-            </tr>
-          </thead>
-          <tbody>
-            {calc.rows.map((r) => (
-              <tr key={r.tenor} className={cn("border-b border-border/30", r.tenor === best.tenor && "bg-primary/5")}>
-                <td className="py-1.5 text-left font-medium">{r.tenor}</td>
-                <td className="text-right">{r.yield.toFixed(3)}</td>
-                <td className={cn("text-right", r.carry_bp_3m >= 0 ? "text-success" : "text-danger")}>
-                  {r.carry_bp_3m >= 0 ? "+" : ""}{r.carry_bp_3m.toFixed(1)}
-                </td>
-                <td className={cn("text-right", r.roll_bp_3m >= 0 ? "text-success" : "text-danger")}>
-                  {r.roll_bp_3m >= 0 ? "+" : ""}{r.roll_bp_3m.toFixed(1)}
-                </td>
-                <td className={cn("text-right font-semibold", r.total_static_bp_3m >= 0 ? "text-success" : "text-danger")}>
-                  {r.total_static_bp_3m >= 0 ? "+" : ""}{r.total_static_bp_3m.toFixed(1)}
-                </td>
-                <td className="text-right text-muted-foreground">
-                  {r.breakeven_bp_3m == null ? "—" : `${r.breakeven_bp_3m.toFixed(1)} bp`}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground/70">
-        {calc.method} 盈亏平衡 = 收益率最多上行多少，票息+骑乘仍能覆盖资本损失（框架 §7.4）。
-      </p>
-    </GlassCard>
-  );
+  const scenario = (r: BondsCalcRow, b: number) => { const v = r.scenarios.find(s => s.shift_bp === b); return n(net ? v?.net_bp : v?.gross_bp, 1, true); };
+  return <GlassCard>
+    <h2 className="flex items-center gap-2 text-sm font-semibold"><Calculator className="h-4 w-4 text-primary" /> 标准化假想债 · 3个月持有情景</h2>
+    <p className="mt-2 text-xs leading-relaxed text-muted-foreground">曲线 {calc.date} · 资金观察 {calc.funding_date ?? "缺失"} · 同日Shibor O/N融资代理 {n(calc.funding_cost, 3)}%。{calc.funding_cost == null ? "日期不齐或资金缺失，融资后收益及保本幅度留空。" : "简单融资利息，不含实际回购、杠杆及交易费用。"}</p>
+    <div className="mt-3 overflow-x-auto" tabIndex={0} aria-label="债券情景表，可左右滚动"><table className="w-full min-w-[780px] text-right text-xs tabular-nums"><thead><tr className="border-b border-border text-muted-foreground">{["期限", "收益率%", "未融资Carry bp", "Roll bp", "未融资合计bp", "融资后bp", "久期 年", "DV01/本金100", "融资后保本"].map(t => <th key={t} className="p-2 font-medium">{t}</th>)}</tr></thead><tbody>{calc.rows.map(r => <tr key={r.tenor} className="border-b border-border/40"><td className="p-2 font-medium">{r.tenor}</td><td>{n(r.yield, 3)}</td><td>{n(r.gross_carry_bp_3m, 1)}</td><td>{n(r.roll_bp_3m, 1)}</td><td>{n(r.gross_static_bp_3m, 1, true)}</td><td>{n(r.total_static_bp_3m, 1, true)}</td><td>{n(r.modified_duration)}</td><td>{n(r.dv01_per_100, 4)}</td><td className="pl-3">{breakEvenText(r.breakeven_bp_3m)}</td></tr>)}</tbody></table></div>
+    <p className="mt-2 text-xs text-muted-foreground md:hidden">表格可左右滑动查看全部列。</p>
+    <details className="mt-4"><summary className="cursor-pointer text-sm">收益率平移压力情景 · 不是预测区间</summary><label className="mt-3 flex gap-2 text-xs"><input type="checkbox" checked={net} onChange={e => setNet(e.target.checked)} />扣融资代理成本</label><div className="mt-2 overflow-x-auto"><table className="w-full min-w-[380px] text-right text-xs tabular-nums"><thead><tr><th className="p-2">期限</th>{[-25, -10, 10, 25].map(b => <th key={b}>{b > 0 ? "+" : ""}{b}bp</th>)}</tr></thead><tbody>{calc.rows.map(r => <tr key={r.tenor} className="border-b border-border/30"><td className="p-2">{r.tenor}</td>{[-25, -10, 10, 25].map(b => <td key={b}>{scenario(r, b)} bp</td>)}</tr>)}</tbody></table></div></details>
+    <details className="mt-4 text-xs leading-relaxed text-muted-foreground"><summary className="cursor-pointer">现金流与资金假设</summary><p className="mt-2">{calc.method}</p></details>
+  </GlassCard>;
+}
+
+function PositioningPanel({ data }: { data: BondsOverviewData }) {
+  const pos = data.positioning;
+  return <GlassCard><h2 className="flex items-center gap-2 text-sm font-semibold"><Layers className="h-4 w-4 text-primary" /> 国债期货量仓热度 · {pos?.date ?? "缺失"}</h2><p className="mt-2 text-xs text-muted-foreground">高持仓不等于净多头、久期拥挤或利空；主力换月和市场扩容会影响近250期分位。</p><div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">{pos?.contracts?.map(c => <div key={c.symbol} className="rounded-xl border border-border/60 p-3"><p className="text-sm font-medium">{c.label} 主力</p><p className="mt-2 text-sm">持仓分位 {n(c.oi_pct_1y * 100, 0)}%</p><p className="mt-1 text-xs text-muted-foreground">持仓 {n(c.oi / 10000, 1)} 万手 · 成交分位 {n(c.vol_pct_1y == null ? null : c.vol_pct_1y * 100, 0)}%</p></div>)}</div></GlassCard>;
+}
+
+function ValidationPanel({ data }: { data: BondsOverviewData }) {
+  const report = data.validation;
+  const rows = report?.results.filter(r => r.partition === "final_holdout" || r.status === "insufficient_training_labels") ?? [];
+  return <GlassCard><h2 className="text-sm font-semibold">初版固定参数基线 · 回溯检验</h2><p className="mt-2 text-sm leading-relaxed">{report?.conclusion ?? "尚未运行验证。"}</p><p className="mt-2 text-xs text-muted-foreground">本节为初版对照模型，参数与上方候选不同。价格样本 {report?.data_start ?? "—"}—{report?.data_end ?? "—"} · {report?.observations ?? 0}日；最后30%预测记录保留测试；未进行参数挑选。</p><details className="mt-3"><summary className="cursor-pointer text-sm">查看测试区间结果、误差区间与局限</summary><div className="mt-2 overflow-x-auto"><table className="w-full min-w-[650px] text-right text-xs tabular-nums"><thead><tr>{["目标", "期限", "模型", "预测数", "RMSE bp", "R²/零变化", "R²/历史均值", "MSE改善95%区间（对均值）"].map(h => <th key={h} className="p-2 font-medium">{h}</th>)}</tr></thead><tbody>{rows.map((r, i) => <tr key={i} className="border-b border-border/40"><td className="p-2">{r.target}</td><td>{r.horizon}D</td><td>{r.model ?? "数据不足"}</td><td>{r.n}</td><td>{n(r.rmse)}</td><td>{n(r.oos_r2_vs_zero, 3)}</td><td>{n(r.oos_r2_vs_mean, 3)}</td><td>{r.mse_improvement_vs_mean_95ci?.map(v => n(v)).join(" ~ ") ?? "—"}</td></tr>)}</tbody></table></div>{report?.limitations.map(x => <p key={x} className="mt-2 text-xs leading-relaxed text-muted-foreground">· {x}</p>)}<p className="mt-2 text-xs text-muted-foreground">分别相对零变化/零超额与历史均值比较；负R²表示比该基准更差。重叠预测数不等于独立样本数。</p></details>{report?.economics?.length ? <details className="mt-3"><summary className="cursor-pointer text-sm">分段指数代理 · 成本敏感性与回撤</summary><div className="mt-2 overflow-x-auto"><table className="w-full min-w-[600px] text-right text-xs"><thead><tr>{["目标/期限", "模型", "每次调仓成本bp", "非重叠期数", "累计超额%", "超额回撤%"].map(h => <th className="p-2" key={h}>{h}</th>)}</tr></thead><tbody>{report.economics.flatMap(e => e.results.map((r, i) => <tr key={`${e.target}-${e.horizon}-${i}`} className="border-b border-border/40"><td className="p-2">{e.target}/{e.horizon}D</td><td>{r.model}</td><td>{r.cost_bp}</td><td>{r.trades_n}</td><td>{n(r.cumulative_excess_pct)}</td><td>{n(r.max_drawdown_excess_pct)}</td></tr>))}</tbody></table></div><p className="mt-2 text-xs text-muted-foreground">仅指数与资金代理，不等同实际可交易收益。</p></details> : null}</GlassCard>;
 }
 
 export function Bonds() {
-  const { data, loading, revalidating, revalidate } = useSWR<BondsOverviewData>(
-    "bonds-overview", (fresh) => api.bondsOverview(fresh), [], undefined, { persist: true },
-  );
-  const { data: fw, revalidating: fwRefreshing, revalidate: revalidateFw } = useSWR<BondsFrameworkData>(
-    "bonds-framework", (fresh) => api.bondsFramework(fresh), [], undefined, { persist: true },
-  );
-  const { data: seg, revalidating: segRefreshing, revalidate: revalidateSeg } = useSWR<BondsSegmentsData>(
-    "bonds-segments", (fresh) => api.bondsSegments(fresh), [], undefined, { persist: true },
-  );
-  // AI 解读（品种优先顺序 + 逐品种解析）：独立 SWR 持久缓存——切页面秒显，
-  // 挂载后台核对一跳（命中后端快照，不烧 LLM）；手动重生成走 force 写回缓存。
-  // v2：v1 的 persist 值在部分浏览器冻结在旧时点，换 key 丢弃旧值（详见 Gold.tsx）。
-  const { data: aiInsight, revalidating: insightLoading, revalidate: revalidateInsight } = useSWR<BondsInsight | null>(
-    "bonds-insight:v2", (fresh) => api.bondsInsight(fresh).then((d) => d ?? null), [], undefined, { persist: true },
-  );
-  const refreshing = revalidating || fwRefreshing || segRefreshing;
-  const refresh = async () => {
-    await revalidate(true);
-    await Promise.all([revalidateFw(true), revalidateSeg(true)]);
-    // 评分重建后解读即过时（ai_insight_at 早于评分 date），追一次让后端重生成
-    void revalidateInsight();
-  };
-
-  // 手动重生成：只重调 LLM，不动评分数据
-  const refreshInsight = () => { void revalidateInsight(true); };
-
-  const curve = data?.curve;
-  const funding = data?.funding;
-  const policy = data?.policy;
-  const index = data?.index;
-  const globe = data?.global;
-
-  const yields = curve?.yields ?? {};
-  const pos = data?.positioning;
-
-  const aiContext = useMemo(() => {
-    const parts: string[] = [];
-    if (fw?.states?.length) {
-      const st = fw.states
-        .map((s) => `${s.name}=${s.score == null ? "缺数据" : s.score.toFixed(2)}`)
-        .join("，");
-      parts.push(`研究框架八状态（截至 ${fw.date}，[-2,+2]，正分=对债券价格有利）：${st}`);
-    }
-    if (seg?.rows?.length) {
-      const sg = seg.rows
-        .map((r) => `${r.segment}=${r.score.toFixed(2)}（${r.drivers[0]?.state ?? ""} ${r.drivers[0]?.contribution ?? ""}）`)
-        .join("，");
-      parts.push(`分品种评分（相对排序）：${sg}`);
-    }
-    if (curve?.curve?.length) {
-      parts.push(`国债收益率曲线（截至 ${curve.date}）：${curve.curve.map((p) => `${p.tenor}=${p.value}%`).join("，")}`);
-      const sp = Object.entries(curve.spreads || {})
-        .map(([k, h]) => `${SPREAD_LABEL[k] || k}=${h.length ? h[h.length - 1].v.toFixed(1) : "—"}bp`).join("，");
-      if (sp) parts.push(`期限利差：${sp}`);
-      const cr = Object.entries(curve.credit || {})
-        .map(([k, h]) => `${CREDIT_LABEL[k] || k}=${h.length ? h[h.length - 1].v.toFixed(1) : "—"}bp`).join("，");
-      if (cr) parts.push(`信用利差：${cr}`);
-    }
-    if (funding?.series) {
-      const f = FUNDING_ORDER.filter((k) => funding.series[k])
-        .map((k) => `Shibor ${k}=${funding.series[k].slice(-1)[0]?.v.toFixed(3)}%`).join("，");
-      if (f) parts.push(`资金利率（截至 ${funding.date}）：${f}`);
-    }
-    if (policy?.anchors?.length) {
-      parts.push(`政策利率锚（${policy.date}）：${policy.anchors.map((a) => `${a.label}=${a.value}%（较上月 ${a.chg_bp ?? 0}bp）`).join("，")}`);
-    }
-    if (index?.series?.length) {
-      const last = index.series[index.series.length - 1];
-      parts.push(`中债-新综合指数（截至 ${index.date}）：${last.v.toFixed(2)}`);
-    }
-    if (globe?.series?.length) {
-      const last = globe.series[globe.series.length - 1];
-      const sp = globe.spread?.slice(-1)[0];
-      parts.push(`中美 10Y 国债（截至 ${globe.date}）：中国 ${last.cn.toFixed(2)}%、美国 ${last.us.toFixed(2)}%、利差 ${sp ? sp.v.toFixed(1) : "—"}bp`);
-    }
-    if (pos?.contracts?.length) {
-      const p = pos.contracts.map((c) => `${c.label}持仓${(c.oi / 10000).toFixed(1)}万手（近一年分位 ${(c.oi_pct_1y * 100).toFixed(0)}%）`).join("，");
-      parts.push(`国债期货量仓（截至 ${pos.date}）：${p}`);
-    }
-    return parts.length ? `债市数据快照：\n${parts.join("\n")}` : "";
-  }, [fw, seg, curve, funding, policy, index, globe, pos]);
-
-  const hasAny = !!(curve?.curve?.length || funding?.series || policy?.anchors?.length || index?.series?.length || globe?.series?.length);
-
-  const f = funding?.series ?? {};
-
-  return (
-    <div className="mx-auto max-w-6xl">
-      <PageHeader title="债市" subtitle="分品种评分 · 八状态框架 · 关键指标 · 计算层 · 仓位拥挤" actions={
-        <div className="flex items-center gap-2">
-          <AskAiButton
-            context={aiContext || "债市页面数据加载中。"}
-            taskId="bonds"
-            suggestions={["当前收益率曲线形态说明什么", "资金利率与政策锚的偏离怎么理解", "信用利差近期变化说明什么"]}
-          />
-          <button
-            onClick={() => void refresh()}
-            disabled={loading || refreshing}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary disabled:opacity-50"
-          >
-            <RefreshCw className={loading || refreshing ? "h-4 w-4 animate-spin" : "h-4 w-4"} /> 刷新
-          </button>
-        </div>
-      } />
-
-      {loading && !data ? (
-        <div>
-          <ColdStartNotice
-            title="首次计算中"
-            detail="正在拉取国债收益率曲线、分品种评分与八状态框架数据，仅首次需要。"
-            hint="算完会写入本地快照；之后打开先显示缓存，再后台静默刷新。"
-          />
-          <div className="space-y-3">
-            <SkeletonBlock className="h-40" />
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-              {Array.from({ length: 6 }).map((_, i) => <SkeletonBlock key={i} className="h-24" />)}
-            </div>
-            <SkeletonBlock className="h-72" />
-          </div>
-        </div>
-      ) : !hasAny ? (
-        <GlassCard className="flex items-center justify-center p-16 text-sm text-muted-foreground">
-          债市数据暂不可用（数据源无返回），稍后刷新重试
-        </GlassCard>
-      ) : (
-        <div className="space-y-4">
-          {/* —— 分品种评分：短债 → 超长 → 信用 → 杠杆套息（框架 §11.2，放最前；顶部 AI 解读）—— */}
-          <SegmentPanel seg={seg ?? undefined} aiInsight={aiInsight}
-            insightLoading={insightLoading} onRefreshInsight={refreshInsight} />
-
-          {/* —— 框架层：八状态仪表盘（宏观→政策→资金→供需→曲线→信用→仓位→全球）—— */}
-          <FrameworkPanel fw={fw ?? undefined} />
-
-          {/* —— 顶部快览：一排关键数字（当期值 + 日变动 + 迷你走势）—— */}
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-            <MiniStat icon={Percent} label="10Y 国债" suffix="%"
-              value={yields["10年"]?.slice(-1)[0]?.v?.toFixed(2) ?? "—"}
-              chg={<DeltaText v={chgOf(toHist(yields["10年"]))} unit="bp" digits={1} />}
-              hist={toHist(lastN(yields["10年"], 60))} />
-            <MiniStat icon={Scale} label="10Y-1Y 利差" suffix="bp"
-              value={lastN(curve?.spreads?.["10年-1年"], 1).slice(-1)[0]?.v?.toFixed(1) ?? "—"}
-              chg={<DeltaText v={chgOf(toHist(curve?.spreads?.["10年-1年"]))} />} />
-            <MiniStat icon={Coins} label="Shibor O/N" suffix="%"
-              value={f["O/N"]?.slice(-1)[0]?.v?.toFixed(3) ?? "—"}
-              chg={<DeltaText v={chgOf(toHist(f["O/N"]))} unit="bp" digits={1} />} />
-            <MiniStat icon={Gauge} label="Shibor 3M" suffix="%"
-              value={f["3M"]?.slice(-1)[0]?.v?.toFixed(3) ?? "—"}
-              chg={<DeltaText v={chgOf(toHist(f["3M"]))} unit="bp" digits={1} />} />
-            <MiniStat icon={Landmark} label="LPR 1Y" suffix="%"
-              value={policy?.anchors?.find((a) => a.key === "LPR_1Y")?.value?.toFixed(2) ?? "—"}
-              chg={<DeltaText v={policy?.anchors?.find((a) => a.key === "LPR_1Y")?.chg_bp ?? null} />} />
-            <MiniStat icon={Globe2} label="中美 10Y 利差" suffix="bp"
-              value={globe?.spread?.slice(-1)[0]?.v?.toFixed(1) ?? "—"}
-              chg={<DeltaText v={chgOf(toHist(globe?.spread))} />} />
-          </div>
-
-          {/* —— 计算层：carry / roll / breakeven（框架 §7.4 / §12.3）—— */}
-          <CalcPanel calc={data?.calc} />
-
-          {/* —— 仓位与拥挤度：国债期货量仓（框架 §9.2）—— */}
-          <PositioningPanel pos={data?.positioning} />
-        </div>
-      )}
-    </div>
-  );
+  const { data, loading, revalidating, revalidate } = useSWR<BondsOverviewData>("bonds-overview:v2", fresh => api.bondsOverview(fresh), [], undefined, { persist: true });
+  const { data: priors, loading: priorLoading, revalidating: priorBusy, revalidate: refreshPriors } = useSWR("bonds-priors:v1", fresh => api.bondsPriors(fresh), [], undefined, { persist: true });
+  const fingerprint = data?.input_fingerprint ?? "pending";
+  const { data: ai, revalidating: insightBusy, revalidate: revalidateInsight } = useSWR<BondsInsight | null>(`bonds-insight:v3:${fingerprint}`, fresh => fingerprint === "pending" ? Promise.resolve(null) : api.bondsInsight(fresh), [fingerprint], undefined, { persist: true });
+  const insight = ai?.input_fingerprint === data?.input_fingerprint ? ai : null;
+  const refresh = async () => { await Promise.all([revalidate(true), refreshPriors(true)]); await revalidateInsight(); };
+  const context = data ? `债市研究快照（未经预测验证，不根据实验分数作买卖排序）：${JSON.stringify({ snapshot: data.input_fingerprint, candidate_priors: priors, sources: data.sources, curve: data.curve?.curve, calc: data.calc, states: data.framework?.states.map(s => ({ name: s.name, meaning: s.meaning, parts: s.parts.map(p => ({ ...p, hist: undefined })) })) })}` : "债市数据加载中";
+  return <div className="mx-auto min-w-0 max-w-6xl">
+    <PageHeader title="债市" actions={<div className="flex gap-2"><AskAiButton context={context} taskId="bonds" label="AI 复盘" suggestions={["解释当前曲线与历史的变化", "哪些数据缺口影响判断", "静态收益与压力情景如何区分"]} /><RefreshButton onClick={() => void refresh()} loading={loading || revalidating} /></div>} />
+    {loading && !data ? <><ColdStartNotice title="正在准备债市研究快照" detail="核对收益率曲线、指标来源和同版本计算结果。" hint="旧数据会保留真实日期，更新完成后自动替换。" /><SkeletonBlock className="h-64" /></> : !data ? <GlassCard>债市快照暂不可用，请刷新重试。</GlassCard> : data.schema_version !== 2 ? <div className="space-y-4"><GlassCard><p className="text-sm">当前运行的后端尚未加载债市 V2。</p><p className="mt-2 text-xs text-muted-foreground">行情观察仍可查看；现金流情景、指标版本和预测验证在重启后端后启用。</p></GlassCard><MarketStats data={data} /><ObservationPanel data={data} /></div> : <div className="space-y-4">
+      <SegmentPanel data={data} insight={insight ?? null} busy={insightBusy} refreshInsight={() => void revalidateInsight(true)} />
+      <BondPriorsPanel data={priors} loading={priorLoading} busy={priorBusy} refresh={() => void refreshPriors(true)} />
+      <h2 className="pt-3 text-lg font-semibold">市场行情</h2>
+      <MarketStats data={data} />
+      <CurvePanel data={data} />
+      <details className="rounded-xl border border-border/60 p-5"><summary className="cursor-pointer text-base font-medium">深入研究 <span className="ml-2 text-sm font-normal text-muted-foreground">指标、情景测算与历史检验</span></summary><div className="mt-5 space-y-4">
+        <FrameworkPanel data={data} />
+        <ObservationPanel data={data} />
+        <CalcPanel data={data} />
+        <PositioningPanel data={data} />
+        <ValidationPanel data={data} />
+      </div></details>
+      <details className="rounded-xl border border-border/60 p-5"><summary className="cursor-pointer text-sm text-muted-foreground">数据更新与来源 · 已更新 {data.updated_sources ?? 0}/{data.total_sources ?? 0} 项{data.cache_state === "error" ? " · 更新失败" : ""}</summary><div className="mt-4"><SourcePanel data={data} /></div></details>
+    </div>}
+  </div>;
 }

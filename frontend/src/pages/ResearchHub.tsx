@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { PageHeader } from "@/components/ui/PageHeader";
 import { MyReportsPanel } from "@/pages/MyReports";
 import { NotesPanel } from "@/pages/Notes";
 import { cn } from "@/lib/utils";
@@ -28,10 +27,7 @@ export function ResearchHub() {
 
   return (
     <div>
-      <PageHeader
-        title="笔记"
-        subtitle="我的研报与笔记记录 · 研报归档、AI 分析沉淀"
-      />
+
 
       <div className="mb-4 grid max-w-md grid-cols-2 gap-2 rounded-xl border border-border/50 bg-muted/20 p-1.5">
         {([

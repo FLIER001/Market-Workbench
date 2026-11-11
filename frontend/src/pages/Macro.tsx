@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import {
-  RefreshCw, Globe, TrendingUp, Factory, Coins, Landmark, Gauge, Activity, Zap,
+  Globe, TrendingUp, Factory, Coins, Landmark, Gauge, Activity, Zap,
   ChevronDown,
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { RefreshButton } from "@/components/ui/RefreshButton";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { PageSkeleton } from "@/components/ui/PageSkeleton";
 import { Sparkline } from "@/components/ui/Sparkline";
@@ -444,12 +445,7 @@ export function Macro() {
     <div>
       <PageHeader
         title="宏观面"
-        subtitle="五类因果层 · 八模块状态 · 点击模块展开具体指标"
-        actions={
-          <button onClick={load} className="text-muted-foreground hover:text-primary" title="刷新">
-            <RefreshCw className={cn("h-4 w-4", (loading || revalidating) && "animate-spin")} />
-          </button>
-        }
+        actions={<RefreshButton onClick={load} loading={loading || revalidating} />}
       />
 
       {loading && !data && !err && (
@@ -493,7 +489,6 @@ export function Macro() {
           <Gauge className="h-4 w-4" /> 宏观模块状态
         </h3>
         <span className="text-[11px] text-muted-foreground/50">0-100 分位 · 点击模块展开指标</span>
-        {data?.updated && <span className="ml-auto text-[11px] text-muted-foreground/50">{data.updated}</span>}
       </div>
       <div className="mb-4 grid gap-2 md:grid-cols-3 lg:grid-cols-5">
         {clusters.map((cluster, ci) => {

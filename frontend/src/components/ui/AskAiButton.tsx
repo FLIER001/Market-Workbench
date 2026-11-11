@@ -102,7 +102,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", taskI
     <>
       <button
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary shadow-glow transition-colors hover:bg-primary/25"
+        className="inline-flex h-[30px] items-center gap-1.5 border border-primary bg-card px-3 text-xs font-medium text-primary transition-colors hover:bg-primary hover:text-primary-foreground"
       >
         {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
         {loading ? "AI 处理中…" : label}
@@ -111,7 +111,7 @@ export function AskAiButton({ context, suggestions = [], label = "问 AI", taskI
       {open && (
         <div className="fixed inset-0 z-50 flex justify-end">
           <div className="absolute inset-0 bg-black/50" onClick={close} />
-          <aside className="glass relative m-3 flex w-full max-w-md flex-col rounded-2xl">
+          <aside className="relative m-3 flex w-full max-w-md flex-col border border-border bg-card">
             <div className="flex items-center justify-between border-b border-border/60 p-4">
               <span className="flex items-center gap-2 font-semibold text-glow">
                 <Sparkles className="h-4 w-4 text-primary" /> 问 AI · 本页上下文

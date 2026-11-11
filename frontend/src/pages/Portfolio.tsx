@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
-import { RefreshCw, Loader2, Trash2, AlertCircle, X, ChevronsUpDown, ChevronUp, ChevronDown, LineChart, Pencil } from "lucide-react";
+import { Loader2, Trash2, AlertCircle, X, ChevronsUpDown, ChevronUp, ChevronDown, LineChart, Pencil } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { RefreshButton } from "@/components/ui/RefreshButton";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { StockSearchInput } from "@/components/ui/StockSearchInput";
@@ -307,28 +308,22 @@ export function Portfolio() {
     <div>
       <PageHeader
         title="持仓"
-        subtitle="场内证券 / 场外基金分开记账，行情实时计算"
         actions={
           <div className="flex items-center gap-2">
             {hasAnyHolding && (
-              <AskAiButton context={combinedAiContext} taskId="portfolio" label="让 AI 看我的整体持仓"
+              <AskAiButton context={combinedAiContext} taskId="portfolio" label="AI 复盘"
                 suggestions={["整体持仓集中在哪些方向", "场内场外结构上有什么风险", "帮我梳理一下"]} />
             )}
-            <button
+            <RefreshButton
               onClick={() => {
-                if (kind === "securities") {
-                  load(true);
-                } else {
+                if (kind === "securities") load(true);
+                else {
                   setFundRefreshTick((t) => t + 1);
                   revalidateFund(true);
                 }
               }}
-              disabled={kind === "securities" ? refreshing : fundRefreshing}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
-            >
-              {(kind === "securities" ? refreshing : fundRefreshing) ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              刷新
-            </button>
+              loading={kind === "securities" ? refreshing : fundRefreshing}
+            />
           </div>
         }
       />
@@ -435,7 +430,6 @@ export function Portfolio() {
       <GlassCard glow className="mb-4">
         <div className="mb-2 flex items-center justify-between">
           <h3 className="font-semibold">持仓明细</h3>
-          {data?.updated && <span className="text-xs text-muted-foreground/60">更新于 {data.updated}</span>}
         </div>
         {holdings.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground/60">还没有持仓记录，用上面的表单添加一笔。</p>

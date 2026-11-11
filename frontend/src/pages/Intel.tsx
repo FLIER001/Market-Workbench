@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { TrendingUp, FileText, Newspaper, Rss, RefreshCw, Loader2, ExternalLink, AlertCircle, Sparkles, Lightbulb, Star } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { PageHeader } from "@/components/ui/PageHeader";
+import { RefreshButton } from "@/components/ui/RefreshButton";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { SaveNoteButton } from "@/components/ui/SaveNoteButton";
 import { api, ApiError, type RadarData, type Industry, type Announcement, type NewsItem } from "@/lib/api";
@@ -304,21 +304,17 @@ ${ctx}`;
     <div>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <span className="text-xs text-muted-foreground">
-          {hasData ? `${data!.stats.total_sources} 个公开源 · 近 ${data!.recent_days} 天 · 更新于 ${data!.generated_at}` : "12 赛道 · 108 个公开源"}
+          {hasData ? `${data!.stats.total_sources} 个公开源 · 近 ${data!.recent_days} 天` : "12 赛道 · 108 个公开源"}
         </span>
         <div className="flex items-center gap-2">
           {hasData && (
             <button onClick={() => genAll()} disabled={bulk.running || refreshing}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">
+              className="inline-flex h-[30px] items-center gap-1.5 border border-primary px-3 text-xs font-medium text-primary hover:bg-primary hover:text-primary-foreground disabled:opacity-50">
               {bulk.running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              {bulk.running ? `提炼中 ${bulk.done}/${bulk.total}` : "一键提炼全部要点"}
+              {bulk.running ? `提炼中 ${bulk.done}/${bulk.total}` : "AI 复盘"}
             </button>
           )}
-          <button onClick={refresh} disabled={refreshing || bulk.running}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50">
-            {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            {refreshing ? "抓取中…" : "刷新"}
-          </button>
+          <RefreshButton onClick={refresh} loading={refreshing} disabled={bulk.running} />
         </div>
       </div>
 
@@ -552,11 +548,7 @@ function WatchlistFeed({ kind }: { kind: "filings" | "news" }) {
         <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <Star className="h-3.5 w-3.5 text-primary/70" /> 关注 {codes.length} 只 · 共 {rows.length} 条{kind === "filings" ? "公告" : "新闻"}（近期）
         </span>
-        <button onClick={refresh} disabled={loading}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50">
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-          {loading ? "拉取中…" : "刷新"}
-        </button>
+        <RefreshButton onClick={refresh} loading={loading} />
       </div>
 
       {err && (
@@ -595,7 +587,7 @@ export function Intel() {
 
   return (
     <div>
-      <PageHeader title="资讯" subtitle="多来源资讯中心：AI 帮你跨源捞资讯、提炼要点" />
+
 
       <div className="mb-4 flex flex-wrap gap-2">
         {TABS.map(({ key, label, icon: Icon, integrated }) => (
@@ -609,11 +601,7 @@ export function Intel() {
       </div>
 
       <GlassCard glow>
-        <div className="mb-3 flex items-center gap-2">
-          <cur.icon className="h-5 w-5 text-primary" />
-          <h3 className="font-semibold">{cur.label}</h3>
-          {cur.integrated && <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] text-primary">investment-news</span>}
-        </div>
+
         {cur.key === "events" ? (
           <WatchlistEventJudgement />
         ) : cur.key === "investment-news" ? (

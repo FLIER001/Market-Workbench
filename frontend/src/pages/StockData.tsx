@@ -1,8 +1,7 @@
 import { lazy, Suspense, useRef, useState, useEffect } from "react";
-import { createPortal } from "react-dom";
 import { useLocation } from "react-router-dom";
 import {
-  Search, FileText, Newspaper, Loader2, AlertCircle, LineChart, BarChart3, Megaphone,
+  FileText, Newspaper, Loader2, AlertCircle, LineChart, BarChart3, Megaphone,
   Wallet, Trophy, CalendarClock, Boxes, MessageSquare, Star, Check,
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -12,8 +11,8 @@ import { EarningsSnapshot } from "@/components/ui/EarningsSnapshot";
 import {
   api, ApiError, type Valuation, type Report, type NewsItem, type ValPercentile, type ValMetric,
   type Financials, type Announcement, type MarginRow, type BlockTradeRow, type HolderRow,
-  type DividendRow, type FundFlowRow, type DragonTiger, type Lockup, type Blocks, type HotConcept, type QaRow,
-  type GlobalStock, type HkCashflow, type SearchResult,
+  type DividendRow, type FundFlowRow, type DragonTiger, type Lockup, type LockupRow, type Blocks, type HotConcept, type QaRow,
+  type GlobalStock, type HkCashflow,
 } from "@/lib/api";
 import {
   assignCodesToGroup,
@@ -60,6 +59,12 @@ const round2 = (v: number | null | undefined, suffix = "") =>
 // 百分比：后端偶发给 null/缺字段时显示 —，不出现 "NaN%" / 误导性 "0.00%"
 const pct = (v: number | null | undefined) =>
   v === null || v === undefined || !Number.isFinite(Number(v)) ? "—" : `${Number(v).toFixed(2)}%`;
+
+// 新旧数量字段均为万股；新字段明确为null时不回退成旧字段的占位0。
+const unlockWan = (r: LockupRow) => {
+  const v = r.unlock_shares_wan === undefined ? r.able_shares : r.unlock_shares_wan;
+  return v == null || !Number.isFinite(Number(v)) ? "—" : `${Number(v).toFixed(2)} 万股`;
+};
 
 // 小指标块（复用于资金面/筹码卡）
 function Metric({ k, v, sub }: { k: string; v: string; sub?: string }) {
@@ -129,17 +134,8 @@ function ValBand({ label, m }: { label: string; m: ValMetric }) {
 
 export function StockData() {
   const location = useLocation();
-  const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  // 自动提示
-  const [suggestions, setSuggestions] = useState<SearchResult[]>([]);
-  const [showDrop, setShowDrop] = useState(false);
-  const [hlIdx, setHlIdx] = useState(-1);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const dropRef = useRef<HTMLDivElement>(null);
-  const [dropPos, setDropPos] = useState({ top: 0, left: 0, width: 320 });
   const [val, setVal] = useState<Valuation | null>(null);
   const [quoteVolRatio, setQuoteVolRatio] = useState<number | null>(null);
   const [reports, setReports] = useState<Report[]>([]);
@@ -162,76 +158,33 @@ export function StockData() {
   const [gstock, setGStock] = useState<GlobalStock | null>(null);  // 美股 / 港股
   const [cashflow, setCashflow] = useState<HkCashflow | null>(null);  // 港股现金流量表（仅港股）
   const [inWatchlist, setInWatchlist] = useState(false);
+  // 当前要看的代码（进页/换股时先立住，数据回来前按钮不凭空消失）
+  const [activeCode, setActiveCode] = useState("");
   const runIdRef = useRef(0);
 
+  const watchCode = val?.code ?? (/^\d{6}$/.test(activeCode) ? activeCode : "");
+
   useEffect(() => {
-    if (!val?.code) {
+    if (!watchCode) {
       setInWatchlist(false);
       return;
     }
-    setInWatchlist(flattenWatchGroups(loadWatchGroups("stock")).includes(val.code));
-  }, [val?.code]);
+    setInWatchlist(flattenWatchGroups(loadWatchGroups("stock")).includes(watchCode));
+  }, [watchCode]);
 
   const addToWatchlist = () => {
-    if (!val || inWatchlist) return;
+    if (!watchCode || inWatchlist) return;
     const groups = loadWatchGroups("stock");
-    const result = assignCodesToGroup(groups, DEFAULT_WATCH_GROUP_ID, val.code);
+    const result = assignCodesToGroup(groups, DEFAULT_WATCH_GROUP_ID, watchCode);
     saveWatchGroups(result.next, "stock");
     setInWatchlist(true);
   };
 
-  // 自动搜索（debounce 300ms）
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    const q = code.trim();
-    if (!q || q.length < 1) { setSuggestions([]); setShowDrop(false); return; }
-    debounceRef.current = setTimeout(() => {
-      api.search(q).then(setSuggestions).catch(() => setSuggestions([]));
-    }, 300);
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, [code]);
-
-  // 点外部关闭下拉（portal 下拉也算"内部"）
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (inputRef.current?.contains(t)) return;
-      if (dropRef.current?.contains(t)) return;
-      setShowDrop(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
-
-  // 下拉打开时按输入框实际位置 fixed 定位，滚动 / 缩放时跟随
-  useEffect(() => {
-    if (!showDrop || !inputRef.current) return;
-    const update = () => {
-      const r = inputRef.current!.getBoundingClientRect();
-      setDropPos({ top: r.bottom + 4, left: r.left, width: Math.max(r.width, 320) });
-    };
-    update();
-    window.addEventListener("scroll", update, true);
-    window.addEventListener("resize", update);
-    return () => {
-      window.removeEventListener("scroll", update, true);
-      window.removeEventListener("resize", update);
-    };
-  }, [showDrop]);
-
-  const pick = (s: SearchResult) => {
-    setCode(s.code);
-    setShowDrop(false);
-    setHlIdx(-1);
-    // 选完直接触发查询
-    setTimeout(() => run(s.code), 0);
-  };
-
-  const run = async (overrideCode?: string) => {
-    const c = (overrideCode || code).trim().toUpperCase();
-    if (!c) { setErr("请输入代码"); return; }
-    setShowDrop(false);
+  const run = async (code: string) => {
+    const c = code.trim().toUpperCase();
+    if (!c) return;
     const rid = ++runIdRef.current;
+    setActiveCode(c);
     const snapshot = /^\d{6}$/.test(c) ? loadSnapshot(c) : null;
     setLoading(true); setErr(null); setDepNote(null);
     setVal(snapshot?.val ?? null); setReports(snapshot?.reports ?? []); setNews(snapshot?.news ?? []);
@@ -326,7 +279,6 @@ export function StockData() {
   useEffect(() => {
     const requestedCode = new URLSearchParams(location.search).get("code")?.trim().toUpperCase() || "";
     if (!requestedCode) return;
-    setCode(requestedCode);
     void run(requestedCode);
     // run 依赖大量页面状态；这里只由 URL 中的 code 驱动查询。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -350,7 +302,7 @@ export function StockData() {
       (fin?.revenue ? `财务(${fin.period ?? "—"})：营收 ${fin.revenue}(同比${fin.revenue_yoy ?? "—"})、净利 ${fin.net_profit ?? "—"}(同比${fin.net_profit_yoy ?? "—"})、ROE ${fin.roe ?? "—"}、毛利率 ${fin.gross_margin ?? "—"}\n` : "") +
       (anns.length ? `近期公告：${anns.slice(0, 5).map((a) => a.title.replace(/^[^:：]*[:：]/, "")).join("；")}\n` : "") +
       `近期研报：${reports.slice(0, 5).map((r) => r.title).join("；") || "无"}`
-    : "还没查询个股。输入 6 位代码后可让 AI 基于客观数据帮你分析。";
+    : "还没查询个股。用顶部搜索栏选一只股票，AI 会基于客观数据帮你分析。";
 
   const gAiContext = gstock
     ? `个股（${mktName(gstock.market)}）：${gstock.name}（${gstock.code}）\n` +
@@ -364,10 +316,9 @@ export function StockData() {
     <div>
       <PageHeader
         title="个股数据"
-        subtitle="行情 · 估值 · 研报 · 新闻"
-        actions={(val || gstock) && (
+        actions={(activeCode || gstock) && (
           <div className="flex items-center gap-2">
-            {val && (
+            {watchCode && (
               <button
                 onClick={addToWatchlist}
                 disabled={inWatchlist}
@@ -384,11 +335,10 @@ export function StockData() {
               </button>
             )}
             <AskAiButton
-              context={gstock ? gAiContext : aiContext}
-              // 用已解析结果的代码，不用输入框 code：actions 只在 val/gstock 就绪后渲染，
-              // 输入框一边打字一边变，会把旧上下文生成的对话挂到新代码名下（串台）。
-              taskId={`stock:${gstock ? `g:${gstock.code}` : val?.code}`}
-              label="让 AI 读这些数据"
+              context={gstock ? gAiContext : val ? aiContext : `个股代码：${activeCode}（行情、估值等数据尚未加载完成）`}
+              // 代码从 activeCode 起就稳住，数据回来后 taskId 不变，对话不会因为加载窗口断掉。
+              taskId={`stock:${gstock ? `g:${gstock.code}` : watchCode || activeCode}`}
+              label="AI 复盘"
               suggestions={gstock
                 ? ["这家公司基本面怎么样", "盈利能力如何", "有什么风险"]
                 : ["这个估值贵不贵", "机构一致预期怎么看", "近期研报的分歧点", "有什么风险"]}
@@ -396,64 +346,6 @@ export function StockData() {
           </div>
         )}
       />
-
-      {/* 查询框（带自动提示） */}
-      <div className="relative mb-5 flex gap-2">
-        <div className="relative" ref={inputRef}>
-          <input
-            value={code}
-            onChange={(e) => { setCode(e.target.value); setShowDrop(true); setHlIdx(-1); }}
-            onFocus={() => suggestions.length > 0 && setShowDrop(true)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                if (hlIdx >= 0 && hlIdx < suggestions.length) pick(suggestions[hlIdx]);
-                else run();
-              } else if (e.key === "ArrowDown") {
-                e.preventDefault(); setHlIdx((i) => Math.min(i + 1, suggestions.length - 1));
-              } else if (e.key === "ArrowUp") {
-                e.preventDefault(); setHlIdx((i) => Math.max(i - 1, -1));
-              } else if (e.key === "Escape") {
-                setShowDrop(false); setHlIdx(-1);
-              }
-            }}
-            placeholder="代码 / 中文 / 拼音首字母，如 600519、茅台、MT、AAPL"
-            className="w-80 rounded-lg border border-border bg-black/20 px-3 py-2 text-sm outline-none focus:border-primary/50"
-          />
-          {/* 自动提示下拉（portal 到 body，跳出父级 stacking context 防遮挡） */}
-          {showDrop && suggestions.length > 0 && createPortal(
-            <div
-              ref={dropRef}
-              style={{ position: "fixed", top: dropPos.top, left: dropPos.left, width: dropPos.width, zIndex: 9999 }}
-              className="rounded-lg border border-border bg-background shadow-lg"
-            >
-              {suggestions.map((s, i) => (
-                <button
-                  key={s.code}
-                  onClick={() => pick(s)}
-                  onMouseEnter={() => setHlIdx(i)}
-                  className={cn(
-                    "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted/50",
-                    i === hlIdx && "bg-muted/50",
-                  )}
-                >
-                  <span className="font-mono text-xs text-muted-foreground">{s.code}</span>
-                  <span className="flex-1 truncate">{s.name}</span>
-                  <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">{s.market}</span>
-                </button>
-              ))}
-            </div>,
-            document.body,
-          )}
-        </div>
-        <button
-          onClick={() => run()}
-          disabled={loading}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50"
-        >
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-          查询
-        </button>
-      </div>
 
       {err && (
         <div className="mb-4 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
@@ -760,24 +652,32 @@ export function StockData() {
           )}
 
           {/* 限售解禁 */}
-          {lockup && (lockup.upcoming.length > 0 || lockup.history.length > 0) && (
+          {lockup && (
             <GlassCard className="mb-4">
               <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold"><CalendarClock className="h-4 w-4 text-primary" /> 限售解禁</h3>
-              {lockup.upcoming.length > 0 ? (
+              {(lockup.upcoming.length > 0 || (lockup.scheduled?.length ?? 0) > 0) ? (
                 <div className="mb-3 rounded-lg border border-warning/30 bg-warning/5 p-3">
-                  <p className="mb-1.5 text-xs font-medium text-warning">未来 90 天待解禁（{lockup.upcoming.length}）</p>
-                  {lockup.upcoming.slice(0, 4).map((h, i) => (
-                    <div key={i} className="flex items-center gap-3 text-xs"><span className="w-20 shrink-0 font-mono text-muted-foreground">{h.date}</span><span className="flex-1 truncate">{h.type}</span><span className="shrink-0 text-muted-foreground">占比 {pct(h.ratio)}</span></div>
+                  <p className="mb-1.5 text-xs font-medium text-warning">
+                    {lockup.upcoming.length > 0
+                      ? `未来 90 天待解禁（${lockup.upcoming.length}）`
+                      : `90 天内未见待解禁，更远期待解禁（${lockup.scheduled?.length ?? 0}）`}
+                  </p>
+                  {(lockup.upcoming.length > 0 ? lockup.upcoming : lockup.scheduled ?? []).slice(0, 4).map((h, i) => (
+                    <div key={i} className="flex items-center gap-3 text-xs"><span className="w-20 shrink-0 font-mono text-muted-foreground">{h.date}</span><span className="flex-1 truncate">{h.type}</span><span className="shrink-0 text-muted-foreground">单批解禁 {unlockWan(h)}</span></div>
                   ))}
                 </div>
               ) : (
-                <p className="mb-2 text-xs text-muted-foreground/70">未来 90 天无待解禁。</p>
+                <p className="mb-2 text-xs text-muted-foreground/70">
+                  本次查询未见未来 90 日待解禁；未取得完整覆盖时不代表无解禁风险。
+                </p>
               )}
+              {lockup.coverage && <p className="mb-2 text-[11px] text-muted-foreground/70">来源：{lockup.coverage.source ?? "未标注"}；{lockup.coverage.complete ? "当前源查询未触及分页上限" : "记录覆盖可能受分页限制"}</p>}
+              {lockup.warnings?.length ? <p className="mb-2 text-[11px] text-muted-foreground/70">{lockup.warnings.join("；")}</p> : null}
               {lockup.history.length > 0 && (
                 <div>
                   <p className="mb-1.5 text-xs text-muted-foreground">历史解禁（近 {Math.min(lockup.history.length, 5)}）</p>
                   {lockup.history.slice(0, 5).map((h, i) => (
-                    <div key={i} className="flex items-center gap-3 text-xs"><span className="w-20 shrink-0 font-mono text-muted-foreground">{h.date}</span><span className="flex-1 truncate text-muted-foreground">{h.type}</span></div>
+                    <div key={i} className="flex items-center gap-3 text-xs"><span className="w-20 shrink-0 font-mono text-muted-foreground">{h.date}</span><span className="flex-1 truncate text-muted-foreground">{h.type}</span><span className="shrink-0 text-muted-foreground">单批解禁 {unlockWan(h)}</span></div>
                   ))}
                 </div>
               )}
@@ -826,10 +726,19 @@ export function StockData() {
         </>
       )}
 
-      {!val && !err && !loading && (
+      {loading && !val && !gstock && (
+        <GlassCard>
+          <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin text-primary" />
+            正在加载 {activeCode} 的行情、估值、研报与新闻…
+          </div>
+        </GlassCard>
+      )}
+
+      {!val && !gstock && !err && !loading && !activeCode && (
         <GlassCard>
           <div className="py-10 text-center text-sm text-muted-foreground">
-            输入一个 6 位股票代码，拉取它的行情、估值、研报与新闻。<br />
+            用顶部搜索栏选一只股票，拉取它的行情、估值、研报与新闻。<br />
             <span className="text-xs text-muted-foreground/60">数据来自公开源（腾讯行情 / 东财研报 / akshare）</span>
           </div>
         </GlassCard>

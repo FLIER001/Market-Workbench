@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { RefreshCw, Flame, TrendingUp, TrendingDown, Minus, AlertTriangle } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { RefreshButton } from "@/components/ui/RefreshButton";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { MinuteChart } from "@/components/ui/MinuteChart";
 import { Sparkline } from "@/components/ui/Sparkline";
@@ -451,21 +452,13 @@ export function Oil() {
     <div className="mx-auto max-w-6xl">
       <PageHeader
         title="油价"
-        subtitle="边际物理稀缺 · 供给弹性 · 炼化需求 · 风险溢价（框架 V1.0）"
         actions={
           <div className="flex items-center gap-2">
             {score && (
-              <AskAiButton context={aiContext} taskId="oil" label="问 AI"
+              <AskAiButton context={aiContext} taskId="oil" label="AI 复盘"
                 suggestions={["分析当前原油市场局势和未来趋势研判", "当前最大的利多和利空是什么", "库存和供给端有哪些值得警惕的信号"]} />
             )}
-            <button
-              onClick={load}
-              disabled={loading || revalidating}
-              className="flex items-center gap-1.5 rounded-lg border border-border/60 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:opacity-50"
-            >
-              <RefreshCw className={cn("h-3.5 w-3.5", (loading || revalidating) && "animate-spin")} />
-              刷新
-            </button>
+            <RefreshButton onClick={load} loading={loading || revalidating} />
           </div>
         }
       />
@@ -592,7 +585,7 @@ export function Oil() {
               <div className="mt-2.5 flex items-start gap-2 border-t border-border/40 pt-2.5">
                 <Minus className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                 <div className="text-[11px] text-muted-foreground">
-                  数据状态：{score.data_quality} · 更新于 {score.updated}
+                  数据状态：{score.data_quality}
                 </div>
               </div>
             </GlassCard>

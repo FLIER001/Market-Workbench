@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { RefreshCw, Coins, TrendingUp, TrendingDown, Minus, AlertTriangle, ChevronDown } from "lucide-react";
+import { RefreshCw, Coins, TrendingUp, TrendingDown, AlertTriangle } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { RefreshButton } from "@/components/ui/RefreshButton";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { MinuteChart } from "@/components/ui/MinuteChart";
 import { Sparkline } from "@/components/ui/Sparkline";
 import { AskAiButton } from "@/components/ui/AskAiButton";
 import { PageSkeleton } from "@/components/ui/PageSkeleton";
-import { api, type GoldScoreData, type GoldIndicator, type HistPoint, type PaxgSpotData, type MinuteKline, type Au0HistData, type GoldInsight } from "@/lib/api";
+import { api, type GoldScoreData, type GoldIndicator, type HistPoint, type PaxgSpotData, type MinuteKline, type GoldRiskForecast, type GoldDirectionForecast, type GoldInsight } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useSWR } from "@/hooks/useSWR";
 
@@ -37,16 +38,12 @@ function signalTone(score: number | null) {
 }
 
 const DIM_ORDER = ["机会成本与美元", "投资资金与仓位", "金融风险与避险", "结构性需求", "趋势确认"];
-const DIM_WEIGHT: Record<string, string> = {
-  "机会成本与美元": "40%", "投资资金与仓位": "25%", "金融风险与避险": "10%",
-  "结构性需求": "15%", "趋势确认": "10%",
-};
 
 const SPOT_REFRESH_MS = 20_000;
 const OZ_GRAMS = 31.1034768; // 1 金衡盎司 = 31.1035 克，PAXG 每枚锚定 1 盎司
 
 function LiveGoldCard({ paxg }: { paxg: PaxgSpotData | null }) {
-  // PAXG-USD 暗盘分时已由后端一并返回；前端不再单独拉 AU0，直接用后端 minute。
+  // PAXG/USDT 暗盘分时已由后端一并返回；前端不再单独拉 AU0，直接用后端 minute。
   // 展示口径：近似折算国内金价（元/克）= PAXG USD × USDCNY ÷ 盎司克重；汇率缺失回退 USD。
   const fx = paxg?.usdcny ?? null;
   const toCny = (usd: number | null) => (usd != null && fx != null ? usd / OZ_GRAMS * fx : null);
@@ -63,7 +60,7 @@ function LiveGoldCard({ paxg }: { paxg: PaxgSpotData | null }) {
   const price = paxg?.cny?.price ?? toCny(paxg?.price ?? null) ?? lastPoint?.price ?? null;
   const showCny = fx != null;
   const prevClose = paxg?.cny?.prev_close ?? toCny(paxg?.prev_close ?? null)
-    ?? (minuteData && minuteData.prev_close ? toCny(minuteData.prev_close) : null);
+    ?? minuteData?.prev_close;
   const change = paxg?.cny?.change ?? (prevClose != null && price != null ? price - prevClose : null);
   // CNY 显示时涨跌幅按 CNY 口径算，避免 CNY 差额配 USD 百分比的口径混杂
   const changePct = (prevClose != null && change != null && prevClose !== 0)
@@ -77,9 +74,9 @@ function LiveGoldCard({ paxg }: { paxg: PaxgSpotData | null }) {
     <GlassCard className="flex h-full flex-col p-4">
       <div className="mb-2 flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="truncate text-sm font-medium">现货黄金暗盘</div>
+          <div className="truncate text-sm font-medium">黄金暗盘</div>
           <div className="text-[10px] text-muted-foreground">
-            {showCny ? `≈国内金价 · 元/克 · USDCNY ${fx!.toFixed(4)}` : "PAXG-USD · USD/枚"}
+            {showCny ? `≈国内金价 · 元/克 · USDCNY ${fx!.toFixed(4)}` : "PAXG/USDT · USDT/枚"}
             <span className="text-muted-foreground/60"> · 7×24</span>
           </div>
         </div>
@@ -89,7 +86,7 @@ function LiveGoldCard({ paxg }: { paxg: PaxgSpotData | null }) {
           </div>
           {showCny && paxg?.price != null && (
             <div className="mt-0.5 text-[10px] tabular-nums text-muted-foreground/70">
-              PAXG {paxg.price.toFixed(2)} USD
+              PAXG {paxg.price.toFixed(2)} USDT
             </div>
           )}
           <div className={cn("mt-0.5 flex items-center justify-end gap-1 text-[11px] font-semibold tabular-nums",
@@ -116,7 +113,7 @@ function LiveGoldCard({ paxg }: { paxg: PaxgSpotData | null }) {
       </div>
       {showCny && (
         <div className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground/50">
-          由 PAXG-USD × USDCNY ÷ 31.1035 克/盎司 近似折算，与沪金实时价存在时差与升贴水差异。
+          由 PAXG/USDT × USDCNY ÷ 31.1035 折算，假设USDT≈USD，与沪金存在基差。
         </div>
       )}
     </GlassCard>
@@ -132,8 +129,7 @@ function IndicatorCard({ ind }: { ind: GoldIndicator }) {
           <div className="truncate text-sm font-medium">{ind.label}</div>
           <div className="mt-0.5 text-[11px] text-muted-foreground">
             {ind.dimension} · 权重 {Math.round(ind.weight * 100)}%
-            {ind.effective_weight != null && ind.effective_weight < ind.weight
-              ? ` · 时效折减至 ${Math.round(ind.effective_weight * 100)}%` : ""}
+            {ind.score == null ? " · 暂无评分" : ""}
           </div>
         </div>
         <div className={cn("shrink-0 text-right", tone.text)}>
@@ -153,76 +149,43 @@ function IndicatorCard({ ind }: { ind: GoldIndicator }) {
         )}
         <span className="ml-auto text-[10px] text-muted-foreground">{ind.date ?? ""}</span>
       </div>
-      {ind.hist.length >= 2 && (
-        <Sparkline data={ind.hist} height={40} color="--primary" showLatest />
+      {(ind.signal_hist ?? ind.hist).length >= 2 && (
+        <Sparkline data={ind.signal_hist ?? ind.hist} height={40} color="--primary" showLatest />
       )}
       {ind.note && <div className="text-[10px] leading-relaxed text-muted-foreground/80">{ind.note}</div>}
     </GlassCard>
   );
 }
 
-// 得分档 × 前瞻收益回测（2025-08 ~ 2026-08，评分时点约周频，伦敦金 PM 收盘）。
-// 静态快照：样本仅 54 个时点，档位 n 很小，只作方向参考。
-const SCORE_BAND_BACKTEST = [
-  { band: "30-34", n: 4, w1: "-0.05% / 50%", w4: "-0.20% / 50%", w8: "-5.65% / 50%" },
-  { band: "35-39", n: 3, w1: "-1.10% / 33%", w4: "+4.12% / 67%", w8: "-7.76% / 0%" },
-  { band: "40-44", n: 8, w1: "+0.81% / 50%", w4: "-3.99% / 0%", w8: "-0.95% / 50%" },
-  { band: "45-49", n: 11, w1: "+0.25% / 50%", w4: "+3.95% / 67%", w8: "+4.78% / 56%" },
-  { band: "50-54", n: 9, w1: "+0.96% / 78%", w4: "+4.88% / 89%", w8: "+8.28% / 78%" },
-  { band: "55-59", n: 8, w1: "+0.57% / 50%", w4: "+0.83% / 50%", w8: "+4.00% / 75%" },
-  { band: "60-64", n: 7, w1: "+0.71% / 43%", w4: "-0.73% / 57%", w8: "+0.01% / 29%" },
-  { band: "65-69", n: 4, w1: "+1.50% / 100%", w4: "+8.32% / 100%", w8: "+6.93% / 75%" },
-  { band: "全样本", n: 54, w1: "+0.56% / 57%", w4: "+2.04% / 60%", w8: "+3.32% / 59%" },
-];
 
-function ScoreBandTable() {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="mt-3 text-[11px] text-muted-foreground/70">
-      <button
-        onClick={() => setOpen(!open)}
-        className="flex items-center gap-1 transition-colors hover:text-foreground"
-      >
-        <ChevronDown className={cn("h-3 w-3 transition-transform", open && "rotate-180")} />
-        得分档与金价前瞻收益（历史回测参考）
-      </button>
-      {open && (
-        <div className="mt-2 overflow-x-auto">
-          <table className="w-full min-w-[420px] border-collapse text-[10px] tabular-nums">
-            <thead>
-              <tr className="border-b border-border/40 text-muted-foreground/70">
-                <th className="py-1 pr-3 text-left font-normal">得分档</th>
-                <th className="py-1 pr-3 text-right font-normal">n</th>
-                <th className="py-1 pr-3 text-right font-normal">1周 均值/胜率</th>
-                <th className="py-1 pr-3 text-right font-normal">4周 均值/胜率</th>
-                <th className="py-1 text-right font-normal">8周 均值/胜率</th>
-              </tr>
-            </thead>
-            <tbody>
-              {SCORE_BAND_BACKTEST.map((r) => (
-                <tr key={r.band} className={cn("border-b border-border/20",
-                  r.band === "全样本" && "font-medium")}>
-                  <td className="py-1 pr-3">{r.band}</td>
-                  <td className="py-1 pr-3 text-right">{r.n}</td>
-                  <td className={cn("py-1 pr-3 text-right", r.w1.startsWith("+") && "text-danger/80",
-                    r.w1.startsWith("-") && "text-success/80")}>{r.w1}</td>
-                  <td className={cn("py-1 pr-3 text-right", r.w4.startsWith("+") && "text-danger/80",
-                    r.w4.startsWith("-") && "text-success/80")}>{r.w4}</td>
-                  <td className={cn("py-1 text-right", r.w8.startsWith("+") && "text-danger/80",
-                    r.w8.startsWith("-") && "text-success/80")}>{r.w8}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className="mt-2 leading-relaxed text-muted-foreground/60">
-            样本为 2025-08 ~ 2026-08 共 54 个评分时点（约周频），收益按伦敦金 PM 收盘计算。
-            部分档位样本极少（n&lt;5），波动大，仅作方向参考：低分档（&lt;45）中期偏弱、50+ 偏强，
-            边界档（40-44、60-64）方向不稳定。历史统计不代表未来表现。
-          </p>
-        </div>
-      )}
-    </div>
-  );
+function Forecasts({ sourceUpdated }: { sourceUpdated?: string }) {
+  const [directionError,setDirectionError]=useState(false);
+  const [riskError,setRiskError]=useState(false);
+  const {data:direction}=useSWR<GoldDirectionForecast>("gold:direction:0.1",async()=>{
+    const d=await api.goldDirection();setDirectionError(false);return d;
+  },[sourceUpdated],()=>setDirectionError(true));
+  const {data:risk}=useSWR<GoldRiskForecast>("gold:risk:1.0",async()=>{
+    const d=await api.goldRisk();setRiskError(false);return d;
+  },[sourceUpdated],()=>setRiskError(true));
+  const dReady=direction?.status==="ready"&&!directionError;
+  const rReady=risk?.status==="ready"&&!riskError;
+  const pct=(n?:number|null)=>n==null?"—":`${(n*100).toFixed(1)}%`;
+  return <div className="mt-5 grid gap-4 md:grid-cols-2">
+    <GlassCard className="p-5">
+      <div className="mb-3 text-xs font-medium text-muted-foreground">20日涨跌倾向</div>
+      <div className="flex items-baseline gap-3"><strong className="text-2xl tabular-nums">{dReady?direction.score?.toFixed(1):"—"}</strong><span className="text-sm">{dReady?direction.direction:"暂停判断"}</span></div>
+      <p className="mt-2 text-[11px] text-muted-foreground">≥52偏多 · ≤48偏空 · 其余中性；方向分非上涨概率。</p>
+      {(!dReady||direction?.record_error)&&<p className="mt-2 text-[11px] text-warning">{directionError?"暂时读取失败":direction?.record_error??direction?.reason??"正在读取…"}</p>}
+      <details className="mt-3 text-[11px] text-muted-foreground"><summary className="cursor-pointer">参数与历史检验</summary><div className="mt-2 space-y-2 leading-relaxed"><p>60日趋势90%＋5日反转10%，以20日波动标准化，保留25%信号。</p>{direction?.validation&&<p>{direction.validation.sample_count}个历史周时点：平衡准确率{pct(direction.validation.balanced_accuracy)}；普通命中率{pct(direction.validation.accuracy)}，一律偏多{pct(direction.validation.always_up_accuracy)}。历史调参结果，尚无独立前瞻验证。</p>}<p>价格截至 {direction?.observed_at??"—"} · 模型 {direction?.model_version??"—"}</p></div></details>
+    </GlassCard>
+    <GlassCard className="p-5">
+      <div className="mb-3 text-xs font-medium text-muted-foreground">20日波动风险</div>
+      <div className="flex items-baseline gap-3"><strong className="text-2xl tabular-nums">{pct(rReady?risk.annualized_volatility:null)}</strong><span className="text-xs text-muted-foreground">年化 · 20日尺度 {pct(rReady?risk.horizon_volatility:null)}</span></div>
+      <p className="mt-2 text-[11px] text-muted-foreground">过去20日 {pct(rReady?risk.trailing20_volatility:null)} · 60日 {pct(rReady?risk.trailing60_volatility:null)}（年化）</p>
+      {!rReady&&<p className="mt-2 text-[11px] text-warning">{riskError?"暂时读取失败":risk?.reason??"正在读取…"}</p>}
+      <details className="mt-3 text-[11px] text-muted-foreground"><summary className="cursor-pointer">参数与历史检验</summary><div className="mt-2 space-y-2 leading-relaxed"><p>EWMA 0.94 / 0.97 / 0.99方差等权；预测振幅，不判断涨跌。20日尺度为换算值，不是价格覆盖区间。</p>{risk?.validation&&<p>历史MSE较过去20/60日波动下降 {pct(risk.validation.mse_improvement_vs20)} / {pct(risk.validation.mse_improvement_vs60)}，属于调参后的探索结果。</p>}<p>价格截至 {risk?.observed_at??"—"} · 模型 {risk?.model_version??"—"}</p></div></details>
+    </GlassCard>
+  </div>;
 }
 
 // 首屏骨架：仅在「内存 / 本地持久化 / 后端磁盘快照」三层全部落空（真·首次冷启动）
@@ -231,10 +194,10 @@ function ScoreBandTable() {
 export function Gold() {
   const [err, setErr] = useState<string | null>(null);
   const [paxg, setPaxg] = useState<PaxgSpotData | null>(null);
-  const [au0, setAu0] = useState<Au0HistData | null>(null);
+
 
   const { data: spot, loading, revalidating, revalidate } = useSWR<GoldScoreData>(
-    "gold:v4",
+    "gold:environment:v3",
     async (fresh) => {
       const d = await api.goldScore(fresh);
       if (!isValid(d)) throw new Error("数据格式异常");
@@ -263,19 +226,6 @@ export function Gold() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    const loadAu0 = async () => {
-      try {
-        const h = await api.au0Hist(400);
-        if (!cancelled && h.points.length) setAu0(h);
-      } catch { /* 评分卡走势缺省即可 */ }
-    };
-    void loadAu0();
-    const timer = window.setInterval(() => { if (!document.hidden) void loadAu0(); }, 60 * 60_000);
-    return () => { cancelled = true; window.clearInterval(timer); };
-  }, []);
-
-  useEffect(() => {
     const tick = () => { if (!document.hidden) void revalidate(); };
     const timer = window.setInterval(tick, 60 * 60_000);
     const onVisible = () => { if (!document.hidden) void revalidate(); };
@@ -288,30 +238,27 @@ export function Gold() {
   // v2：v1 的 persist 值在部分浏览器冻结在旧时点（写回链路未成功且无 t 戳可淘汰），
   // 换 key 一次性丢弃旧值；配合 useSWR 新格式 7 天淘汰。
   const { data: aiInsight, revalidating: insightLoading, revalidate: revalidateInsight } = useSWR<GoldInsight | null>(
-    "gold-insight:v2", (fresh) => api.goldInsight(fresh).then((d) => d ?? null), [spot?.date], undefined, { persist: true },
+    `gold-insight:v3:${spot?.state_id??"pending"}`, (fresh) => api.goldInsight(fresh).then((d) => d ?? null), [spot?.state_id], undefined, {persist:false},
   );
 
   // 手动重生成：只重调 LLM，不动评分数据
   const refreshInsight = () => { void revalidateInsight(true); };
 
-  const total = spot?.gold_score ?? null;
+  const complete = spot?.model_version === "gold-environment-3.0" && spot.score_status === "complete";
+  const total = complete ? spot.gold_score : null;
   const totalHist = isHist(spot?.hist) ? spot.hist : [];
-  // 国内金价（AU0）按评分趋势的同日期对齐：保证两张图 x 轴完全一致
-  const au0Aligned = useMemo(() => {
-    if (!au0 || totalHist.length < 2) return [];
-    const byDate = new Map(au0.points.map((p) => [p.date, p.v]));
-    const au0Dates = au0.points.map((p) => p.date);
+  const referenceAligned = useMemo(() => {
+    const prices = spot?.benchmark?.usd ?? [];
     const out: HistPoint[] = [];
     let cursor = 0;
     for (const h of totalHist) {
-      while (cursor < au0Dates.length && au0Dates[cursor] < h.date) cursor += 1;
-      const d = au0Dates[cursor];
-      const v = d === h.date ? byDate.get(d) : (d && d > h.date && cursor > 0 ? byDate.get(au0Dates[cursor - 1]) : byDate.get(d));
-      if (v != null) out.push({ date: h.date, v });
+      while (cursor < prices.length && prices[cursor].date <= h.date) cursor += 1;
+      if (cursor > 0 && Date.parse(h.date)-Date.parse(prices[cursor-1].date) <= 7*86400000)
+        out.push({date:h.date,v:prices[cursor-1].v});
     }
     return out;
-  }, [au0, totalHist]);
-  const unavailableSources = spot?.source_status?.filter((s) => s.status !== "fresh") ?? [];
+  }, [spot?.benchmark?.usd, totalHist]);
+  const unavailableSources = spot?.source_status?.filter((s) => s.active && s.usable === false) ?? [];
   const tone = signalTone(total);
   const r = 52;
   const circ = 2 * Math.PI * r;
@@ -319,15 +266,15 @@ export function Gold() {
 
   const aiContext = spot
     ? [
-        `黄金多维评分（${spot.date}）：总分 ${total != null ? total.toFixed(0) : "—"}/100，信号「${spot.signal ?? "—"}」，置信度 ${spot.confidence}，模式 ${spot.mode}，覆盖率 ${(spot.coverage * 100).toFixed(0)}%`,
+        `黄金多维评分（${spot.date}）：总分 ${total != null ? total.toFixed(0) : "—"}/100，信号「${complete ? spot.signal : "暂无评分"}」，置信度 ${spot.confidence}，模式 ${spot.mode}，覆盖率 ${spot.coverage.toFixed(0)}%`,
         paxg?.price
-          ? `现货黄金暗盘（PAXG-USD）：${paxg.cny?.price != null ? `≈国内金价 ${paxg.cny.price.toFixed(2)} 元/克（USDCNY ${(paxg.usdcny ?? 0).toFixed(4)} 折算）` : `${paxg.price.toFixed(2)} 美元/枚`} (${paxg.change_pct != null ? (paxg.change_pct > 0 ? "+" : "") + paxg.change_pct.toFixed(2) + "%" : "—"})`
-          : "现货黄金暗盘：暂不可用",
+          ? `黄金暗盘（PAXG/USDT）：${paxg.cny?.price != null ? `≈国内金价 ${paxg.cny.price.toFixed(2)} 元/克（USDCNY ${(paxg.usdcny ?? 0).toFixed(4)} 折算）` : `${paxg.price.toFixed(2)} 美元/枚`} (${paxg.change_pct != null ? (paxg.change_pct > 0 ? "+" : "") + paxg.change_pct.toFixed(2) + "%" : "—"})`
+          : "黄金暗盘：暂不可用",
         spot.top_positive_drivers.length ? `利多驱动：${spot.top_positive_drivers.join("、")}` : "利多驱动：暂无明显",
         spot.top_negative_drivers.length ? `利空驱动：${spot.top_negative_drivers.join("、")}` : "利空驱动：暂无明显",
         `维度得分：${DIM_ORDER.map((name) => {
           const d = spot.dimensions?.[name];
-          return d ? `${name} ${d.score.toFixed(0)}` : `${name} 未接入`;
+          return d ? `${name} ${d.score?.toFixed(0) ?? "—"}` : `${name} 未接入`;
         }).join("；")}`,
         "指标明细：",
         ...spot.indicators.map((i) =>
@@ -342,21 +289,13 @@ export function Gold() {
     <div className="mx-auto max-w-6xl">
       <PageHeader
         title="黄金"
-        subtitle="5 维 8 指标 · ETF 超预期流量 · OFR 剔除安全资产"
         actions={
           <div className="flex items-center gap-2">
             {spot && (
-              <AskAiButton context={aiContext} taskId="gold" label="问 AI"
+              <AskAiButton context={aiContext} taskId="gold" label="AI 复盘"
                 suggestions={["分析当前黄金局势和未来趋势研判", "当前最大的利多和利空是什么", "接下来重点关注哪些指标变化"]} />
             )}
-            <button
-              onClick={load}
-              disabled={loading || revalidating}
-              className="flex items-center gap-1.5 rounded-lg border border-border/60 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:opacity-50"
-            >
-              <RefreshCw className={cn("h-3.5 w-3.5", (loading || revalidating) && "animate-spin")} />
-              刷新
-            </button>
+            <RefreshButton onClick={load} loading={loading || revalidating} />
           </div>
         }
       />
@@ -423,30 +362,27 @@ export function Gold() {
                 </div>
                 <div>
                   <div className={cn("text-2xl font-extrabold", tone.text)}>
-                    {spot.signal ?? "—"}
+                    {complete ? spot.signal : "暂无评分"}
                   </div>
                   <div className="mt-1 text-xs text-muted-foreground">
                     {spot.date}
                   </div>
                   <div className="mt-2 max-w-52 text-[10px] leading-relaxed text-muted-foreground/70">
-                    {total == null ? "得分缺失" : total >= 65 ? "建议买入"
-                      : total >= 45 ? "建议持有或逢低买入"
-                      : total >= 20 ? "建议观望或减仓"
-                      : "建议离场观望"}
+                    {total == null ? "当前输入不足，暂停评分" : "黄金环境分"}
                   </div>
                 </div>
               </div>
               {totalHist.length > 1 && (
                 <div className="mt-2 border-t border-border/30 pt-2">
-                  <span className="text-[9px] text-muted-foreground/45">近 1 年得分</span>
+                  <span className="text-[9px] text-muted-foreground/45">得分走势</span>
                   <Sparkline data={totalHist} height={38} className="mt-0.5"
                     color="--primary" valueSuffix=" 分" />
-                  {au0Aligned.length > 1 && (
+                  {referenceAligned.length > 1 && (
                     <div className="mt-1.5 border-t border-border/30 pt-1.5">
                       <span className="text-[9px] text-muted-foreground/45">
-                        沪金主力 AU0 · CNY/克{au0?.stale ? " · 缓存" : ""}
+                        LBMA PM · USD/oz
                       </span>
-                      <Sparkline data={au0Aligned} height={38} className="mt-0.5"
+                      <Sparkline data={referenceAligned} height={38} className="mt-0.5"
                         color="--warning" showLatest />
                     </div>
                   )}
@@ -465,7 +401,7 @@ export function Gold() {
                   <RefreshCw className={cn("h-3 w-3", insightLoading && "animate-spin")} />
                 </button>
               </div>
-              {aiInsight ? (
+              {complete && aiInsight ? (
                 <div className="space-y-1.5 text-sm leading-relaxed text-foreground/85">
                   <p><span className="font-medium text-primary/90">机会成本与美元</span>　{aiInsight.opportunity_cost}</p>
                   <p><span className="font-medium text-primary/90">资金与仓位</span>　{aiInsight.flows_positioning}</p>
@@ -497,12 +433,6 @@ export function Gold() {
                     )}
                 </div>
               )}
-              <div className="mt-2.5 flex items-start gap-2 border-t border-border/40 pt-2.5">
-                <Minus className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                <div className="text-[11px] text-muted-foreground">
-                  数据状态：{spot.data_quality} · 更新于 {spot.updated}
-                </div>
-              </div>
             </GlassCard>
           </div>
 
@@ -519,21 +449,21 @@ export function Gold() {
                   <div key={name} className="rounded-lg border border-border/40 p-3">
                     <div className="flex items-baseline justify-between">
                       <span className="text-xs text-muted-foreground">{name}</span>
-                      <span className="text-[10px] text-muted-foreground/70">{DIM_WEIGHT[name]}</span>
+                      <span className="text-[10px] text-muted-foreground/70">{Math.round((d?.weight ?? 0) * 100)}%</span>
                     </div>
                     {d ? (
                       <>
                         <div className={cn("mt-1 text-lg font-bold tabular-nums", t.text)}>
-                          {d.score.toFixed(0)}
+                          {d.score?.toFixed(0) ?? "—"}
                           <span className="ml-1.5 text-[10px] font-normal opacity-75">{t.label}</span>
                         </div>
                         <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted/30">
                           <div className={cn("h-full rounded-full transition-all", t.bar)}
-                            style={{ width: `${Math.max(2, Math.min(100, d.score))}%` }} />
+                            style={{ width: `${Math.max(2, Math.min(100, d.score ?? 0))}%` }} />
                         </div>
                         {hist.length > 1 && (
                           <div className="mt-2">
-                            <span className="text-[9px] text-muted-foreground/45">近 1 年得分</span>
+                            <span className="text-[9px] text-muted-foreground/45">得分走势</span>
                             <Sparkline data={hist} height={34} className="mt-0.5"
                               color="--primary" valueSuffix=" 分" />
                           </div>
@@ -553,12 +483,10 @@ export function Gold() {
           </div>
 
           <p className="mt-4 text-[11px] leading-relaxed text-muted-foreground/70">
-            评分框架见 research/黄金价格多维评分系统技术方案_V2.0.md（实现版本 V2.1）。ETF 得分使用剔除价格动量解释后的
-            超预期流量，OFR 压力剔除含黄金价格的安全资产类别；日频信号采用 3 日 EMA。高频指标按过去 5 年历史分位评分，
-            央行指标按 2010 年以来月度历史分位评分。本页为黄金环境判断，不构成交易指令。
+            固定五维八指标权重；ETF使用流量残差，OFR剔除安全资产。指标按滚动历史分位计分，央行采用2010年以来历史。
           </p>
 
-          <ScoreBandTable />
+          <Forecasts sourceUpdated={spot.updated} />
         </>
       )}
 

@@ -271,11 +271,6 @@ export function FundPortfolioPanel({ refreshSignal }: { refreshSignal?: number }
 
       {/* 持仓表 */}
       <GlassCard className="overflow-x-auto p-0">
-        {data?.updated && (
-          <div className="flex items-center justify-end px-4 pt-3">
-            <span className="text-xs text-muted-foreground/60">更新于 {data.updated}</span>
-          </div>
-        )}
         {!data ? (
           <div className="flex h-32 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
         ) : data.holdings.length === 0 ? (

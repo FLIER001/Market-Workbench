@@ -2,13 +2,13 @@ import { useEffect, useState } from "react";
 
 import { storageGet, storageSet } from "@/lib/storage";
 
-// 默认呈现暗色暖橙；用户可切亮色，选择存 localStorage。
-// 机制：亮色时给 <html> 加 .light（暗色为无类名的默认态）。
+// 默认浅色纸面，用户可切低眩光暗色；选择存 localStorage。
+// <html> 同时使用 Tailwind 的 .dark 与主题变量对应的 .light。
 export function useDarkMode() {
   const [dark, setDark] = useState(() => {
     const saved = storageGet("vr-theme");
     if (saved) return saved === "dark";
-    return true; // 默认暗色
+    return false; // 日常桌面研究默认浅色
   });
 
   useEffect(() => {

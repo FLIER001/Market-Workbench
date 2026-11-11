@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { PageHeader } from "@/components/ui/PageHeader";
 import { SectorAnalysis } from "@/pages/Sectors";
 import { SectorScoresPanel } from "@/pages/SectorScores";
 import { PlateScoresPanel } from "@/pages/PlateScores";
@@ -31,10 +30,7 @@ export function SectorHub() {
 
   return (
     <div>
-      <PageHeader
-        title="行业研究"
-        subtitle="板块评分 · 行业评分 · 行业分析"
-      />
+
 
       <div className="mb-4 grid max-w-lg grid-cols-3 gap-2 rounded-xl border border-border/50 bg-muted/20 p-1.5">
         {([

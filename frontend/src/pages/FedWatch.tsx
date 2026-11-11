@@ -5,8 +5,9 @@
 //   次区：Polymarket 年内加息/降息次数 + 年底利率水平分布
 //   底部：数据源健康 + 方法论说明
 import { useEffect, useMemo, useState } from "react";
-import { RefreshCw, Loader2, Landmark, TrendingUp, TrendingDown, Minus, ExternalLink, AlertTriangle } from "lucide-react";
+import { Loader2, Landmark, TrendingUp, TrendingDown, Minus, ExternalLink, AlertTriangle } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { RefreshButton } from "@/components/ui/RefreshButton";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { api, type FedWatchData, type FedWatchMatrixRow, type FedWatchPmEvent } from "@/lib/api";
 import { useSWR } from "@/hooks/useSWR";
@@ -224,7 +225,6 @@ export function FedWatch() {
   const cutCount = pmCounts.find((e) => e.kind === "cuts" || e.kind === "cut");
   const levelEv = pmLevel.find((e) => /end of/i.test(e.title));
   const sources = data?.source_status ?? [];
-  const unavailable = sources.filter((s) => s.status !== "fresh");
   const futError = data?.futures?.error;
   const pmError = data?.polymarket?.error;
 
@@ -245,16 +245,9 @@ export function FedWatch() {
     <div className="mx-auto max-w-6xl px-4 py-6">
       <PageHeader
         title="美联储利率追踪"
-        subtitle="权威信号（ZQ 联邦基金期货 × CME 官方方法论自算）× 预测市场（Polymarket）· 概率差与边际变化"
         actions={
           <div className="flex items-center gap-2">
-            <button
-              onClick={load}
-              className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
-            >
-              {revalidating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-              刷新
-            </button>
+            <RefreshButton onClick={load} loading={revalidating} />
             {stmt?.url && (
               <a
                 href={stmt.url} target="_blank" rel="noreferrer"
@@ -392,9 +385,6 @@ export function FedWatch() {
                   </span>
                 ))}
               </div>
-              {unavailable.length === 0 && (
-                <div className="mt-2 text-[11px] text-muted-foreground">最近刷新尝试 {data.updated}；行情时点见各数据源</div>
-              )}
             </GlassCard>
           </div>
         </>

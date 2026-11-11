@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { RefreshButton } from "@/components/ui/RefreshButton";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { RefreshCw, Activity, Database, CheckCircle2, XCircle, AlertTriangle, Clock } from "lucide-react";
 import { api, type SourceHealthData, type SourceHealthUpstream, type SourceHealthDataset } from "@/lib/api";
@@ -109,16 +110,7 @@ export function DataSourceHealth() {
     <div>
       <PageHeader
         title="数据源健康"
-        subtitle="上游探活一次连通性 + 各页面最近一次成功取数的时间"
-        actions={
-          <button
-            onClick={refresh}
-            className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm transition-colors hover:bg-muted/60"
-          >
-            <RefreshCw className={cn("h-3.5 w-3.5", revalidating && "animate-spin")} />
-            重新探活
-          </button>
-        }
+        actions={<RefreshButton onClick={refresh} loading={revalidating} label="重新探活" />}
       />
 
       {loading && !data ? (

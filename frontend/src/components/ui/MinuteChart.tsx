@@ -40,7 +40,7 @@ function buildTimeTicks(total: number): { index: number; label: string; anchor: 
 
 type ChartSize = { width: number; height: number };
 
-// 专业行情终端式分时图：蓝色价格主线 + 黄色成交均价 + 红绿量柱。
+// 分时图价格线随最新涨跌切换，沿用红涨绿跌。
 // 使用实际像素尺寸作为 SVG 坐标，避免 viewBox 拉伸导致文字、线条变形。
 export function MinuteChart({
   data,
@@ -235,22 +235,7 @@ export function MinuteChart({
       }
     }
 
-    let cumulativeAmount = 0;
-    let cumulativeVolume = 0;
-    const averages: (number | null)[] = new Array(totalMinutes).fill(null);
-    for (let index = firstIdx; index <= lastIdx; index += 1) {
-      const price = prices[index];
-      if (price != null && volumes[index] > 0) {
-        cumulativeAmount += price * volumes[index];
-        cumulativeVolume += volumes[index];
-      }
-      averages[index] = cumulativeVolume > 0 ? cumulativeAmount / cumulativeVolume : price;
-    }
-
-    const observed = [
-      ...prices.slice(Math.max(firstIdx, 0), lastIdx + 1),
-      ...averages.slice(Math.max(firstIdx, 0), lastIdx + 1),
-    ].filter((value): value is number => value != null);
+    const observed = prices.slice(Math.max(firstIdx, 0), lastIdx + 1).filter((value): value is number => value != null);
     const rawMin = Math.min(...observed);
     const rawMax = Math.max(...observed);
     let low = rawMin;
@@ -271,13 +256,9 @@ export function MinuteChart({
 
     const yAt = (price: number) => ((high - price) / Math.max(high - low, 1e-9)) * priceHeight;
     let pricePath = "";
-    let averagePath = "";
     for (let index = firstIdx; index <= lastIdx; index += 1) {
       if (prices[index] != null) {
         pricePath += `${pricePath ? "L" : "M"}${xAt(index).toFixed(1)},${yAt(prices[index]!).toFixed(1)}`;
-      }
-      if (averages[index] != null) {
-        averagePath += `${averagePath ? "L" : "M"}${xAt(index).toFixed(1)},${yAt(averages[index]!).toFixed(1)}`;
       }
     }
     const areaPath =
@@ -298,8 +279,9 @@ export function MinuteChart({
       };
     });
 
-    // 0% 涨跌幅始终对齐昨收基准线；其余 4 档按量程均分（25%/50%/75%/100%）
-    const ticks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+    // 矮面板减为 3 档，避免价格轴文字互相覆盖。
+    const tickRatios = height < 260 ? [0, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1];
+    const ticks = tickRatios.map((ratio) => {
       const price = high - ratio * (high - low);
       return {
         price,
@@ -311,7 +293,6 @@ export function MinuteChart({
     return {
       prices,
       volumes,
-      averages,
       firstIdx,
       lastIdx,
       rawMod,
@@ -320,27 +301,24 @@ export function MinuteChart({
       high,
       yAt,
       pricePath,
-      averagePath,
       areaPath,
       bars,
       maxVolume,
       ticks,
     };
-  }, [points, prevClose, totalMinutes, priceHeight, volumeHeight, volumeTop, chartWidth, leftAxis]);
+  }, [points, prevClose, totalMinutes, priceHeight, volumeHeight, volumeTop, chartWidth, leftAxis, height]);
 
   if (points.length < 2 || model.lastIdx < 0) return null;
 
   const {
     prices,
     volumes,
-    averages,
     firstIdx,
     lastIdx,
     rawMod,
     firstMod,
     yAt,
     pricePath,
-    averagePath,
     areaPath,
     bars,
     maxVolume,
@@ -361,8 +339,8 @@ export function MinuteChart({
   const showHeaderStats = size.width >= 640;
   const showHeaderAside = size.width >= 500;
 
-  const priceColor = document.documentElement.classList.contains("light") ? "#2563eb" : "#62a8ff";
-  const averageColor = "#f2b84b";
+  const latestPoint = points[points.length - 1];
+  const priceColor = hsl(latestPoint && latestPoint.price < prevClose ? "--success" : "--danger");
   const upColor = hsl("--danger");
   const downColor = hsl("--success");
   const flatColor = hsl("--muted-foreground");
@@ -401,7 +379,6 @@ export function MinuteChart({
       ? {
           index: hoverIdx,
           price: prices[hoverIdx]!,
-          average: averages[hoverIdx],
           volume: volumes[hoverIdx],
           pct: prevClose > 0 ? ((prices[hoverIdx]! - prevClose) / prevClose) * 100 : 0,
           time: clockAt(hoverIdx),
@@ -445,7 +422,6 @@ export function MinuteChart({
     return ticks;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [totalMinutes, firstMod, rawMod, slotRanges]);
-  const latestAverage = averages[lastIdx];
   const totalVolume = points[points.length - 1]?.volume ?? 0;
   const hasVolume = totalVolume > 0;
 
@@ -474,7 +450,7 @@ export function MinuteChart({
               </span>
             </span>
             {showHeaderAside && (
-              <span className="text-[10px] text-muted-foreground/50">截至 {clockAt(lastIdx)}</span>
+              <span className="text-[10px] text-muted-foreground">截至 {clockAt(lastIdx)}</span>
             )}
           </div>
           {showHeaderStats && (
@@ -521,9 +497,9 @@ export function MinuteChart({
             x2={leftAxis + chartWidth}
             y2={tick.y}
             stroke={border}
-            strokeWidth={index === 2 ? 0.8 : 0.6}
-            strokeDasharray={index === 2 ? "5 4" : "2 4"}
-            opacity={index === 2 ? 0.7 : 0.42}
+            strokeWidth={index === Math.floor(ticks.length / 2) ? 0.8 : 0.6}
+            strokeDasharray={index === Math.floor(ticks.length / 2) ? "5 4" : "2 4"}
+            opacity={index === Math.floor(ticks.length / 2) ? 0.7 : 0.42}
             vectorEffect="non-scaling-stroke"
           />
         ))}
@@ -562,18 +538,6 @@ export function MinuteChart({
           strokeLinecap="round"
         vectorEffect="non-scaling-stroke"
       />
-        {hasVolume && !compact && (
-          <path
-            d={averagePath}
-            fill="none"
-            stroke={averageColor}
-            strokeWidth="1.15"
-            strokeLinejoin="round"
-            strokeLinecap="round"
-            opacity="0.95"
-            vectorEffect="non-scaling-stroke"
-          />
-        )}
 
         {!compact && bars.slice(firstIdx, lastIdx + 1).map((bar, offset) => (
           <rect
@@ -632,14 +596,13 @@ export function MinuteChart({
         {ticks.map((tick, index) => (
           <g key={`axis-${index}`}>
             <text
-              x={leftAxis - 8}
+              x={leftAxis - 5}
               y={Math.min(Math.max(tick.y, 9), priceHeight - 7)}
               textAnchor="end"
               dominantBaseline="middle"
-              fontSize="10"
+              fontSize="9"
               fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
               fill={foreground}
-              opacity="0.68"
             >
               {tick.price.toFixed(2)}
             </text>
@@ -651,7 +614,6 @@ export function MinuteChart({
               fontSize="10"
               fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
               fill={tick.pct > 0.0001 ? upColor : tick.pct < -0.0001 ? downColor : muted}
-              opacity="0.78"
             >
               {tick.pct > 0 ? "+" : ""}
               {tick.pct.toFixed(2)}%
@@ -696,18 +658,13 @@ export function MinuteChart({
             <i className="h-0.5 w-3 rounded-full" style={{ backgroundColor: priceColor }} />
             价格
           </span>
-          {latestAverage != null && hasVolume && (
-            <span className="flex items-center gap-1.5 text-muted-foreground">
-              <i className="h-0.5 w-3 rounded-full" style={{ backgroundColor: averageColor }} />
-              均价 <b className="font-mono font-medium" style={{ color: averageColor }}>{latestAverage.toFixed(2)}</b>
-            </span>
-          )}
+
         </div>
       )}
 
       {hover && (
         <div
-          className="pointer-events-none absolute z-10 min-w-[148px] rounded-lg border border-border/55 bg-background/95 px-3 py-2 text-[10px] shadow-xl backdrop-blur-md"
+          className="pointer-events-none absolute z-10 min-w-[148px] border border-border bg-card px-3 py-2 text-[10px]"
           style={{
             left: Math.min(Math.max(hover.x, leftAxis), size.width - rightAxis),
             top: HEADER_HEIGHT + 14,
@@ -726,14 +683,7 @@ export function MinuteChart({
             </b>
             {hasVolume && (
               <>
-                {!compact && (
-                  <>
-                    <span className="text-muted-foreground">均价</span>
-                    <b className="text-right font-mono font-medium" style={{ color: averageColor }}>
-                      {hover.average?.toFixed(2) ?? "—"}
-                    </b>
-                  </>
-                )}
+
                 <span className="text-muted-foreground">成交量</span>
                 <b className="text-right font-mono font-medium text-foreground">{hover.volume > 0 ? compactVolume(hover.volume) : "—"}</b>
               </>

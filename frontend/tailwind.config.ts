@@ -25,8 +25,8 @@ export default {
       },
       borderRadius: { lg: "var(--radius)", md: "calc(var(--radius) - 4px)", sm: "calc(var(--radius) - 8px)" },
       boxShadow: {
-        glass: "0 12px 30px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.06)",
-        glow: "0 0 0 1px hsl(var(--primary) / .25), 0 0 24px hsl(var(--primary) / .18)",
+        glass: "0 3px 14px rgba(24,32,29,.06)",
+        glow: "0 6px 20px rgba(24,32,29,.10)",
       },
     },
   },

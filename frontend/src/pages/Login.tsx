@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 const inputCls =
-  "w-full rounded-lg border border-border bg-black/20 px-3 py-2.5 text-sm outline-none transition-colors focus:border-primary/50 placeholder:text-muted-foreground/40";
+  "w-full rounded-lg border border-border bg-card px-3 py-2.5 text-sm outline-none transition-colors focus:border-primary placeholder:text-muted-foreground";
 
 export function Login() {
   const nav = useNavigate();
@@ -75,11 +75,10 @@ export function Login() {
       <div className="w-full max-w-sm">
         {/* Brand */}
         <div className="mb-6 flex flex-col items-center">
-          <LineChart className="mb-2 h-10 w-10 text-primary text-glow" />
-          <h1 className="text-2xl font-extrabold tracking-tight">
-            Market <span className="text-primary">Workbench</span>
+          <span className="mb-3 flex h-11 w-11 items-center justify-center rounded-lg bg-primary text-primary-foreground"><LineChart className="h-6 w-6" /></span>
+          <h1 className="text-2xl font-semibold tracking-[-0.025em]">
+          Market <span className="text-primary">Workbench</span>
           </h1>
-          <p className="mt-1 text-xs text-muted-foreground">本地市场研究工作台 · 数据跟随账号，不再因换浏览器/域名丢失</p>
         </div>
 
         <GlassCard className="p-6">
@@ -88,7 +87,7 @@ export function Login() {
             <div>
               <p className="mb-1 text-sm font-semibold text-foreground">检测到本机已有数据</p>
               <p className="mb-4 text-xs leading-relaxed text-muted-foreground">
-                {loggedInName}，要把这台机器浏览器里的数据导入你的账号吗？导入后换浏览器/换电脑也能看到。
+                {loggedInName}，要把本机已有数据导入你的账号吗？
               </p>
               <div className="mb-5 space-y-1.5">
                 {pendingData.map((d) => (
@@ -109,7 +108,7 @@ export function Login() {
                     nav("/daily-review", { replace: true });
                   }}
                   disabled={busy}
-                  className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2.5 text-sm font-medium text-primary shadow-glow transition-colors hover:bg-primary/25 disabled:opacity-50"
+                  className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
                 >
                   {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                   导入到账号
@@ -145,9 +144,7 @@ export function Login() {
               </button>
             ))}
           </div>
-          ) : (
-          <p className="mb-5 text-center text-xs text-muted-foreground">账号由管理员开通，如需账号请联系管理员</p>
-          )}
+          ) : null}
 
           <div className="space-y-3">
             <input
@@ -184,7 +181,7 @@ export function Login() {
             <button
               onClick={submit}
               disabled={busy}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary/15 px-4 py-2.5 text-sm font-medium text-primary shadow-glow transition-colors hover:bg-primary/25 disabled:opacity-50"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
             >
               {busy ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -197,9 +194,6 @@ export function Login() {
             </button>
           </div>
 
-          <p className="mt-4 text-center text-[11px] leading-relaxed text-muted-foreground/50">
-            数据只存在你自己的机器上（~/.market-workbench），不会上传到任何服务器。
-          </p>
           </>
           )}
         </GlassCard>

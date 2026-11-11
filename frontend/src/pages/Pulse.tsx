@@ -4,6 +4,7 @@ import {
   ChevronDown, ChevronRight, Globe, Sparkles,
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { RefreshButton } from "@/components/ui/RefreshButton";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { ProbabilityTrend, type TrendPoint } from "@/components/pulse/ProbabilityTrend";
 import { api, type PulseOverview, type PulseModule, type PulseMarket, type PulseInsight } from "@/lib/api";
@@ -168,26 +169,11 @@ export function Pulse() {
     <div>
       <PageHeader
         title="全球预期概率"
-        subtitle="Polymarket + Kalshi 双源"
-        actions={
-          <div className="flex flex-col items-end gap-1">
-            <button
-              onClick={() => void load()}
-              disabled={refreshing}
-              className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm transition-colors hover:border-primary disabled:opacity-60"
-              title="重新拉取两站最新概率"
-            >
-              <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
-              {refreshing ? "更新中…" : "更新"}
-            </button>
-            {refreshing ? (
-              <span className="text-[11px] text-primary/80">双源重建中（Kalshi 全量约 1-8 分钟，完成自动刷新）</span>
-            ) : data?.as_of ? (
-              <span className="text-[11px] text-muted-foreground/70">数据时点 {data.as_of.replace("T", " ")}</span>
-            ) : null}
-          </div>
-        }
+        actions={<RefreshButton onClick={() => void load()} loading={refreshing} />}
       />
+      {refreshing && (
+        <div className="mb-4 flex justify-end text-[11px] text-muted-foreground">正在更新双源数据，完成后自动刷新</div>
+      )}
 
       {err && (
         <div className="mb-4 rounded border border-danger/30 bg-danger/5 p-3 text-sm text-danger">{err}</div>

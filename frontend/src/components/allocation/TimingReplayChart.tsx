@@ -327,18 +327,13 @@ export function TimingReplayChart({
           {/* ===== 上图：择时分 ===== */}
           {/* 中性区 40-60（档位边界，与后端 _RISK_LEVELS 同源） */}
           {s1.lo < NEUTRAL_HI && s1.hi > NEUTRAL_LO && (
-            <>
-              <rect
-                x={PAD.left}
-                y={yOf1(Math.min(NEUTRAL_HI, s1.hi))}
-                width={plotW}
-                height={Math.max(0, yOf1(Math.max(NEUTRAL_LO, s1.lo)) - yOf1(Math.min(NEUTRAL_HI, s1.hi)))}
-                fill={hsl("--muted-foreground", 0.05)}
-              />
-              <text x={PAD.left + 5} y={yOf1(NEUTRAL_HI) + 11} fontSize="9" fill={tickFill} opacity="0.6">
-                中性区 {NEUTRAL_LO}–{NEUTRAL_HI}
-              </text>
-            </>
+            <rect
+              x={PAD.left}
+              y={yOf1(Math.min(NEUTRAL_HI, s1.hi))}
+              width={plotW}
+              height={Math.max(0, yOf1(Math.max(NEUTRAL_LO, s1.lo)) - yOf1(Math.min(NEUTRAL_HI, s1.hi)))}
+              fill={hsl("--muted-foreground", 0.09)}
+            />
           )}
           {s1.ticks.map((t) => (
             <g key={`g1-${t}`}>

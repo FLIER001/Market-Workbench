@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { RefreshCw, Scale, TrendingUp, LineChart, Droplets, Zap, AlertTriangle, ChevronDown, Target } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { RefreshButton } from "@/components/ui/RefreshButton";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { ColdStartNotice, SkeletonBlock } from "@/components/ui/PageSkeleton";
 import { Sparkline } from "@/components/ui/Sparkline";
 import { TimingReplayChart } from "@/components/allocation/TimingReplayChart";
+import { WeightHistoryChart } from "@/components/allocation/WeightHistoryChart";
 import { api, type AllocationData, type AllocationInsight, type TimingPart, type HistPoint } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useSWR } from "@/hooks/useSWR";
@@ -39,8 +41,8 @@ const ASSET_BAR: Record<string, string> = {
   cash: "bg-emerald-500/60",
 };
 
-// 三层证据卡：分数 + 子成分贡献双向条（可展开）
-function EvidenceCard({ title, icon: Icon, score, state, date, parts, hist, source, desc }: {
+// 三层证据卡：分数 + 子成分贡献双向条。展开/折叠由父层统一控制，三张卡同步开合
+function EvidenceCard({ title, icon: Icon, score, state, date, parts, hist, source, desc, open, onToggle }: {
   title: string;
   icon: typeof TrendingUp;
   score: number | null;
@@ -50,15 +52,16 @@ function EvidenceCard({ title, icon: Icon, score, state, date, parts, hist, sour
   hist?: HistPoint[];
   source?: string;
   desc?: string;
+  open: boolean;
+  onToggle: () => void;
 }) {
-  const [open, setOpen] = useState(false);
   const t = scoreTone(score);
   const covered = (parts ?? []).filter((p) => p.contribution != null);
   const maxAbs = Math.max(...covered.map((p) => Math.abs(p.contribution as number)), 1);
   return (
     <GlassCard className="p-4">
       <button type="button" className="flex w-full items-center gap-3 text-left"
-        onClick={() => setOpen((v) => !v)}>
+        aria-expanded={open} onClick={onToggle}>
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
           <Icon className="h-4 w-4" />
         </span>
@@ -145,6 +148,9 @@ export function Allocation() {
 
   const t = data?.timing;
   const a = data?.allocation;
+  // 三层证据同步开合：点任一张卡，三张一起展开/折叠
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
+  const toggleEvidence = () => setEvidenceOpen((v) => !v);
   const tt = t ? scoreTone(t.score) : null;
   const hist = t && isHist(t.hist) ? t.hist : [];
   const benchHist = t?.benchmark && isHist(t.benchmark.hist) ? t.benchmark.hist : [];
@@ -153,12 +159,7 @@ export function Allocation() {
     <div>
       <PageHeader
         title="择时配置"
-        subtitle="市场环境研判 → 股 / 债 / 商品 / 现金目标仓位 · 自上而下决策链"
-        actions={
-          <button onClick={load} className="text-muted-foreground hover:text-primary" title="刷新">
-            <RefreshCw className={cn("h-4 w-4", (loading || revalidating) && "animate-spin")} />
-          </button>
-        }
+        actions={<RefreshButton onClick={load} loading={loading || revalidating} />}
       />
 
       {(err || data?.cache_state === "error") && !data?.timing && (
@@ -192,7 +193,8 @@ export function Allocation() {
           {/* ——— 首行：左 1/2 结论卡（风险环境 + AI 解读）｜右 1/2 择时回放 ——— */}
           {/* grid-cols-1 不能省：只写 lg:grid-cols-2 时 <lg 走隐式列，隐式列按 min-content
               布局、不随容器收缩，图表 SVG 的首帧宽度会把整行顶爆（实测 760 视口下页面横向溢出 65px）。 */}
-          <div className="mb-4 grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
+          {/* 不写 items-start：两张卡随行高拉伸，保持顶/底对齐。 */}
+          <div className="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
             {/* 首屏结论卡 */}
             <GlassCard className="p-4">
               <div className="min-w-0">
@@ -291,20 +293,20 @@ export function Allocation() {
             <h3 className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
               <Scale className="h-4 w-4" /> 三层证据
             </h3>
-            <span className="text-[11px] text-muted-foreground/50">0.40×宏观 + 0.35×流动性 + 0.25×市场确认 · 点击展开子成分</span>
+            <span className="text-[11px] text-muted-foreground/50">0.40×宏观 + 0.35×流动性 + 0.25×市场确认 · 点击任一卡片，三张一起展开</span>
           </div>
           <div className="mb-4 grid gap-2 md:grid-cols-3">
-            <EvidenceCard title="宏观" icon={TrendingUp}
+            <EvidenceCard title="宏观" icon={TrendingUp} open={evidenceOpen} onToggle={toggleEvidence}
               score={data.evidence.macro?.score} state={data.evidence.macro?.state ?? tt.label}
               date={data.evidence.macro?.date} parts={data.evidence.macro?.parts}
               hist={data.evidence.macro?.hist} source={data.evidence.macro?.source}
               desc="中期先验（模块加权，回测权重）" />
-            <EvidenceCard title="流动性" icon={Droplets}
+            <EvidenceCard title="流动性" icon={Droplets} open={evidenceOpen} onToggle={toggleEvidence}
               score={data.evidence.liquidity?.score} state={data.evidence.liquidity?.state ?? undefined}
               date={data.evidence.liquidity?.date} parts={data.evidence.liquidity?.parts}
               hist={data.evidence.liquidity?.hist} source={data.evidence.liquidity?.source}
               desc="风险承受能力（资金/政策/杠杆温度）" />
-            <EvidenceCard title="市场确认" icon={Zap}
+            <EvidenceCard title="市场确认" icon={Zap} open={evidenceOpen} onToggle={toggleEvidence}
               score={data.evidence.market_confirm?.score} state={data.evidence.market_confirm?.parts?.length
                 ? `压力 ${data.evidence.market_confirm.risk_pressure_score?.toFixed(0) ?? "—"}` : undefined}
               parts={data.evidence.market_confirm?.parts} hist={data.evidence.market_confirm?.hist}
@@ -317,7 +319,7 @@ export function Allocation() {
               <Target className="h-4 w-4" /> 目标配置
             </h3>
             <span className="text-[11px] text-muted-foreground/50">
-              风险等级锚点 ± 资产分带限偏离 · 合计 100%{a.last_weights ? " · 「较当前」= 较上次建议" : ""}
+              风险等级锚点 ± 资产分带限偏离 · 合计 100%
             </span>
           </div>
           <GlassCard className="mb-4 p-4">
@@ -337,49 +339,15 @@ export function Allocation() {
                 <AlertTriangle className="h-3 w-3 shrink-0" />{a.resolve_note}
               </p>
             )}
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[640px] text-sm">
-                <thead>
-                  <tr className="border-b border-border/40 text-[10px] text-muted-foreground/60">
-                    <th className="py-1.5 text-left font-medium">资产</th>
-                    <th className="text-right font-medium">锚点</th>
-                    <th className="text-right font-medium">目标</th>
-                    <th className="text-right font-medium">较当前{a.last_weights ? "" : "（=较中性）"}</th>
-                    <th className="text-right font-medium">较中性</th>
-                    <th className="text-right font-medium">建议</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {a.rows.map((r) => {
-                    const d = r.vs_last ?? r.vs_base;
-                    return (
-                      <tr key={r.asset} className="border-b border-border/20 last:border-0">
-                        <td className="py-2">
-                          <span className="mr-1.5 inline-block h-2 w-2 rounded-full align-middle" aria-hidden
-                            style={{ background: "currentColor" }} />
-                          <span className={cn("font-medium align-middle", r.asset === "equity" ? "text-danger/80"
-                            : r.asset === "bond" ? "text-sky-400" : r.asset === "commodity" ? "text-warning" : "text-emerald-400")}>
-                            {r.name}
-                          </span>
-                          <span className="ml-2 font-mono text-[11px] text-muted-foreground/60">
-                            资产分 {a.asset_scores[r.asset]?.score != null ? a.asset_scores[r.asset].score!.toFixed(0) : "—"}
-                          </span>
-                        </td>
-                        <td className="text-right font-mono text-muted-foreground/70">{r.anchor}%</td>
-                        <td className="text-right font-mono font-bold text-foreground">{r.target.toFixed(1)}%</td>
-                        <td className={cn("text-right font-mono", d > 0.3 ? "text-danger" : d < -0.3 ? "text-success" : "text-muted-foreground/50")}>
-                          {r.vs_last != null ? pctText(r.vs_last) : pctText(r.vs_base)}
-                        </td>
-                        <td className={cn("text-right font-mono", r.vs_base > 0.3 ? "text-danger" : r.vs_base < -0.3 ? "text-success" : "text-muted-foreground/50")}>
-                          {pctText(r.vs_base)}
-                        </td>
-                        <td className="text-right text-xs text-muted-foreground">{r.suggestion}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            {a.weight_history && a.weight_history.length > 1 ? (
+              <WeightHistoryChart points={a.weight_history} height={240} />
+            ) : (
+              <p className="py-8 text-center text-xs text-muted-foreground/40">历史建议持仓积累中，样本足够后自动显示</p>
+            )}
+            <p className="mt-1 border-t border-border/30 pt-1.5 text-[10px] leading-snug text-muted-foreground/40">
+              历史段 = 按当月最后一日择时分所在风险档位的锚点组合（按月采样，资产分无逐日序列，不含主动偏离）；
+              最后一点 = 当日实际目标权重（锚点 + tanh 主动偏离），与历史段口径不同。
+            </p>
             <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
               {a.rows.filter((r) => r.asset !== "cash").map((r) => (
                 <div key={r.asset} className="rounded-lg border border-border/30 bg-muted/10 p-2.5">
