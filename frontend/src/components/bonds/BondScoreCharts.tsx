@@ -50,6 +50,6 @@ export function BondScoreCharts({ history }: { history: BondScorePoint[] }) {
     {plot(false)}
     <label htmlFor={id} className="flex justify-between gap-2 text-xs text-muted-foreground"><span>滑动查看同一天</span><span>{current.date}</span></label>
     <input id={id} aria-label="查看得分与指数的历史日期" type="range" min="0" max={rows.length-1} value={index} onChange={e => setSelected(Number(e.target.value))} className="mt-1 h-6 w-full accent-primary" />
-    <p className="mt-2 text-xs leading-relaxed text-muted-foreground">回溯重算，非当时发布记录。50 为中性，≥55 偏强、≤45 偏弱；分数不是上涨概率。</p>
+    <p className="mt-2 text-xs leading-relaxed text-muted-foreground">分数为回溯重算，不是当时发布的记录，也不是上涨概率。50 为中性，55／45 为展示分界。</p>
   </div>;
 }

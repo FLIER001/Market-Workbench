@@ -49,3 +49,16 @@ frontend/tsconfig.tsbuildinfo
 # ── 研究/回测产物（体积大：outputs 344MB、research/output 530MB，不入库） ──
 outputs/
 research/output/
+
+# ── 本地草稿与工具产物（只存本地、不上传） ──────────────────────
+.impeccable/
+xhs-cards/
+.mcp.json
+DESIGN.md
+PRODUCT.md
+docs/handoffs/factor-research-v2.md
+docs/reviews/
+docs/research/2026-10-*.md
+research/*2026-10-*.md
+research/gold_validation_protocol_v3.md
+research/national_team_factor.md

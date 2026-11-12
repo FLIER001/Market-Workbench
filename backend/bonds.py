@@ -1006,7 +1006,7 @@ def _macro_state(cn: dict) -> dict:
     hist = _state_hist(parts)
     return {
         "key": "macro", "name": "宏观与通胀", "score": round(score, 2),
-        "meaning": "增长/通胀/信用相对历史位置；水平弱不等于边际走弱或低于预期",
+        "meaning": "增长、通胀与信用的历史相对位置。水平偏弱和边际在走弱是两件事。",
         "hist": hist,
         "parts": parts,
     }
@@ -1037,7 +1037,7 @@ def _policy_state(cn: dict) -> dict:
     score = _clamp(sum(p["score"] * p["weight"] for p in parts) / tw)
     return {
         "key": "policy", "name": "政策与融资", "score": round(score, 2),
-        "meaning": "财政支出与融资观察；融资量上升的债价方向需区分供给与需求",
+        "meaning": "观察财政支出和融资节奏。融资量上升对债价的影响，要看是供给在增加还是需求在承接。",
         "hist": _state_hist(parts),
         "parts": parts,
     }
@@ -1080,7 +1080,7 @@ def _funding_state(cn: dict, ib: dict | None = None) -> dict:
     score = _clamp(sum(p["score"] * p["weight"] for p in parts) / tw)
     return {
         "key": "funding", "name": "资金面", "score": round(score, 2),
-        "meaning": "资金价格与政策锚的相对位置；期限/主体不同的代理不能等同实际回购融资",
+        "meaning": "资金价格相对政策利率的位置。期限和主体不同的融资代理，不能直接当作实际回购成本。",
         "hist": _state_hist(parts),
         "parts": parts,
     }
@@ -1101,7 +1101,7 @@ def _supply_state(cn: dict) -> dict:
               "_direction": "down"}]
     return {
         "key": "supply_demand", "name": "政府债供给观察", "score": round(s, 2),
-        "meaning": "仅观察新增专项债发行节奏；非全市场净供给，机构需求尚未接入",
+        "meaning": "只看新增专项债的发行节奏，不是全市场净供给；机构需求还没接入。",
         "hist": _state_hist(parts),
         "parts": parts,
     }
@@ -1143,7 +1143,7 @@ def _curve_tp_state(curve: dict, index: dict) -> dict:
     score = _clamp(sum(p["score"] * p["weight"] for p in parts) / tw)
     return {
         "key": "curve_tp", "name": "曲线与动量观察", "score": round(score, 2),
-        "meaning": "期限利差与财富指数动量；斜率不等于期限溢价，补偿与趋势需分别观察",
+        "meaning": "期限利差与财富指数动量。期限利差是持有长债的补偿，不是期限溢价，两者要分开看。",
         "hist": _state_hist(parts),
         "parts": parts,
     }
@@ -1182,7 +1182,7 @@ def _credit_state(curve: dict, cn: dict) -> dict:
     score = _clamp(sum(p["score"] * p["weight"] for p in parts) / tw)
     return {
         "key": "credit", "name": "信用利差", "score": round(score, 2),
-        "meaning": "AAA利差位置；高利差既可能是补偿，也可能反映信用或流动性风险",
+        "meaning": "AAA 信用利差的位置。利差高可能是风险补偿，也可能反映信用或流动性风险。",
         "hist": _state_hist(parts),
         "parts": parts,
     }
@@ -1284,14 +1284,14 @@ def _positioning_state(d: dict | None = None) -> dict:
     if not parts:
         return {
             "key": "positioning", "name": "期货量仓热度", "score": None,
-            "meaning": "期货量仓数据源暂不可用，本状态留空",
+            "meaning": "期货量仓数据源暂不可用，这一状态留空。",
             "parts": [],
         }
     tw = sum(p["weight"] for p in parts)
     score = _clamp(sum(p["score"] * p["weight"] for p in parts) / tw)
     return {
         "key": "positioning", "name": "期货量仓热度", "score": round(score, 2),
-        "meaning": "国债期货参与热度（高持仓不等于净多头或看空；主力换月与市场扩容会影响分位）",
+        "meaning": "国债期货的参与热度。持仓高不代表净多头或看空；主力换月和市场规模变化会影响分位。",
         "hist": _state_hist(parts),
         "parts": parts,
     }
@@ -1311,7 +1311,7 @@ def _global_state(globe: dict) -> dict:
               "hist": spread, "_direction": "up"}]
     return {
         "key": "global", "name": "中美利率对照", "score": round(s, 2),
-        "meaning": "中美10Y利差的相对位置；包含中国自身利率，不是外生冲击或汇率预测",
+        "meaning": "中美 10 年期利差的相对位置。这个差额包含中国自身利率，不能当作外部冲击或汇率预测。",
         "hist": _state_hist(parts),
         "parts": parts,
     }
@@ -1662,12 +1662,15 @@ async def _build_insight(payload: dict | None = None) -> dict | str:
                "states": [{"name": s["name"], "meaning": s["meaning"],
                            "parts": [{k: v for k, v in p.items() if k != "hist"} for p in s["parts"]]}
                           for s in payload.get("framework", {}).get("states", [])]}
-    prompt = ("为债市研究工作台写数据解读。只解释给定快照里的原值、变化、静态收益、风险与缺口。"
-              "实验分数未经验证，禁止根据分数给出偏多/偏空或品种投资优先顺序。"
-              "持仓量没有净多空方向，期限利差不是期限溢价；Shibor是无担保融资代理。"
-              "数据过期/日期不齐必须点明；没有汇率、预期值或机构持仓数据，不得补写相关结论。"
-              "ranking字段写一段事实摘要（不作排序），各品种只解释收益拆解、久期风险与缺失，"
-              "每段不超过100字，避免复述实验分数。返回JSON：{\"ranking\":\"摘要\",\"segments\":{\"品种全名\":\"解读\"}}。\n"
+    prompt = ("为债市研究工作台写数据解读，读者是有债券基础但不看日报的个人研究者。"
+              "只解释给定快照里的原值、变化、静态收益、风险与数据缺口，不补写快照以外的数据。"
+              "ranking 写两三句事实摘要：先说曲线和资金利率的水平与方向，再说明哪几类数据日期不齐；"
+              "不排序、不建议买卖、不用实验分数判断多空。各品种只讲收益拆解、久期风险和缺失项，每段两句以内。"
+              "用白话写完整句子，不堆指标代号：写“银行间7天质押回购利率”而不写“DR007”，写“同业存单”而不写“NCD”；"
+              "必须保留的代码第一次出现时用中文说明，日期写成“11月10日”而不是“11-10”。"
+              "数据过期或日期不齐就直说；持仓量没有净多空方向；期限利差不是期限溢价；Shibor 是无担保报价。"
+              "没有汇率、预期值或机构持仓数据时不要写相关结论。"
+              "返回 JSON：{\"ranking\":\"摘要\",\"segments\":{\"品种全名\":\"解读\"}}。\n"
               + json.dumps(context, ensure_ascii=False))
     parsed = await chat_json(prompt)
     names = {r["segment"] for r in rows}
@@ -1676,7 +1679,7 @@ async def _build_insight(payload: dict | None = None) -> dict | str:
     texts = parsed.get("segments")
     if not isinstance(texts, dict) or not all(isinstance(texts.get(n), str) and texts[n].strip() for n in names):
         return ""
-    return {"ranking": parsed["ranking"].strip()[:180],
+    return {"ranking": parsed["ranking"].strip()[:220],
             "segments": {n: texts[n].strip()[:180] for n in names},
             "input_fingerprint": payload.get("input_fingerprint"), "generated_at": datetime.now(BEIJING).isoformat()}
 
