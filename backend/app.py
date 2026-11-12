@@ -18,7 +18,7 @@ import time as _time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,6 +31,7 @@ import astock
 import abnormal
 import bonds as bonds_layer
 import cache_runtime
+import candidate_pool
 import chat as chat_layer
 import cli_runtime
 import factor_lab as factor_research_layer
@@ -708,6 +709,46 @@ def stock_earnings_preview(code: str = Query(...), refresh: bool = Query(False))
         return {"data": stock_events.build_earnings_preview(code)}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"财报前瞻失败：{e}") from e
+
+
+class PoolCondition(BaseModel):
+    min: float | None = None
+    max: float | None = None
+
+
+class PoolRequest(BaseModel):
+    universe: str = "watch"
+    codes: list[str] = []
+    pe_ttm: PoolCondition | None = None
+    pb: PoolCondition | None = None
+    mcap_yi: PoolCondition | None = None
+    turnover_pct: PoolCondition | None = None
+    exclude_st: bool = False
+    exclude_halted: bool = False
+
+
+@app.get("/api/screening/pool/universes")
+def pool_universes():
+    """规则核对可选的指数范围（自选 / 持仓之外的那些）。"""
+    return {"data": [{"key": key, "label": spec["label"]} for key, spec in candidate_pool.UNIVERSES.items()]}
+
+
+@app.post("/api/screening/pool")
+def screening_pool(req: PoolRequest):
+    """规则核对候选池：按给定条件逐只核对，分「全部满足 / 有缺数据 / 有不满足」三组，不排名。"""
+    conditions: dict[str, Any] = {}
+    for key, cond in (("pe_ttm", req.pe_ttm), ("pb", req.pb),
+                      ("mcap_yi", req.mcap_yi), ("turnover_pct", req.turnover_pct)):
+        if cond and (cond.min is not None or cond.max is not None):
+            conditions[key] = {"min": cond.min, "max": cond.max}
+    conditions["exclude_st"] = req.exclude_st
+    conditions["exclude_halted"] = req.exclude_halted
+    try:
+        return {"data": candidate_pool.build_pool(req.universe, req.codes, conditions)}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"规则核对失败：{e}") from e
 
 
 @app.get("/api/calendar")
@@ -2160,15 +2201,19 @@ _factor_bt_cache: dict[str, tuple] = {}
 @app.get("/api/factor/backtest")
 def factor_backtest_endpoint(factor: str, start: str | None = None, end: str | None = None,
                              top_n: int = Query(50, ge=1, le=500), top_pct: float | None = Query(None, gt=0, le=1),
-                             freq: str = "monthly", cost: float = Query(1.0, ge=0, le=3)):
-    """探索性组合回测：只多等权 TopN、周/月调仓、T+1 成交，含 0/1/2/3x 成本压力。"""
+                             freq: str = "monthly", cost: float = Query(1.0, ge=0, le=3),
+                             sensitivity: bool = Query(False)):
+    """探索性组合回测：只多等权 TopN、周/月调仓、T+1 成交，含 0/1/2/3x 成本压力；
+    ``sensitivity=1`` 时另跑邻接持仓数（±10% / ±20%）看结论是否依赖这个旋钮。"""
     import factor_backtest
 
     try:
-        key = f"{factor}|{start}|{end}|{top_n}|{top_pct}|{freq}|{cost}|{_factor_input_version()}"
+        key = (f"{factor}|{start}|{end}|{top_n}|{top_pct}|{freq}|{cost}|"
+               f"{int(sensitivity)}|{_factor_input_version()}")
         if key not in _factor_bt_cache:
             _cache_put(_factor_bt_cache, key, factor_backtest.run_backtest(
-                factor, start, end, top_n=top_n, top_pct=top_pct, freq=freq, cost=cost))
+                factor, start, end, top_n=top_n, top_pct=top_pct, freq=freq, cost=cost,
+                sensitivity=sensitivity))
         return {"data": _factor_bt_cache[key]}
     except FileNotFoundError as e:
         raise HTTPException(400, str(e)) from e
