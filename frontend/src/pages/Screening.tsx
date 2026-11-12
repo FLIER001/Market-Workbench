@@ -2,16 +2,17 @@ import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { FundScreenPanel } from "@/components/funds/FundScreenPanel";
 import { StockScreenPanel } from "@/components/screening/StockScreenPanel";
+import { RulePoolPanel } from "@/components/screening/RulePoolPanel";
 import { cn } from "@/lib/utils";
 
-type ScreenTab = "funds" | "stocks";
+type ScreenTab = "funds" | "stocks" | "pool";
 
 const TAB_KEY = "vr-screening-tab";
 
 const loadTab = (): ScreenTab => {
   try {
     const saved = localStorage.getItem(TAB_KEY);
-    if (saved === "stocks") return saved;
+    if (saved === "stocks" || saved === "pool") return saved;
     return "funds";
   } catch {
     return "funds";
@@ -20,7 +21,8 @@ const loadTab = (): ScreenTab => {
 
 export function Screening() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const urlTab = searchParams.get("tab") === "stocks" ? "stocks" : null;
+  const rawTab = searchParams.get("tab");
+  const urlTab: ScreenTab | null = rawTab === "stocks" || rawTab === "pool" ? rawTab : null;
   const urlQuery = searchParams.get("q");
   // 带参跳转（如板块详情「带这批代码去筛选」）一次性消费，刷新不重复触发
   const [tab, setTab] = useState<ScreenTab>(urlTab ?? loadTab);
@@ -47,10 +49,11 @@ export function Screening() {
     <div>
 
 
-      <div className="mb-4 grid max-w-sm grid-cols-2 gap-2 rounded-xl border border-border/50 bg-muted/20 p-1.5">
+      <div className="mb-4 grid max-w-lg grid-cols-3 gap-2 rounded-xl border border-border/50 bg-muted/20 p-1.5">
         {([
           ["funds", "基金"],
           ["stocks", "个股"],
+          ["pool", "规则核对"],
         ] as const).map(([id, label]) => (
           <button
             key={id}
@@ -67,7 +70,9 @@ export function Screening() {
         ))}
       </div>
 
-      {tab === "funds" ? <FundScreenPanel /> : <StockScreenPanel prefill={prefill} />}
+      {tab === "funds" ? <FundScreenPanel />
+        : tab === "pool" ? <RulePoolPanel />
+        : <StockScreenPanel prefill={prefill} />}
     </div>
   );
 }

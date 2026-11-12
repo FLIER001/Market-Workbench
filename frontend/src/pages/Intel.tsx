@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { cancelBackgroundTask, startBackgroundTask, updateBackgroundTask, useBackgroundTask } from "@/lib/backgroundTasks";
 import { WatchlistEventJudgement } from "@/components/intel/WatchlistEventJudgement";
 import { useSWR } from "@/hooks/useSWR";
+import { useHoldingCodes } from "@/hooks/useHoldingCodes";
 
 const TABS = [
   { key: "investment-news", label: "市场新闻", icon: Rss, integrated: true, desc: "12 赛道全球公开 RSS 资讯（集成自 investment-news 仓库）" },
@@ -77,6 +78,29 @@ function InvestmentNewsPanel() {
   // digests 变化时持久化
   useEffect(() => { saveDigests(digests); }, [digests]);
 
+  // 「只看自选/持仓」：按标的名做文字匹配（资讯源本身没有个股字段），不做语义判断
+  const holdingCodes = useHoldingCodes();
+  const [onlyMine, setOnlyMine] = useState(false);
+  const [mineNames, setMineNames] = useState<string[]>([]);
+  const [mineErr, setMineErr] = useState<string | null>(null);
+  const mineCodes = Array.from(new Set([...loadWatch(), ...holdingCodes]));
+
+  useEffect(() => {
+    if (!onlyMine || mineNames.length > 0 || mineCodes.length === 0) return;
+    let alive = true;
+    api.quote(mineCodes.join(","))
+      .then((quotes) => {
+        if (!alive) return;
+        const names = Object.values(quotes)
+          .map((q) => (q?.name || "").trim())
+          .filter((name) => name.length >= 2);
+        setMineNames(Array.from(new Set(names)));
+        setMineErr(null);
+      })
+      .catch(() => { if (alive) setMineErr("自选标的名称没取到，暂时无法按名称匹配"); });
+    return () => { alive = false; };
+  }, [onlyMine, mineCodes.join(","), mineNames.length]);
+
   const refresh = async () => {
     setErr(null);
     await revalidate(true);
@@ -90,6 +114,15 @@ function InvestmentNewsPanel() {
   }, [revalidate]);
 
   const industries: Industry[] = data?.industries || [];
+  const mineItems = onlyMine
+    ? industries
+        .flatMap((ind) => ind.items.map((item) => ({ item, industry: ind.name })))
+        .filter(({ item }) => {
+          const text = `${item.zh || ""} ${item.title || ""} ${item.summary || ""}`;
+          return mineNames.some((name) => text.includes(name));
+        })
+        .sort((a, b) => String(b.item.time).localeCompare(String(a.item.time)))
+    : [];
   const cur = industries.find((i) => i.key === active) || industries[0];
   const hasData = !!data?.generated_at;
 
@@ -304,7 +337,7 @@ ${ctx}`;
     <div>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <span className="text-xs text-muted-foreground">
-          {hasData ? `${data!.stats.total_sources} 个公开源 · 近 ${data!.recent_days} 天` : "12 赛道 · 108 个公开源"}
+          {hasData ? `${data!.stats.total_sources} 个公开源 · 近 ${data!.recent_days} 天` : "12 赛道 · 106 个公开源"}
         </span>
         <div className="flex items-center gap-2">
           {hasData && (
@@ -330,6 +363,25 @@ ${ctx}`;
         </div>
       ) : (
         <>
+          {/* 只看自选 / 持仓 */}
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setOnlyMine(!onlyMine)}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors",
+                onlyMine ? "border-primary bg-primary/15 font-medium text-primary" : "border-border/60 text-muted-foreground hover:border-primary/50 hover:text-foreground",
+              )}
+            >
+              <Star className={cn("h-3 w-3", onlyMine && "fill-current")} />
+              只看自选 / 持仓
+            </button>
+            {onlyMine && (
+              <span className="text-[11px] text-muted-foreground">
+                {mineErr ?? `${mineCodes.length} 只标的 · 匹配 ${mineItems.length} 条 · 按名称文字匹配，不是语义判断`}
+              </span>
+            )}
+          </div>
+
           {/* 赛道筛选 —— 暖橙边框 pill */}
           <div className="mb-4 flex flex-wrap gap-2">
             {industries.map((ind) => (
@@ -420,9 +472,26 @@ ${ctx}`;
                 )}
               </div>
 
-              {/* 资讯列表 */}
+              {/* 资讯列表：默认看当前赛道；勾「只看自选 / 持仓」时跨赛道平铺匹配到的条目 */}
               <div className="space-y-2">
-                {cur.items.length === 0 ? (
+                {onlyMine ? (
+                  mineItems.length === 0 ? (
+                    <p className="py-6 text-center text-sm text-muted-foreground/60">
+                      {mineNames.length === 0 ? "正在取自选标的名称…" : "这批资讯里没有提到你自选或持仓的标的（按名称文字匹配，未命中不等于没有相关消息）"}
+                    </p>
+                  ) : (
+                    mineItems.map(({ item, industry: industryName }, i) => (
+                      <a key={i} href={item.url} target="_blank" rel="noreferrer"
+                        className="group flex items-baseline gap-3 border-b border-border/30 pb-2 text-sm last:border-0">
+                        <span className="w-24 shrink-0 font-mono text-xs text-muted-foreground/70">{item.time}</span>
+                        <span className="w-16 shrink-0 truncate text-xs text-muted-foreground">{item.source}</span>
+                        <span className="w-16 shrink-0 truncate text-[10px] text-muted-foreground/60">{industryName}</span>
+                        <span className="flex-1 group-hover:text-primary">{item.zh || item.title}</span>
+                        <ExternalLink className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground/0 group-hover:text-primary/60" />
+                      </a>
+                    ))
+                  )
+                ) : cur.items.length === 0 ? (
                   <p className="py-6 text-center text-sm text-muted-foreground/60">近 {data!.recent_days} 天该赛道暂无更新</p>
                 ) : (
                   cur.items.map((it, i) => (

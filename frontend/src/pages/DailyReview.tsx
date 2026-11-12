@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
-import { Sparkles, Loader2, AlertCircle, Flame, BarChart3, Globe, ChevronDown } from "lucide-react";
+import { Sparkles, Loader2, AlertCircle, Flame, BarChart3, Globe, ChevronDown, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { GlassCard } from "@/components/ui/GlassCard";
@@ -324,6 +324,32 @@ export function DailyReview() {
   const sectorArchive = [...sectors.slice(0, 5), ...sectors.slice(-5).reverse()];
   const sectorStrength = Math.max(1, ...sectorArchive.map((s) => Math.abs(s.net)));
 
+  // 收盘摘要：只用页面上已经取到的数据拼成一段可复制的文字，不另发请求、不生成判断。
+  const summaryInflow = sectors.filter((x) => x.net > 0).slice(0, 3);
+  const summaryOutflow = [...sectors].filter((x) => x.net < 0).sort((a, b) => a.net - b.net).slice(0, 3);
+  const summaryLines: string[] = [
+    `${today} 收盘${emotion?.date && emotion.date !== today ? `（情绪数据为 ${emotion.date}）` : ""}`,
+    indices.length
+      ? indices.map((i) => `${i.name} ${i.price}（${i.change_pct > 0 ? "+" : ""}${i.change_pct}%）`).join("；")
+      : "主要指数未取到",
+    sentiment
+      ? `涨跌家数：涨 ${sentiment.up} / 跌 ${sentiment.down} / 平 ${sentiment.flat}；涨停 ${sentiment.zt}（真实 ${sentiment.zt_real}）、跌停 ${sentiment.dt}（真实 ${sentiment.dt_real}）`
+      : "涨跌家数未取到",
+    emotion
+      ? `短线情绪：最高连板 ${emotion.max_boards} 板，连板 ${emotion.lianban_count} 只；封板率 ${emotion.seal_rate == null ? "—" : `${(emotion.seal_rate * 100).toFixed(1)}%`}，炸板率 ${emotion.break_rate == null ? "—" : `${(emotion.break_rate * 100).toFixed(1)}%`}，炸板 ${emotion.zb_count} 家`
+      : "短线情绪未取到",
+    summaryInflow.length ? `主力净流入前三：${summaryInflow.map((x) => `${x.name} ${Math.round(x.net)} 亿`).join("、")}` : "行业资金净流入未取到",
+    summaryOutflow.length ? `主力净流出前三：${summaryOutflow.map((x) => `${x.name} ${Math.round(x.net)} 亿`).join("、")}` : "行业资金净流出未取到",
+    turnover?.stocks?.length
+      ? `成交额前三：${turnover.stocks.slice(0, 3).map((x) => `${x.name} ${x.amount == null ? "—" : `${Math.round(x.amount / 1e8)} 亿`}`).join("、")}`
+      : "成交额榜未取到",
+    globalIdx.length
+      ? `外围：${globalIdx.map((g) => `${g.name} ${g.change_pct == null ? "—" : `${g.change_pct > 0 ? "+" : ""}${g.change_pct}%`}`).join("、")}`
+      : "外围未取到",
+  ];
+  const summaryText = summaryLines.join("\n");
+
+
   return (
     <div className="daily-archive-page">
       <PageHeader title="市场全景" actions={<>
@@ -376,6 +402,26 @@ export function DailyReview() {
             </div>}
         </div>
       </>} />
+
+      {/* 收盘摘要：页面数据的一句话汇总，可复制、可存入沉淀 */}
+      <section className="flex flex-col px-4 pb-3 pt-4 md:px-[22px]" aria-label="收盘摘要">
+        <div className="section-heading justify-between">
+          <h2>收盘摘要</h2>
+          <span className="text-[10px] font-normal tracking-normal text-muted-foreground">页面数据汇总 · 不含判断</span>
+        </div>
+        <div className="space-y-1 border-y border-border py-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
+          {summaryLines.map((line, i) => <p key={i}>{line}</p>)}
+        </div>
+        <div className="mt-2 flex items-center gap-2">
+          <button
+            onClick={() => { void navigator.clipboard?.writeText(summaryText); }}
+            className="inline-flex items-center gap-1.5 border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary"
+          >
+            <Copy className="h-3.5 w-3.5" /> 复制
+          </button>
+          <SaveNoteButton kind="收盘摘要" title={`收盘摘要 ${today}`} content={summaryText} />
+        </div>
+      </section>
 
       {/* 连续行情带：选中指数后在原位置展开分时。 */}
       <section className="border-y border-border bg-background" aria-label="大盘指数">

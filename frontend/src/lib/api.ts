@@ -522,6 +522,45 @@ export interface EarningsPreviewData {
   sources?: string[];
 }
 
+// —— 事件日历：自选与持仓接下来 7 / 30 / 90 天的预约披露、限售解禁、除权除息 ——
+export interface EventCalendarItem {
+  code: string; name: string; kind: string; date: string; detail: string; source: string;
+}
+export interface EventCalendarData {
+  as_of: string;
+  window: { start: string; end: string; days: number };
+  items: EventCalendarItem[];
+  codes: number;
+  gaps: string[];
+  sources: string[];
+}
+
+// —— 规则核对候选池：按条件逐只核对，只排除不排名 ——
+export interface PoolCheck {
+  key: string; label: string; unit: string;
+  value: number | string | null; min: number | null; max: number | null;
+  status: "pass" | "fail" | "missing"; reason: string | null;
+}
+export interface PoolRow {
+  code: string; name: string; price: number | null; change_pct: number | null;
+  verdict: "pass" | "fail" | "missing"; checks: PoolCheck[]; failed: string[]; missing: string[];
+}
+export interface PoolRequest {
+  universe: string; codes?: string[];
+  pe_ttm?: { min?: number; max?: number };
+  pb?: { min?: number; max?: number };
+  mcap_yi?: { min?: number; max?: number };
+  turnover_pct?: { min?: number; max?: number };
+  exclude_st?: boolean; exclude_halted?: boolean;
+}
+export interface PoolResult {
+  universe: string; scope_label: string; rows: PoolRow[];
+  groups: { pass: string[]; missing: string[]; fail: string[] };
+  counts: { pass: number; missing: number; fail: number };
+  conditions: Record<string, unknown>; gaps: string[];
+  as_of: string | null; source: string; note: string;
+}
+
 export interface TimingSignal {
   code: string;
   signal: "add" | "reduce" | "watch" | null;
@@ -2206,6 +2245,13 @@ export const api = {
     return get<AbnormalData>(`/stock/abnormal?${qs.toString()}`, SLOW_TIMEOUT_MS);
   },
   eventStudyKinds: () => get<{ key: string; label: string }[]>("/stock/event-study/kinds"),
+  poolUniverses: () => get<{ key: string; label: string }[]>("/screening/pool/universes"),
+  screeningPool: (body: PoolRequest) => request<PoolResult>("/screening/pool", "POST", body, SLOW_TIMEOUT_MS),
+  eventCalendar: (codes: string[], days = 30, refresh = false) => {
+    const qs = new URLSearchParams({ codes: codes.join(","), days: String(days) });
+    if (refresh) qs.set("refresh", "true");
+    return get<EventCalendarData>(`/calendar?${qs.toString()}`, SLOW_TIMEOUT_MS);
+  },
   eventStudy: (code: string, kind: string, refresh = false) => {
     const qs = new URLSearchParams({ code, kind });
     if (refresh) qs.set("refresh", "true");
@@ -2303,13 +2349,14 @@ export const api = {
   factorBuild: () => request<{ building: boolean; started: boolean }>("/factor/build", "POST"),
   factorEvaluate: (factor: string, start?: string, end?: string) =>
     get<FactorEvaluateData>(`/factor/evaluate?factor=${encodeURIComponent(factor)}${start ? `&start=${start}` : ""}${end ? `&end=${end}` : ""}`, 300_000),
-  factorBacktest: (params: { factor: string; top_n?: number; freq?: string; cost?: number; start?: string; end?: string }) => {
+  factorBacktest: (params: { factor: string; top_n?: number; freq?: string; cost?: number; start?: string; end?: string; sensitivity?: boolean }) => {
     const qs = new URLSearchParams({ factor: params.factor });
     if (params.top_n) qs.set("top_n", String(params.top_n));
     if (params.freq) qs.set("freq", params.freq);
     if (params.cost !== undefined) qs.set("cost", String(params.cost));
     if (params.start) qs.set("start", params.start);
     if (params.end) qs.set("end", params.end);
+    if (params.sensitivity) qs.set("sensitivity", "true");
     return get<FactorBacktestData>(`/factor/backtest?${qs.toString()}`, 300_000);
   },
   factorFields: () => get<FactorFieldsDoc>("/factor/fields"),
@@ -2397,9 +2444,21 @@ export interface FactorBacktestMetrics {
   n_days: number;
 }
 
+export interface FactorReport {
+  monthly_returns: Record<string, number>;
+  drawdowns: { peak: string; trough: string; depth: number | null; recovered: string | null; days: number | null; drawdown_days?: number; note?: string }[];
+  sharpe_ci: { sharpe: number | null; low: number | null; high: number | null; iters: number; level?: number; method?: string; note?: string };
+  segments: { label: string; start: string | null; end: string | null; days: number; return: number | null; annualized: number | null; sharpe: number | null; max_drawdown: number | null }[];
+  excess_total?: number | null;
+}
+export interface FactorSensitivityPoint {
+  top_n: number; is_current: boolean; ann_return: number | null; sharpe: number | null; max_drawdown: number | null;
+}
 export interface FactorBacktestData {
   factor: string;
   factor_name: string;
+  report?: FactorReport;
+  sensitivity?: { points: FactorSensitivityPoint[]; note: string };
   data_version?: string;
   params: { start: string; end: string; top_n: number; top_pct: number | null; freq: string; cost_multiplier: number };
   metrics: FactorBacktestMetrics;

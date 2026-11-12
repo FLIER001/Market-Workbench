@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 import factor_data
+import factor_report
 from factors import MIN_CROSS_SECTION, _factor_frame, _validate_window, factor_name_of
 
 COST_BPS = {"commission": 2.5, "stamp_sell": 5.0, "transfer": 0.1, "slippage": 10.0}
@@ -28,7 +29,7 @@ def run_backtest(factor: str, start: str | None = None, end: str | None = None,
                  freq: str = "monthly", cost: float = 1.0,
                  min_days_listed: int = 60, *,
                  frame: pd.DataFrame | None = None, panel: pd.DataFrame | None = None,
-                 save: bool = True, check=None) -> dict:
+                 save: bool = True, sensitivity: bool = False, check=None) -> dict:
     """跑一次组合回测。freq: weekly/monthly；top_pct 优先于 top_n（Top 20% = 0.2）。
 
     frame/panel/save 是快照路径的增量参数（默认行为不变）：研究快照回测复用已算好的因子帧，
@@ -75,6 +76,9 @@ def run_backtest(factor: str, start: str | None = None, end: str | None = None,
     bench_codes = set(first_bar.loc[first_bar <= w_start].index) & set(close_wide.columns)
 
     rebalance_dates = _rebalance_dates(window_dates, freq)
+    # 灵敏度要试几个持仓数：候选池一次按最大的那个取足，后面各点只换目标数，不再重算截面
+    target_sizes = _sensitivity_sizes(top_n, top_pct) if sensitivity else []
+    fetch_n = max([top_n, *target_sizes]) if target_sizes else top_n
     candidates_by_exec: dict[str, tuple[int, list[str]]] = {}  # 执行日 → (目标数, 按因子值降序候选)
     for sig in rebalance_dates:
         if check is not None:
@@ -90,7 +94,8 @@ def run_backtest(factor: str, start: str | None = None, end: str | None = None,
         if len(day) < MIN_CROSS_SECTION:
             continue
         n = max(1, int(round(len(day) * top_pct))) if top_pct else top_n
-        candidates_by_exec[exec_day] = (n, list(pd.Series(day[factor]).nlargest(n + 30).index.astype(str)))
+        pick = max(fetch_n, n)
+        candidates_by_exec[exec_day] = (n, list(pd.Series(day[factor]).nlargest(pick + 30).index.astype(str)))
     if not candidates_by_exec:
         raise ValueError("给定区间无有效调仓信号日")
 
@@ -116,7 +121,13 @@ def run_backtest(factor: str, start: str | None = None, end: str | None = None,
         "yearly_returns": chosen["yearly"],
         "biases": factor_data.BIAS_LABELS + ["探索级撮合：未模拟涨跌停及开盘排队限制；停牌持仓近似，非精算"],
         "timing_note": "T 日收盘因子排名 → T+1 开盘等权成交",
+        # 报表层：月度收益、最深回撤段、夏普 bootstrap 区间、分段稳定性
+        "report": factor_report.build(chosen["dates"], chosen["nav"], chosen["bench"]),
     }
+    if target_sizes:
+        payload["sensitivity"] = _sensitivity(candidates_by_exec, close_wide, open_wide, high_wide,
+                                              low_wide, window_dates, bench_codes, cost,
+                                              top_n=top_n, sizes=target_sizes, check=check)
     if save:
         _save_run(payload)
     return payload
@@ -275,3 +286,40 @@ def _save_run(payload: dict) -> None:
                       f, ensure_ascii=False)
     except OSError:
         pass  # 工件写失败不影响结果返回
+
+
+# ——— 邻近参数敏感度 ———
+
+
+def _sensitivity_sizes(top_n: int, top_pct: float | None) -> list[int]:
+    """持仓数上下浮动 ±10% / ±20% 的整数档位（去重、按升序），最多 5 个点。"""
+    if top_pct:
+        return []          # 既定仓位比例时，TopN 不是用户参数，不做这一维
+    sizes = {max(1, min(500, int(round(top_n * factor)))) for factor in (0.8, 0.9, 1.0, 1.1, 1.25)}
+    return sorted(sizes)
+
+
+def _sensitivity(candidates_by_exec, close_wide, open_wide, high_wide, low_wide,
+                 window_dates: list[str], bench_codes: set, cost: float, *,
+                 top_n: int, sizes: list[int], check=None) -> dict:
+    """同一套因子值、只改持仓数再跑一遍，给出各点的年化 / 夏普 / 最大回撤。
+
+    ⚠️ 这不是参数寻优：相邻参数都差不多，说明结论对这一个旋钮不敏感；差别很大，
+    说明结果离不开这个设定值。两者都不能说明未来表现。
+    """
+    points = []
+    for size in sizes:
+        scoped = {day: (min(size, len(cand)), cand) for day, (_, cand) in candidates_by_exec.items()}
+        run = _run_once(scoped, close_wide, open_wide, high_wide, low_wide,
+                        window_dates, bench_codes, cost, check=check)
+        points.append({
+            "top_n": size,
+            "is_current": size == top_n,
+            "ann_return": run["metrics"]["ann_return"],
+            "sharpe": run["metrics"]["sharpe"],
+            "max_drawdown": run["metrics"]["max_drawdown"],
+        })
+    return {
+        "points": points,
+        "note": "同一套因子值只改持仓数；相邻档位接近说明结论不依赖这一个旋钮，不代表未来表现",
+    }
