@@ -211,7 +211,9 @@ def _conditional_json(data, request: Request, response: Response):
     """
     fingerprint = "|".join(str(data.get(k)) if isinstance(data, dict) else ""
                            for k in _ETAG_FINGERPRINT_KEYS)
-    etag = '"%s"' % hashlib.md5(fingerprint.encode()).hexdigest()
+    # SHA-256 而不是 MD5：这只是缓存校验值（不是安全边界），但弱哈希在静态检查里
+    # 一律会被标出来，用强哈希没有代价，也省得每次都要判断这一次算不算敏感场景。
+    etag = f'"{hashlib.sha256(fingerprint.encode()).hexdigest()}"'
     headers = {"ETag": etag, "Cache-Control": "no-cache"}   # 每次回源校验，未变只回 304
     response.headers.update(headers)
     if request.headers.get("if-none-match") == etag:
