@@ -162,7 +162,7 @@ Backend modules are separated by topic, score rebuilds use short-lived worker pr
 
 Market Workbench organizes public data and information entered by the user. Its output is for research reference only and is not investment advice or a promise of returns. Verify sources and timestamps, and make decisions independently.
 
-Methodology and limitations are documented for [bonds V2](research/bonds_methodology_v2.md), [gold V3](research/gold_methodology_v3.md), and the [factor lab API](docs/research/factor-lab-api.md).
+Methodology and limitations for bonds V2 and gold V3 live in local research notes that are not part of the repository; the factor lab API contract is in [the architecture notes](docs/architecture.md).
 
 ## Acknowledgements and license
 

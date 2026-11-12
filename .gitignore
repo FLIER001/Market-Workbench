@@ -46,11 +46,12 @@ frontend/tsconfig.tsbuildinfo
 # ── Pi 本地会话数据（只存本地、不上传） ──────────────────────
 .pi/
 
-# ── 研究/回测产物（体积大：outputs 344MB、research/output 530MB，不入库） ──
+# ── 研究/回测产物（体积大：outputs 344MB、docs/research/output 530MB，不入库） ──
 outputs/
-# research/ 全目录只存本地：研究协议、复盘、回测产物均不入库。
-# 2026-11-12 把 28 个历史跟踪文件移出索引，本地文件保留。
-research/
+# docs/research/ 全目录只存本地：研究协议、方法论、复盘、回测产物均不入库。
+# 2026-11-12 把原 research/ 的全部文件搬到这里，32 个文件不在库里。
+# 已入库的架构、配置、上手文档与 screenshots/ 不受此处影响。
+docs/research/
 
 # ── 本地草稿与工具产物（只存本地、不上传） ──────────────────────
 .impeccable/
@@ -58,6 +59,5 @@ xhs-cards/
 .mcp.json
 DESIGN.md
 PRODUCT.md
-docs/handoffs/factor-research-v2.md
+docs/handoffs/
 docs/reviews/
-docs/research/2026-10-*.md

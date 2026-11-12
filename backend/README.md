@@ -34,7 +34,7 @@ OpenAPI is available at <http://127.0.0.1:8900/docs> while the service is runnin
 | Funds | `/api/funds/search`, `/api/funds/quote`, `/api/funds/nav/{code}`, `/api/funds/metrics/{code}`, `/api/funds/profile/{code}`, `/api/funds/screen` |
 | Market and research | `/api/market/*`, `/api/radar*`, `/api/sector-scores*`, `/api/plate-scores*`, `/api/pulse*`, `/api/event*`, `/api/source-health` |
 | Thematic | `/api/gold/*`, `/api/oil/*`, `/api/bonds/*`, `/api/fedwatch`, `/api/allocation*` |
-| Factor research | `/api/factor/research/*` (see [factor lab API](../docs/research/factor-lab-api.md)) |
+| Factor research | `/api/factor/research/*` (see [factor lab API contract](../docs/architecture.md#因子研究接口契约)) |
 | Securities | `/api/search`, `/api/quote`, `/api/kline*`, `/api/valuation*`, `/api/financials`, `/api/reports`, `/api/announcements`, `/api/news` |
 | Capital and events | `/api/margin`, `/api/fund-flow`, `/api/holders`, `/api/dividend`, `/api/dragon-tiger`, `/api/lockup`, `/api/blocks` |
 | Global markets | `/api/global/indices`, `/api/global/minute`, `/api/global/stock`, `/api/global/hk/cashflow` |

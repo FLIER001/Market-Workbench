@@ -131,6 +131,7 @@ MCP Server 使用与网页相同的数据工具层，本地调用不需要 API k
 | `MW_API_KEY` | 空 | 设置后为 API 启用 Bearer 鉴权，健康检查除外 |
 | `MW_ALLOW_REGISTRATION` | 关闭 | 设为 `1` 时允许网页注册 |
 | `MW_DATA_PROXY` | 关闭 | 设为 `1` 时数据请求使用系统代理 |
+| `MW_UPDATE_REMOTE` / `MW_UPDATE_BRANCH` | `origin` / `main` | 设置页「程序更新」拉取的上游 |
 
 完整配置、可选数据源密钥和公网部署要求见 [配置说明](docs/configuration.md) 与 [环境变量示例](backend/.env.example)。公开部署前，至少收紧 CORS、设置强 API key，并在反向代理上启用 HTTPS。
 
@@ -162,7 +163,7 @@ cd frontend && npm test && npm run build
 
 Market Workbench 整理公开数据和用户自行录入的信息，输出仅供研究参考，不构成投资建议或收益承诺。使用前应核对数据来源与时点，并独立判断。
 
-债市、黄金与因子研究的方法和限制分别见 [债市 V2](research/bonds_methodology_v2.md)、[黄金 V3](research/gold_methodology_v3.md) 与 [因子实验台 API](docs/research/factor-lab-api.md)。
+债市 V2 与黄金 V3 的方法和限制写在本地研究文档里，不入库；因子实验台的接口契约见 [因子研究接口契约](docs/architecture.md#因子研究接口契约)。
 
 ## 致谢与许可
 

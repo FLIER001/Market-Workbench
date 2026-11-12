@@ -72,7 +72,7 @@ async function labFetch<T>(path: string, method: "GET" | "POST" | "PUT" = "GET",
 const id = (value: string) => encodeURIComponent(value);
 
 // ---------------------------------------------------------------------------
-// 契约类型（docs/research/factor-lab-api.md）
+// 契约类型（docs/architecture.md 的「因子研究接口契约」）
 // ---------------------------------------------------------------------------
 
 export type Phase = "development" | "validation" | "holdout";
