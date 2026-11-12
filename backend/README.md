@@ -38,6 +38,7 @@ OpenAPI is available at <http://127.0.0.1:8900/docs> while the service is runnin
 | Securities | `/api/search`, `/api/quote`, `/api/kline*`, `/api/valuation*`, `/api/financials`, `/api/reports`, `/api/announcements`, `/api/news` |
 | Capital and events | `/api/margin`, `/api/fund-flow`, `/api/holders`, `/api/dividend`, `/api/dragon-tiger`, `/api/lockup`, `/api/blocks` |
 | Global markets | `/api/global/indices`, `/api/global/minute`, `/api/global/stock`, `/api/global/hk/cashflow` |
+| Extended data | `/api/extra` (endpoint list), `/api/extra/{endpoint}` — 58 endpoints: futures & commodities, convertible bonds, event-driven, macro rates & calendar, index constituents/weights/valuation, ETF shares, ST list, SSE e-interaction, Tencent ticks, TDX after-close package, BSE quote; plus overseas layers (ECB/BIS/NY Fed/Treasury, VIX term structure, FINRA short interest, SEC Form 4 & 13F, TWSE, EIA, BLS US macro, Yahoo K-line) |
 
 Several market sources are fetched on demand and may be delayed, unavailable or rate-limited. API responses include the data that is currently available; callers should not turn them into trading recommendations.
 
@@ -50,7 +51,7 @@ claude mcp add market-workbench -- \
   "$(pwd)/.venv/bin/python" "$(pwd)/mcp_server.py"
 ```
 
-The MCP server reads the same version and uses the same data-tool layer as the HTTP API, exposing 42 tools. It does not need an API key for a local installation.
+The MCP server reads the same version and uses the same data-tool layer as the HTTP API, exposing 43 tools. It does not need an API key for a local installation.
 
 ## Configuration
 
@@ -64,6 +65,7 @@ Copy [`.env.example`](.env.example) if you need configuration. Local development
 | `MW_REPORTS_DIR` | Overrides the report archive directory only |
 | `MW_DATA_PROXY` | Set to `1` only when data sources must use the system proxy |
 | `IWENCAI_API_KEY` | Optional key for iWenCai report search |
+| `MW_SEC_CONTACT` | Your real name and email, sent as the User-Agent for SEC and BLS requests. Required for the SEC Form 4 / 13F and BLS US-macro endpoints; those sources reject undeclared automated clients. |
 
 See the root [configuration guide](../docs/configuration.md) for storage and deployment details.
 
