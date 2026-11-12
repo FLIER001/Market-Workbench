@@ -97,6 +97,62 @@ def test_snapshot_dir_respects_vr_data_dir(monkeypatch, tmp_path):
     assert p.name == "pulse_snapshot.json"
 
 
+def test_polymarket_yes_leg_paired_not_first():
+    """outcomes 顺序不保证是 ["Yes","No"]：概率和趋势 token 都必须跟着 Yes 腿走。"""
+    from pulse import polymarket_signals
+
+    base = {"question": "Q?", "volume24hr": 100}
+    normal = dict(base, outcomes='["Yes","No"]', outcomePrices='["0.62","0.38"]',
+                 clobTokenIds='["tok-yes","tok-no"]')
+    reversed_ = dict(base, outcomes='["No","Yes"]', outcomePrices='["0.38","0.62"]',
+                     clobTokenIds='["tok-no","tok-yes"]')
+    a = polymarket_signals._shape(normal, "宏观经济")
+    b = polymarket_signals._shape(reversed_, "宏观经济")
+    assert a is not None and b is not None
+    # 趋势图 token 必须跟着 Yes 腿：逆序输入的期望值就是正序数组的第 0 项
+    expected_token = json.loads(normal["clobTokenIds"])[0]
+    assert a["prob_yes"] == b["prob_yes"] == 0.62
+    assert a["token_id_yes"] == expected_token
+    assert b["token_id_yes"] == expected_token
+
+    # 认不出 Yes 腿（Up/Down、长度对不上）就丢弃，不猜方向
+    assert polymarket_signals._shape(
+        dict(base, outcomes='["Up","Down"]', outcomePrices='["0.4","0.6"]'), "宏观经济") is None
+    assert polymarket_signals._shape(
+        dict(base, outcomes='["Yes"]', outcomePrices='["0.6","0.4"]'), "宏观经济") is None
+
+
+def test_taxonomy_sports_metadata_beats_country_substring():
+    """"borussia" 含 "russia"：体育元数据优先于关键词（上游 issue #21）。"""
+    assert market_taxonomy.classify("Will Borussia Dortmund win the Bundesliga?") == "体育"
+    assert market_taxonomy.classify("Will Russia default on debt?", "Sports") == "体育"
+    # 真正的地缘政治不受影响
+    assert market_taxonomy.classify("Will Russia invade Ukraine?") == "地缘政治"
+    assert market_taxonomy.classify("Will Iran attack Israel?", "World") == "地缘政治"
+
+
+def test_one_source_failure_names_the_truthful_cause(monkeypatch, tmp_path):
+    """判据看「成功的源数」，不是「有没有 item」：一个报错、另一个返回 0 条，
+    不能报成「两个源都失败」——那是假事实。"""
+    from pulse import market_pulse
+
+    monkeypatch.setenv("MW_DATA_DIR", str(tmp_path))
+
+    async def boom(force):
+        raise RuntimeError("polymarket 502")
+
+    monkeypatch.setattr(market_pulse, "_shaped_polymarket", boom)
+    monkeypatch.setattr(market_pulse.kalshi_signals, "fetch_shaped",
+                        lambda force: asyncio.sleep(0, result=[]))
+
+    with pytest.raises(ValueError) as exc:
+        asyncio.run(market_pulse._build())
+    msg = str(exc.value)
+    assert "Polymarket 取数失败" in msg
+    assert "Kalshi 返回 0 条" in msg
+    assert "两个源都失败" not in msg
+
+
 def test_empty_source_does_not_overwrite_snapshot(monkeypatch, tmp_path):
     from pulse import market_pulse
 

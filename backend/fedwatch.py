@@ -543,10 +543,21 @@ def _pm_events() -> list[dict]:
                 label = mk.get("groupItemTitle") or (mk.get("question") or "")[:80]
                 if not label or not prices:
                     continue
+                # outcomes 顺序不保证是 ["Yes", "No"]（同 Polymarket pulse）。直接取
+                # prices[0] 在顺序反了时就是一个方向反了的概率；对不上就留空，不猜。
                 try:
-                    yes = float(prices[0])
-                except (TypeError, ValueError, IndexError):
-                    yes = None
+                    outcomes = json.loads(mk.get("outcomes") or "[]")
+                except Exception:  # noqa: BLE001
+                    outcomes = []
+                yes = None
+                if isinstance(outcomes, list) and len(outcomes) == len(prices):
+                    for name, px in zip(outcomes, prices, strict=True):
+                        if str(name).strip().lower() == "yes":
+                            try:
+                                yes = float(px)
+                            except (TypeError, ValueError):
+                                yes = None
+                            break
                 markets.append({
                     "label": label,
                     "yes": yes,

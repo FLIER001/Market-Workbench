@@ -123,6 +123,21 @@ def _parse_json_field(raw: Any, default: Any) -> Any:
     return raw if raw is not None else default
 
 
+def _yes_index(outcomes: list[Any], prices: list[Any]) -> int | None:
+    """`outcomes` 里 Yes 腿的下标；找不到或两个数组对不上返回 None。
+
+    Polymarket 的 `outcomes` 顺序**不保证**是 ["Yes", "No"]——直接取 `prices[0]`
+    在顺序反过来时会把概率报成反向的，且不报错。认不出 Yes 就不猜（返回 None，
+    调用方丢弃该条），token 也按同一下标取，否则趋势图画的是 No 那条线。
+    """
+    if not outcomes or not prices or len(outcomes) != len(prices):
+        return None
+    for i, name in enumerate(outcomes):
+        if str(name).strip().lower() == "yes":
+            return i
+    return None
+
+
 def _classify(question: str) -> str | None:
     q = question.lower()
     for topic, keywords in TOPIC_KEYWORDS.items():
@@ -169,7 +184,7 @@ def _cap_topics(markets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     counts: dict[str, int] = {}
     kept: list[dict[str, Any]] = []
     for market in ordered:
-        topic = market.get("topic")
+        topic: str = market.get("topic") or ""
         cap = TOPIC_CAPS.get(topic)
         if cap is not None:
             counts[topic] = counts.get(topic, 0) + 1
@@ -179,24 +194,30 @@ def _cap_topics(markets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return kept
 
 
-def _shape(market: dict[str, Any], topic: str) -> dict[str, Any]:
+def _shape(market: dict[str, Any], topic: str) -> dict[str, Any] | None:
     outcomes = _parse_json_field(market.get("outcomes"), [])
     prices = _parse_json_field(market.get("outcomePrices"), [])
     token_ids = _parse_json_field(market.get("clobTokenIds"), [])
+    yes = _yes_index(outcomes, prices)
+    prob_yes = _safe_float(prices[yes]) if yes is not None else None
+    if yes is None or prob_yes is None:
+        # 认不出 Yes 腿（或价格解析不出）就丢弃，不猜：一条方向反了的概率
+        # 比少一条更难发现，前端仍会把它当「Yes 概率」显示。
+        return None
     return {
         "question": market.get("question"),
         "question_zh": None,  # filled in by the translation step
         "topic": topic,
         "outcomes": outcomes,
         "prices": [_safe_float(p) for p in prices],
-        "prob_yes": _safe_float(prices[0]) if prices else None,
+        "prob_yes": prob_yes,
         "change_24h": _safe_float(market.get("oneDayPriceChange")),
         "change_7d": _safe_float(market.get("oneWeekPriceChange")),
         "volume_24h": _safe_float(market.get("volume24hr")),
         "liquidity": _safe_float(market.get("liquidity")),
         "end_date": market.get("endDateIso") or market.get("endDate"),
         "slug": market.get("slug"),
-        "token_id_yes": token_ids[0] if token_ids else None,
+        "token_id_yes": token_ids[yes] if yes < len(token_ids) else None,
     }
 
 
@@ -272,7 +293,10 @@ async def fetch_markets(topics: list[str] | None = None, pages: int = 3, force: 
         topic = _classify(market.get("question") or "")
         if topic is None:
             continue
-        shaped.append(_shape(market, topic))
+        row = _shape(market, topic)
+        if row is None:
+            continue
+        shaped.append(row)
 
     shaped = _cap_clusters(shaped)
     shaped = _cap_topics(shaped)
@@ -281,7 +305,7 @@ async def fetch_markets(topics: list[str] | None = None, pages: int = 3, force: 
     # LLM never hangs the panel — degrades to English-only, translations self-heal
     # into the cache on later loads once the LLM responds.
     try:
-        from polymarket_translate import translate_questions
+        from .pulse_translate import translate_questions
 
         # translate_questions bounds only the LLM (uncached) work internally and
         # always returns cache hits — so cached titles show Chinese even when the

@@ -34,6 +34,7 @@ import cache_runtime
 import candidate_pool
 import chat as chat_layer
 import cli_runtime
+import extra_api
 import factor_lab as factor_research_layer
 import factor_lab_routes
 import fedwatch as fedwatch_layer
@@ -1348,6 +1349,30 @@ def indices():
         return {"data": astock.index_quote()}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"指数行情异常：{e}") from e
+
+
+# ---- 新端点（a-stock-data v3.8~v3.10 移植）统一入口 ----
+# 一个端点表 + 一个调度函数（见 extra_api）；参数从 query 进，按函数签名强制转换。
+@app.get("/api/extra")
+def extra_list():
+    """可用端点与各自参数（自描述，供前端/MCP 发现）。"""
+    return {"data": extra_api.describe()}
+
+
+@app.get("/api/extra/{name}")
+def extra_call(name: str, request: Request):
+    """调一个数据端点：参数名与函数签名一致，如 ?code=600519&period=day。
+
+    ValueError → 400（参数错 / 确实没有数据）；RuntimeError → 502（上游不可用或格式漂移）。
+    两类严格分开：把「参数写错」当 502 会让调用方以为数据源挂了，反过来则会把源故障
+    当成「这只票没有资料」。
+    """
+    try:
+        return {"data": extra_api.call(name, dict(request.query_params))}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(502, f"{name} 数据源异常：{e}") from e
 
 
 @app.get("/api/quote")

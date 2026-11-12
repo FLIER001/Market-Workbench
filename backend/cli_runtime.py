@@ -185,16 +185,17 @@ def run_cli_stream(kind: str, system_prompt: str, user_prompt: str):
 
         def _drain_err(stderr=proc.stderr):
             try:
-                for ln in stderr:
+                for ln in (stderr or []):
                     err_tail.append(ln)
             except Exception:
                 pass
 
         err_thread = threading.Thread(target=_drain_err, daemon=True)
         err_thread.start()
-        if stdin_payload is not None:
+        stdin_stream = proc.stdin
+        if stdin_payload is not None and stdin_stream is not None:
             try:
-                proc.stdin.write(stdin_payload)
+                stdin_stream.write(stdin_payload)
             except BrokenPipeError:
                 pass
         if proc.stdin:
@@ -207,7 +208,7 @@ def run_cli_stream(kind: str, system_prompt: str, user_prompt: str):
 
         def _pump(stdout=proc.stdout):
             try:
-                for ln in stdout:
+                for ln in (stdout or []):
                     q.put(ln)
             except Exception:
                 pass

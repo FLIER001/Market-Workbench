@@ -12,6 +12,7 @@ chat.py 里的工具定义。给「订阅接入 / 高手」通道用：agent 用
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sys
 
@@ -47,12 +48,13 @@ def _force_utf8_stdio() -> None:
     （后者能防崩，但会把中文全部变成 Unicode 转义序列，体积翻几倍）。
     """
     for stream in (sys.stdin, sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
-        except (AttributeError, ValueError):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
             # 极老的 Python 或被替换过的流：没有 reconfigure 就跳过，
             # 至少不要因为这一步把服务弄挂。
-            pass
+            continue
+        with contextlib.suppress(ValueError):
+            reconfigure(encoding="utf-8", errors="replace")
 
 
 def _send(obj: dict) -> None:

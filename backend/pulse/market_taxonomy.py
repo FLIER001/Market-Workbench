@@ -61,6 +61,9 @@ _SPORTS = ["nba", "nfl", " mlb", "world series", "super bowl", "stanley cup", "t
            "la liga", "champions league", "grand prix", " pga ", "esports", " lol ", "cs2", "valorant",
            "dota", " vs.", " vs ", "world cup", "fifa", "golf", "tournament", "playoff", "champion",
            "basketball finals", "memorial tournament"]
+# 标题里的体育实体名会撞到国家名子串的（"borussia" 含 "russia"）。体育元数据
+# 优先于关键词（上游 issue #21），这里只列已知会撞的，不做全量球队表。
+_SPORTS_ENTITIES = ["borussia", "dortmund", "mönchengladbach", "monchengladbach"]
 _ENT = ["movie", "oscar", "grammy", "box office", "taylor swift", "tweet", "person of the year",
         "rotten tomatoes", "billboard", "spotify", "netflix", "love island", "celebrity", "album",
         " song ", "emmy", "what will"]
@@ -98,6 +101,11 @@ def classify(question: str | None, kalshi_category: str | None = None) -> str:
     indices (bitcoin → 加密 not 股指), monetary before macro (fed rate → 货币政策).
     """
     t = " " + (question or "").lower() + " "
+    # 体育元数据优先于标题子串（上游 issue #21）：Kalshi 自带 category，Polymarket
+    # 没有，所以这里再用一份「会被国家名子串误命中」的实体清单兜底——
+    # "borussia"（多特蒙德）含 "russia"，按子串匹配会落进地缘政治。
+    if kalshi_category == "Sports" or _has(t, _SPORTS_ENTITIES):
+        return "体育"
     # World Cup / FIFA is unambiguously sports even when it names a country
     # ("Will Iran win the World Cup?" must not land in 地缘政治 via the "iran" keyword).
     if "world cup" in t or "fifa" in t:

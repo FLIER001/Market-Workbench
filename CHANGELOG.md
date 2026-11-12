@@ -135,10 +135,70 @@
 - 资讯雷达移植条目层去重（investment-news v1.0.3）：URL 归一化剥 13 个白名单跟踪
   参数（urlencode 重转义防误合并）+ 标题 48h 窗口去重（无时间戳不去重、基准时间随
   保留条目刷新）；源清单去掉 Engadget / 少数派两个跨栏重复源（108→106）。
-- 内嵌 a-stock-data 副本对齐上游 v3.7.1（筹码分布 CYQ、估值历史等 54 端点文档）。
+## 未发布（2026-11-11 上游对账）
+
+- 内嵌 a-stock-data 副本对齐上游 v3.10.4（十五层 87 端点 34 数据源；相对 v3.7.1 新增
+  期货与大宗商品/事件驱动/可转债三层、宏观利率扩展、腾讯当日逐笔、通达信盘后包等
+  33 个入口，见其 CHANGELOG）。四个文档文件与上游逐字一致，LICENSE 与 assets 未变。
+  v3.10.3/3.10.4 两个补丁（上证e互动相对时间 #61、基金复权因子 s/u #64）此前未移植：
+  本次新增的 `astock_new` 已包含修正后的实现。
+- **新端点接入产品（数据层 + HTTP + MCP）**：`backend/astock_new.py` 逐字移植上游 v3.8–v3.10
+  的 19 个标记块，`backend/extra_api.py` 提供端点表、签名驱动的参数转换与结果序列化，
+  对外两处入口：`GET /api/extra`（端点自描述）+ `GET /api/extra/{endpoint}`（调用），
+  MCP/AI 侧一个 `query_extra` 工具（目录从 `extra_api.describe()` 自动生成，不手抄）。
+  共 33 个端点：期货与大宗（日行情/期权/持仓排名/实时/日 K/A50/上海金）、可转债、
+  事件驱动（业绩预告/机构调研/增减持/回购/质押/新股）、中债曲线/回购定盘/LPR/宏观日历、
+  指数成分/权重/估值、ETF 份额、ST 名单、上证e互动、交易日历、两融官方备胎、
+  腾讯逐笔/盘后包/北交所快照、新浪研报、华尔街见闻、新闻联播。
+  - 参数不认识就报错、不静默丢弃（丢弃会让调用方以为筛过条件）；`ValueError`→400 与
+    `RuntimeError`→502 严格分开，避免把源故障当成「这只票没有资料」。
+  - 东财请求委托 `astock.em_get`（直连优先 + 降级系统代理）；上游自带的 `em_get` 只有直连，
+    实测 `st_stock_list` 因此超时并退到备胎。各交易所整表类端点（ST/盘后包/可转债/LPR/ETF 份额）
+    加 10 分钟同参缓存，避免每次刷新都重拉几十万行。
+  - `requirements.txt` 新增 `baostock`：ST 名单在东财风险警示板不可达时按上游设计退到它
+    （只覆盖沪深，`attrs.coverage` 会写明）。
+- **海外新层接入产品**：`backend/gstock_new.py` 移植 global-stock-data v2.1–v2.3 的新端点，
+  与 `astock_new` 共用同一套 `/api/extra` 与 `query_extra`（端点表分两张，因为海外源的
+  可用性完全不同：BLS/财政部/纽约联储可达，Yahoo 会 429，个别交易所直连不通）。
+  共 25 个端点：全球利率·汇率·央行（政策利率 / 欧央行序列与汇率与关键利率与收益率曲线 /
+  纽约联储 / 美联储 H 系列 / 财政部 FiscalData）、Yahoo 全历史 K 线、VIX 期限结构与
+  波动率指数、FINRA 做空余额（全表 / 单票 / 排行）、SEC Form 4 内部人交易与 13F 持仓、
+  台股（证交所 / 柜买）、EIA 能源价格与库存、美国宏观（23 指标 / 最新一期 / BLS 发布日程 /
+  每周失业金 / 任意序列号）。合计 58 个端点。
+  - `MW_SEC_CONTACT`（新增环境变量）：SEC 与 BLS 都要求 User-Agent 留可联系的真实姓名
+    与邮箱，不配则这几类端点直接拒请求。产品侧只从环境变量读，不把联系方式写进仓库；
+    未配时保留上游的明确报错而不是伪装成「没数据」。
+  - **BLS 类端点缓存放宽到 1 小时**：免 key 版每天只有 25 次请求、每次 25 个序列、10 年，
+    超了会被封。`us_macro` / `us_macro_latest` / `bls_series` / `bls_release_calendar`
+    单独走 1 小时同参缓存（与上游自带的 `_BLS_TTL = 3600` 对齐），其余端点仍为 10 分钟。
+    顺带修掉 `_coerce()` 的一个真实缺陷：参数类型排除项拿枚举与字符串比较，
+    `**kwargs` 被当成必填参数——带可变参数的端点会直接报「缺少必填参数」。
+- 内嵌 global-stock-data 副本对齐上游 v2.3.0（自 v2.0.3，十三层 30+ 端点 11 源 →
+  十七层 50+ 端点 18 源）。新增全球利率·汇率·央行（Layer 13）、台股与能源
+  （Layer 14/15）、美国宏观 BLS（Layer 16），以及 VIX 期限结构、FINRA 做空余额、
+  SEC Form 4 / 13F；Yahoo K 线在 v2.1.0 修掉「`range=max` 实际返回季线被当日线用」
+  等数据正确性问题。同时删去上游已移除的 `.github/FUNDING.yml`。
+- global-stock-data 的 Yahoo K 线修复不影响本仓库：`backend/gstock.py` 设计上只并入
+  东财域内子集（文件头已写明「Yahoo / SEC 等国外源不并入」），无 K 线解析代码；
+  `backend/fedwatch.py` 虽拉 Yahoo chart，但只用 `range=5d` 与 `meta.regularMarketPrice`，
+  不读蜡烛数组，不中招。
+- 资讯雷达同步 investment-news v1.0.4 的文档更正（该版程序零改动）：源数量统一为
+  106（`backend/newsradar.py` 注释、资讯页无数据时的兜底文案原写 108）。
+- 全球预期修复 3 处从 globalpercent 移植时带来的数据正确性问题（上游仓库已删除，无补丁可拉，
+  这里是按继任产品 Vibe-Research 的审计结论回补）：
+  - **Polymarket `prob_yes` 取错腿**：`outcomes` 顺序不保证是 `["Yes","No"]`，原实现直接取
+    `outcomePrices[0]`，顺序反了就是一条方向相反的概率且不报错。改为把两个数组配对、只认
+    Yes 腿，趋势图的 `token_id_yes` 也按同一下标取（原来会画成 No 那条线）；认不出 Yes 腿
+    的合约直接丢弃，不猜。
+  - **`Borussia` 命中 `russia`**：体育元数据优先于标题子串（Kalshi 自带 `category`，
+    Polymarket 用会被国家名子串误命中的实体清单兜底）。
+  - **「两个源都失败」判据**：改用成功的源数并逐个写明「取数失败」还是「返回 0 条」，
+    不再把「一个源报错、另一个本轮无合约」说成两个都失败。
+  - 同类的 `outcomePrices[0]` 取 Yes 写法在 `backend/fedwatch.py`（Polymarket FOMC）一并修正。
 - 上游对账：webapp 线遗留清零（v0.3.x 已于 2026-08-11 同步；GPU 租金信号页评估后
   不引入——海外算力租金数据与 A 股主线关联弱，恢复路径已记录）。上游 v1.0.x 已重写为
-  Codex Harness Agent 产品并删除 backend/frontend，git merge 永久不可行。
+  Codex Harness Agent 产品并删除 backend/frontend，git merge 永久不可行；2026-11-11
+  复核仍为 v2.2.6（差 147 提交）、无 `backend/` 与 `frontend/` 重叠。
   对账文档：`docs/upstream-sync/2026-09-03-v1.0.x-对账-webapp遗留移植.md`
 
 ## v1.8.0 — 2026-08-18

@@ -23,9 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import kalshi_signals
-from . import market_taxonomy
-from . import polymarket_signals
+from . import kalshi_signals, market_taxonomy, polymarket_signals
 from .pulse_insight import (
     merge_insight,
     module_insight,
@@ -72,6 +70,8 @@ async def _shaped_polymarket(force: bool) -> list[dict[str, Any]]:
         question = market.get("question") or ""
         module = market_taxonomy.classify(question)
         row = polymarket_signals._shape(market, module)
+        if row is None:
+            continue
         row["source"] = "polymarket"
         shaped.append(row)
     return shaped
@@ -81,7 +81,7 @@ def _group_by_module(markets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Bucket markets into ordered modules, cap floods, summarise each module."""
     buckets: dict[str, list[dict[str, Any]]] = {m: [] for m in market_taxonomy.MODULES}
     for market in markets:
-        module = market.get("topic")
+        module: str = market.get("topic") or "其他"
         buckets.setdefault(module, []).append(market)
 
     modules: list[dict[str, Any]] = []
@@ -124,9 +124,9 @@ async def _translate(markets: list[dict[str, Any]]) -> None:
         # warms permanently, so only brand-new titles cost time on later rebuilds.
         zh_map = await translate_questions(questions, llm_timeout=300.0)
         for market in markets:
-            market["question_zh"] = zh_map.get(market.get("question"))
+            market["question_zh"] = zh_map.get(market.get("question") or "")
     except Exception:  # noqa: BLE001 — degrade to English
-        pass
+        logger.warning("pulse translate failed; titles stay English", exc_info=True)
 
 
 _rebuilding = False  # guards against piling up concurrent background rebuilds
@@ -188,7 +188,7 @@ async def _with_deadline(coro: Any, timeout_s: float) -> Any:
     """await coro，但最多等 timeout_s；到点返回 None（不取消 coro，让它跑完落盘）。"""
     try:
         return await asyncio.wait_for(asyncio.shield(coro), timeout_s)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return None
 
 
@@ -259,15 +259,22 @@ async def _build(include_ai: bool = True) -> dict[str, Any]:
 
     ``include_ai=False``（数据-only，快照超龄自动触发）不调研判类 LLM：模块卡/
     现状/综合研判按 key 对位沿用旧快照文本，等用户手动全量刷新再重写。"""
-    pm, ks = await asyncio.gather(
+    pm_res, ks_res = await asyncio.gather(
         _shaped_polymarket(force=True),
         kalshi_signals.fetch_shaped(force=True),
+        return_exceptions=True,
     )
+    pm = [] if isinstance(pm_res, BaseException) else pm_res
+    ks = [] if isinstance(ks_res, BaseException) else ks_res
     # An empty upstream response is not a truthful new market snapshot.  Keep the
     # previous disk snapshot instead of replacing it with a transient outage.
+    # 判据用「成功的源数」而不是「有没有 item」：一个源报错、另一个成功但本轮没有
+    # 符合条件的合约，不是「两个源都失败」——那是假事实（上游 prob-r5）。
     if not pm or not ks:
-        missing = ", ".join(name for name, rows in (("Polymarket", pm), ("Kalshi", ks)) if not rows)
-        raise ValueError(f"empty source response: {missing}")
+        parts = []
+        for name, res in (("Polymarket", pm_res), ("Kalshi", ks_res)):
+            parts.append(f"{name} 取数失败: {res}" if isinstance(res, BaseException) else f"{name} 返回 0 条")
+        raise ValueError("预测市场快照不完整 —— " + "；".join(parts))
     merged = pm + ks
     await _translate(merged)
     modules = _group_by_module(merged)

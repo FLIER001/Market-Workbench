@@ -21,6 +21,7 @@ import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
 
 import astock
+import extra_api
 import gstock
 import market
 import newsradar
@@ -253,6 +254,26 @@ TOOLS: list[dict] = [
        "60 日动量 Top50 月调仓回测表现如何 → factor_backtest(factor='mom60', top_n=50, freq='monthly')"),
 ]
 
+# 新端点目录（a-stock-data v3.8~v3.10 移植）——从 extra_api 自动生成，避免两份清单漂移。
+_EXTRA_INDEX = "\n".join(
+    f"- {e['endpoint']}：{e['description']}；参数 "
+    + ("、".join(f"{p}{'（必填）' if v['required'] else ''}" for p, v in e["params"].items()) or "无")
+    for e in extra_api.describe()
+)
+
+TOOLS.append(
+    _t("query_extra",
+       "新端点数据入口（a-stock-data v3.8~v3.10 移植）：期货与大宗、可转债、事件驱动、"
+       "宏观利率与日历、指数成分/权重/估值、ETF 份额、ST 名单、上证e互动、腾讯逐笔、"
+       "通达信盘后包、北交所快照等。参数名与端点签名一致，均以字符串传入。\n\n"
+       "可用端点：\n" + _EXTRA_INDEX,
+       {"endpoint": {"type": "string", "enum": list(extra_api.ENDPOINTS),
+                     "description": "端点名，见描述里的清单"},
+        "args": {"type": "object", "description": "端点参数，如 {\"code\":\"600519\",\"period\":\"day\"}"}},
+       ["endpoint"],
+       "看看能用的新端点 → query_extra(endpoint='lpr_history')"),
+)
+
 TOOL_NAMES = [t["function"]["name"] for t in TOOLS]
 
 
@@ -322,8 +343,8 @@ def _kline(args: dict):
     if not rows:
         return {"error": "K 线数据源当前不可达（mootdx 与备用源均无返回）"}
     closes = [r.get("close") for r in rows if isinstance(r.get("close"), (int, float))]
-    highs = [r.get("high") for r in rows if isinstance(r.get("high"), (int, float))]
-    lows = [r.get("low") for r in rows if isinstance(r.get("low"), (int, float))]
+    highs = [float(v) for r in rows if isinstance((v := r.get("high")), (int, float))]
+    lows = [float(v) for r in rows if isinstance((v := r.get("low")), (int, float))]
     stat = {}
     if closes:
         first, last = closes[0], closes[-1]
@@ -836,10 +857,10 @@ def _oil_score(args: dict):
 
 def _bonds_curve(args: dict):
     """债市曲线：当期整条曲线 + 各利差只留最新值与近 40 点走势。"""
-    d = bonds.get_curve() or {}
+    d: dict = bonds.get_curve() or {}
     if not d.get("curve"):
         return {"error": "债市数据暂不可用"}
-    def _tail(series: dict) -> dict:
+    def _tail(series: dict | None) -> dict:
         return {k: v[-40:] for k, v in (series or {}).items()}
     return {
         "date": d.get("date"), "curve": d.get("curve"),
@@ -1053,6 +1074,7 @@ _HANDLERS = {
     "factor_backtest": lambda a: _factor_backtest(
         str(a["factor"]), _opt_int(a, "top_n", 50), str(a.get("freq") or "monthly"),
         _norm_opt_date(a.get("start")), _norm_opt_date(a.get("end"))),
+    "query_extra": lambda a: extra_api.call(str(a["endpoint"]), a.get("args") or {}),
 }
 
 

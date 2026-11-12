@@ -113,7 +113,7 @@ def _check_base_url(url: str) -> None:
         except socket.gaierror as e:
             raise RuntimeError("Base URL 域名无法解析") from e
         for info in infos:
-            if _ip_blocked(info[4][0]):
+            if _ip_blocked(str(info[4][0])):
                 raise RuntimeError("Base URL 解析到了不允许的内网地址")
 
 
@@ -255,8 +255,8 @@ def _iter_sse_deltas(resp):
 
 
 def run_chat_stream(cfg: dict, user_messages: list, context: str = ""):
-    """API 接入流式：function-calling 循环，边流答案边推工具调用事件。"""
-    messages = [{"role": "system", "content": SYSTEM_PROMPT.format(context=context or "（无）")}]
+    """API 接入流式:function-calling 循环,边流答案边推工具调用事件。"""
+    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT.format(context=context or "（无）")}]
     messages.extend(user_messages)
     trace: list[dict] = []
 
