@@ -799,11 +799,18 @@ export function WatchlistEventJudgement() {
           className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-3 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-primary/25 disabled:opacity-50"
         >
           {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-          {activeAssetKey && running
-            ? "单标的刷新中…"
-            : phase === "refreshing" && running
-              ? "刷新数据中…"
-              : running ? "AI 研判中…" : "刷新全部研判"}
+          {/* 各状态文案各占一格（不可见），宽度恒定；占位取最宽的两个文案 */}
+          <span className="inline-grid">
+            <span className="invisible col-start-1 row-start-1">刷新全部研判</span>
+            <span className="invisible col-start-1 row-start-1">单标的刷新中…</span>
+            <span className="col-start-1 row-start-1">
+              {activeAssetKey && running
+                ? "单标的刷新中…"
+                : phase === "refreshing" && running
+                  ? "刷新数据中…"
+                  : running ? "AI 研判中…" : "刷新全部研判"}
+            </span>
+          </span>
         </button>
       </div>
 
