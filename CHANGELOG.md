@@ -3,6 +3,12 @@
 本项目的版本号唯一来源是 `frontend/package.json`；后端 HTTP API、`/api/health`、
 前端界面与 MCP `serverInfo` 全部从它读取（见 `backend/version.py`）。
 
+## 1.8.3 — 2026-11-12
+
+- 设置页新增「程序更新」（`backend/updater.py` + `GET /api/update/check` / `POST /api/update/apply`）：`git fetch` 上游（默认 `origin/main`），显示落后提交数与提交列表，一键 `git pull --ff-only` 后原地重启（`os.execv` 到 `run.sh`，由它按需重建前端）。重启后进程号不变，launchd 的 KeepAlive 与手动启动都能接着跑。
+- 三条拒更条件都直接写明原因：不是 git 仓库、工作区有未提交改动、本地与远程已分叉（只做快进，不合并）；`requirements.txt` 有变动才重装依赖，装失败不重启，避免新代码缺包进入重启循环。
+- `/api/health` 增加 `commit` 字段，前端拿它判断新进程是否已经起来（重启窗口内前端轮询，起来后自动刷新）；`apply` 要求登录，公网部署时同样受 `MW_API_KEY` 保护。上游可用 `MW_UPDATE_REMOTE` / `MW_UPDATE_BRANCH` 改。
+
 ## Unreleased — 回测报表增强与规则核对候选池（2026-11-12，本地）
 
 - 因子回测新增报表层（`backend/factor_report.py`）：月度收益（按月分组的热力表）、最深 5 段回撤（峰值 / 谷底 / 复原日、深度、交易日数，没涨回来标明）、夏普的 bootstrap 95% 区间（1000 次有放回重抽、固定种子、可复现）、等长分段的稳定性（各段收益 / 年化 / 夏普 / 最大回撤）。接口 `report` 字段随 `/api/factor/backtest` 一起返回。

@@ -1,9 +1,9 @@
-import { useRef, useState } from "react";
-import { KeyRound, Sparkles, ShieldCheck, Check, Trash2, Terminal, DatabaseBackup, Download, Upload } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { KeyRound, Sparkles, ShieldCheck, Check, Trash2, Terminal, DatabaseBackup, Download, Upload, RefreshCw, ArrowUpCircle } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { toast } from "sonner";
 import { loadLlm, saveLlm, clearLlm } from "@/lib/llm";
-import { loadAccessKey, saveAccessKey } from "@/lib/api";
+import { loadAccessKey, saveAccessKey, api, type UpdateStatus } from "@/lib/api";
 import { subscriptionModels, apiModels, PROVIDER_BASE, isCliProvider, aiModels, type ProviderId } from "@/lib/ai-models";
 import { auth, type UserDataExport } from "@/lib/auth";
 import { isLoggedIn, pullBackendToLocal } from "@/lib/userData";
@@ -214,6 +214,7 @@ export function Settings() {
       </GlassCard>
 
       <DataBackupCard />
+      <UpdateCard />
     </div>
   );
 }
@@ -375,6 +376,117 @@ function DataBackupCard() {
           )}
         </div>
       )}
+    </GlassCard>
+  );
+}
+
+// 程序更新：检查 GitHub 上游（默认 origin/main）有没有新提交，一键快进 + 重启。
+// 后端 `POST /api/update/apply` 只做快进（本地有未推送提交或工作区脏就拒绝），
+// 拉取成功后异步重启（run.sh 会顺手把前端 dist 重建）。浏览器在重启窗口内会连不上，
+// 所以这里轮询 /health 的 commit，等新进程起来了再刷新页面。
+function UpdateCard() {
+  const [version, setVersion] = useState("");
+  const [commit, setCommit] = useState<string | null>(null);
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const [busy, setBusy] = useState<"check" | "apply" | null>(null);
+  const [waiting, setWaiting] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    api.health()
+      .then((h) => { setVersion(h.version); setCommit(h.commit); })
+      .catch(() => { /* 后端没起来时留空，点「检查更新」会给出具体原因 */ });
+  }, []);
+
+  const check = async () => {
+    setBusy("check");
+    setError("");
+    try {
+      const s = await api.updateCheck();
+      setStatus(s);
+      setVersion(s.current_version);
+      setCommit(s.current_commit);
+        if (!s.available || s.behind === 0) toast.success(s.message);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "检查更新失败");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const apply = async () => {
+    setBusy("apply");
+    setError("");
+    try {
+      const r = await api.updateApply();
+      setWaiting(true);
+      toast.success(r.message);
+      // 等新进程：commit 对得上才算重启完成；非 git 部署没有 commit，退回比版本号
+      for (let i = 0; i < 150; i++) {
+        await new Promise((res) => setTimeout(res, 1200));
+        try {
+          const h = await api.health();
+          if (h.commit ? h.commit === r.commit : h.version === r.version) {
+            toast.success(`已更新到 v${r.version}，刷新页面…`);
+            window.location.reload();
+            return;
+          }
+        } catch { /* 重启窗口内后端不可达，继续等 */ }
+      }
+      setWaiting(false);
+      setError("更新已应用，但后端 3 分钟内没重启起来：看后端日志（launchd 部署在 /private/tmp/market-workbench-app.log）或手动跑 ./run.sh");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "更新失败");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <GlassCard className="mt-4">
+      <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold">
+        <RefreshCw className="h-4 w-4 text-primary" /> 程序更新
+      </h3>
+      <p className="mb-3 text-xs text-muted-foreground">
+        从 GitHub 上游快进到最新提交，然后自动重启后端并重建前端。本地有未提交改动、或本地提交与远程分叉时不会更新，避免覆盖你自己的改动。
+      </p>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="rounded bg-muted/40 px-2 py-1 text-xs">
+          当前 v{version || "…"}{commit ? ` · ${commit}` : ""}
+        </span>
+        <button onClick={check} disabled={!!busy || waiting}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted/40 disabled:opacity-50">
+          <RefreshCw className="h-4 w-4" /> {busy === "check" ? "检查中…" : "检查更新"}
+        </button>
+        {status?.can_apply && (
+          <button onClick={apply} disabled={!!busy || waiting}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary/15 px-4 py-2 text-sm font-medium text-primary shadow-glow hover:bg-primary/25 disabled:opacity-50">
+            <ArrowUpCircle className="h-4 w-4" /> {busy === "apply" ? "更新中…" : "立即更新"}
+          </button>
+        )}
+        {waiting && <span className="text-xs text-muted-foreground">等待后端重启…（前端重建可能要十几秒）</span>}
+      </div>
+
+      {status && (
+        <p className={`mt-2 text-xs ${status.can_apply ? "text-primary" : "text-muted-foreground"}`}>
+          {status.message}
+          {status.dirty.length > 0 && <span className="text-danger">（{status.dirty.slice(0, 3).join("、")}{status.dirty.length > 3 ? " 等" : ""}）</span>}
+        </p>
+      )}
+
+      {status && status.commits.length > 0 && (
+        <ul className="mt-2 max-h-52 space-y-1 overflow-auto rounded-lg border border-border/50 bg-black/20 p-2 text-xs">
+          {status.commits.map((c) => (
+            <li key={c.hash} className="flex gap-2">
+              <span className="shrink-0 font-mono text-muted-foreground">{c.hash}</span>
+              <span className="truncate">{c.subject}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {error && <p className="mt-2 rounded-lg border border-danger/30 bg-danger/10 px-2.5 py-1.5 text-xs text-danger">{error}</p>}
     </GlassCard>
   );
 }

@@ -66,10 +66,13 @@ import sw_level2_scores as sw_level2_layer
 import timing
 import timing_alloc
 import tools as tools_layer
+import updater
 import users
 from version import read_version
 
 __version__ = read_version()
+# 启动时的提交号：/api/health 回给前端，用来判断「更新后新进程是否已经起来」
+_COMMIT = updater.head_commit()
 
 
 @asynccontextmanager
@@ -300,7 +303,26 @@ def _validate(code: str) -> str:
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "service": "market-workbench-api", "version": __version__}
+    return {"ok": True, "service": "market-workbench-api", "version": __version__, "commit": _COMMIT}
+
+
+@app.get("/api/update/check")
+def update_check():
+    """检查 GitHub 上游（默认 origin/main）有没有新提交。只 fetch，不动工作区。"""
+    return {"data": updater.check()}
+
+
+@app.post("/api/update/apply")
+def update_apply(request: Request):
+    """快进到上游并异步重启本进程。
+
+    要求登录 + （公网部署时）MW_API_KEY：这个端点会改磁盘上的代码，不能匿名触发。
+    """
+    _current_user(request)
+    try:
+        return {"data": updater.apply()}
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
 
 
 @app.get("/api/source-health")

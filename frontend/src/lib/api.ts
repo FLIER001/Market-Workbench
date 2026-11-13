@@ -2164,8 +2164,22 @@ export interface IndexHistoryData {
   generated_at: string;
 }
 
+// —— 内置更新（后端 updater.py）——
+export interface UpdateCommit { hash: string; subject: string; }
+export interface UpdateStatus {
+  available: boolean; fetched: boolean; remote: string; branch: string;
+  current_version: string; latest_version: string | null;
+  current_commit: string | null; latest_commit: string | null;
+  behind: number; ahead: number; dirty: string[];
+  commits: UpdateCommit[]; can_apply: boolean; message: string;
+}
+export interface UpdateApplied {
+  ok: boolean; previous_version: string; version: string; commit: string;
+  changed_files: number; restart_scheduled: boolean; message: string;
+}
+
 export const api = {
-  health: () => get<{ ok: boolean }>("/health"),
+  health: () => get<{ ok: boolean; version: string; commit: string | null }>("/health"),
   authConfig: () => get<{ registration_open: boolean }>("/auth/config"),
   sourceHealth: (refresh = false, source?: string) =>
     get<SourceHealthData>(`/source-health${refresh ? "?refresh=true" : ""}${source ? `${refresh ? "&" : "?"}source=${encodeURIComponent(source)}` : ""}`),
@@ -2366,6 +2380,10 @@ export const api = {
     request<CustomFactor>("/factor/custom", "POST", { id, name, expr }),
   factorCustomDelete: (id: string) =>
     request<{ deleted: string }>(`/factor/custom/${encodeURIComponent(id)}`, "DELETE"),
+  // 检查/应用上游更新。apply 里可能要装依赖，超时给足；重启是异步的，
+  // 前端拿到响应后轮询 /health 的 commit 判断新进程是否已经起来。
+  updateCheck: () => request<UpdateStatus>("/update/check", "GET", undefined, SLOW_TIMEOUT_MS),
+  updateApply: () => request<UpdateApplied>("/update/apply", "POST", undefined, 300_000),
 };
 
 // —— 因子实验室类型 ——

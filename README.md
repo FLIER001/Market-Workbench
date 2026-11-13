@@ -4,7 +4,7 @@
 
 [简体中文](README.md) · [English](README_en.md) · [更新记录](CHANGELOG.md) · [路线图](ROADMAP.md)
 
-[![Version](https://img.shields.io/badge/version-1.8.2-1f6feb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.8.3-1f6feb)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)](https://react.dev/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
