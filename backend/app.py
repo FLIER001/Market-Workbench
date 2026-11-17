@@ -82,6 +82,10 @@ async def _lifespan(application: FastAPI):
     factor_research_layer.init_db()
     factor_research_layer.start_worker()
     try:
+        # 首启快照：云端冷建要 40 分钟以上，随包带的 last-good 先顶上（已存在则不动）
+        seeded = plate_scores_layer.seed_from_bundle()
+        if seeded:
+            print(f"[seed] 已写入首启快照：{', '.join(seeded)}", flush=True)
         _start_background_jobs()
         yield
     finally:

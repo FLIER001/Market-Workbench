@@ -593,27 +593,35 @@ def _parse_tencent_kline(payload: dict, symbol: str, period: str) -> list[dict]:
 _TENCENT_KLINE_FALLBACK = "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get"
 
 
+_TX_KLINE_WEB_OK = True  # web.ifzq 首次失败后本进程内不再尝试（云端被 WAF 拦）
+
+
 def tencent_kline(code: str, period: str = "day", count: int = 250) -> list[dict]:
     """腾讯前复权 K 线；HTTP、零鉴权，作为页面图表主源。
 
-    主源 web.ifzq.gtimg.cn 被 WAF 拦后自动降级到 proxy.finance.qq.com。
+    主源 web.ifzq.gtimg.cn 被 WAF 拦后降级 proxy.finance.qq.com。云端整批拉全市场
+    日 K（板块评分要 3000+ 只）时，每次都先撞一遍被拦的主域名会白等成倍时间，
+    故主源失败一次即在本进程内旁路，后续直接走 proxy。
     """
+    global _TX_KLINE_WEB_OK
     if period not in {"day", "week", "month"}:
         raise ValueError("period 必须是 day/week/month")
     symbol = f"{get_prefix(code)}{code}"
-    query = urllib.parse.urlencode({"param": f"{symbol},{period},,,{count},qfq"})
-    request = urllib.request.Request(
-        f"{_TENCENT_KLINE}?{query}",
-        headers={"User-Agent": UA, "Referer": "https://gu.qq.com/"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=12) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        rows = _parse_tencent_kline(payload, symbol, period)
-        if rows:
-            return rows
-    except Exception:  # noqa: BLE001 — 主源被 WAF 拦/超时，走备用域名
-        pass
+    if _TX_KLINE_WEB_OK:
+        query = urllib.parse.urlencode({"param": f"{symbol},{period},,,{count},qfq"})
+        request = urllib.request.Request(
+            f"{_TENCENT_KLINE}?{query}",
+            headers={"User-Agent": UA, "Referer": "https://gu.qq.com/"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=12) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            rows = _parse_tencent_kline(payload, symbol, period)
+            if rows:
+                return rows
+        except Exception:  # noqa: BLE001 — 主源被 WAF 拦/超时，走备用域名
+            pass
+        _TX_KLINE_WEB_OK = False
 
     # 备用：proxy.finance.qq.com（直连、忽略系统代理，避免科学上网代理挂掉国内站）
     try:

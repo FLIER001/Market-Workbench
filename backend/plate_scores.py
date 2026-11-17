@@ -38,6 +38,34 @@ _BOARD_CACHE_FILE = os.path.join(DATA_DIR, "plate_board_constituents.json")
 _TTL = 60 * 60
 _INTRADAY_TTL = 15 * 60
 _SCHEMA_VERSION = 2
+_SEED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "seed")
+
+
+def seed_from_bundle() -> list[str]:
+    """首次启动把随包携带的快照写进数据目录（目标已存在则不动）。
+
+    云端冷建要逐只抓估值分位与盈利预测（东财串行限流，3000+ 只），实测 40 分钟
+    仍未完成，期间页面只能显示「构建中」。把本地已算好的快照随发布包带上，
+    首次启动即有 last-good；之后的刷新全部在后台跑，不影响请求。
+    """
+    import shutil
+
+    if not os.path.isdir(_SEED_DIR):
+        return []
+    copied: list[str] = []
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        for name in sorted(os.listdir(_SEED_DIR)):
+            if not name.endswith(".json"):
+                continue
+            dst = os.path.join(DATA_DIR, name)
+            if os.path.exists(dst):
+                continue
+            shutil.copy2(os.path.join(_SEED_DIR, name), dst)
+            copied.append(name)
+    except OSError:
+        return copied
+    return copied
 _KLINE_COUNT = 260  # 约 1 年日K，覆盖位置/拥挤的时间序列分位
 _KLINE_WORKERS = 8  # 腾讯K线并发上限（实测 8 并发稳定）
 _FACTOR_WORKERS = 16  # 估值分位/盈利预测抓取并发（每日缓存，仅首次全量慢）
