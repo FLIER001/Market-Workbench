@@ -1911,25 +1911,25 @@ _SEARCH_MKT = {
 }
 
 
-@app.get("/api/search")
-def search(q: str = Query(..., min_length=1, max_length=30)):
-    """个股搜索：代码 / 中文名 / 拼音首字母。返回匹配列表（最多 8 条）。"""
-    q = q.strip()
-    if not q:
-        return {"data": []}
-    try:
-        r = astock.em_get(
-            "https://searchapi.eastmoney.com/api/suggest/get",
-            params={"input": q, "type": 14,
-                    "token": "D43BF722C8E33BDC906FB84D85E326E8", "count": 20},
-            headers={"User-Agent": astock.UA}, timeout=8,
-        )
-        rows = (r.json().get("QuotationCodeTable") or {}).get("Data") or []
-    except Exception:
-        return {"data": []}
+def _search_eastmoney(q: str) -> list[dict]:
+    """东财 suggest。云端 IP 偶发被风控（返回非 JSON），由调用方降级。"""
+    r = astock.em_get(
+        "https://searchapi.eastmoney.com/api/suggest/get",
+        params={"input": q, "type": 14,
+                "token": "D43BF722C8E33BDC906FB84D85E326E8", "count": 20},
+        headers={"User-Agent": astock.UA, "Referer": "https://quote.eastmoney.com/"},
+        timeout=6,
+    )
+    text = (r.text or "").strip()
+    # 正常是裸 JSON；被包成 JSONP 时截出对象体再解析。
+    if not text.startswith("{"):
+        start, end = text.find("{"), text.rfind("}")
+        if start < 0 or end <= start:
+            raise ValueError(f"返回体不是 JSON（前 40 字：{text[:40]!r}）")
+        text = text[start:end + 1]
+    rows = (json.loads(text).get("QuotationCodeTable") or {}).get("Data") or []
 
-    out = []
-    seen = set()
+    out, seen = [], set()
     for s in rows:
         try:
             mkt = int(s.get("MktNum"))
@@ -1938,17 +1938,81 @@ def search(q: str = Query(..., min_length=1, max_length=30)):
         if mkt not in _SEARCH_MKT:
             continue
         suffix, market = _SEARCH_MKT[mkt]
-        code = s.get("Code", "")
-        name = s.get("Name", "")
+        code, name = s.get("Code", ""), s.get("Name", "")
         if not code or code in seen:
             continue
         seen.add(code)
-        # A股给 6 位纯代码；美/港/韩给带后缀代码
-        full_code = f"{code}{suffix}" if suffix else code
-        out.append({"code": full_code, "name": name, "market": market})
+        out.append({"code": f"{code}{suffix}" if suffix else code, "name": name, "market": market})
         if len(out) >= 8:
             break
-    return {"data": out}
+    return out
+
+
+def _search_tencent(q: str) -> list[dict]:
+    """腾讯 smartbox：中文名 / 代码 / 拼音首字母都能命中，作为东财的备用源。"""
+    import re
+
+    import requests
+
+    r = requests.get(
+        "https://smartbox.gtimg.cn/s3/",
+        params={"q": q, "t": "all"},
+        headers={"User-Agent": astock.UA, "Referer": "https://gu.qq.com/"},
+        timeout=6,
+    )
+    m = re.search(r'v_hint="(.*)"', r.text or "", re.S)
+    if not m:
+        return []
+    # 接口把中文转义成 \uXXXX，先还原成正常字符串
+    payload = json.loads(f'"{m.group(1)}"')
+    out, seen = [], set()
+    for item in payload.split("^"):
+        parts = item.split("~")
+        if len(parts) < 5:
+            continue
+        mk, code, name = parts[0], parts[1], parts[2]
+        if not code or not name or code in seen:
+            continue
+        if mk in ("sh", "sz"):
+            seen.add(code)
+            out.append({"code": code, "name": name, "market": "SH" if mk == "sh" else "SZ"})
+        elif mk == "hk":
+            seen.add(code)
+            out.append({"code": code, "name": name, "market": "HK"})
+        if len(out) >= 8:
+            break
+    return out
+
+
+@app.get("/api/search")
+def search(q: str = Query(..., min_length=1, max_length=30), debug: bool = Query(False)):
+    """个股搜索：代码 / 中文名 / 拼音首字母。
+
+    主源东财，失败或零命中自动降级腾讯 smartbox（云端 IP 下东财搜索会被风控）。
+    `debug=1` 额外返回各源的实际失败原因。
+    """
+    q = q.strip()
+    if not q:
+        return {"data": []}
+
+    errors: dict[str, str] = {}
+    for source, fn in (("eastmoney", _search_eastmoney), ("tencent", _search_tencent)):
+        try:
+            rows = fn(q)
+        except Exception as e:  # noqa: BLE001 — 单个源失败不影响整体
+            errors[source] = f"{type(e).__name__}: {e}"[:160]
+            continue
+        if rows:
+            result = {"data": rows[:8], "source": source}
+            if debug:
+                result["errors"] = errors
+            return result
+        errors[source] = "无匹配"
+
+    result = {"data": [], "source": None}
+    if debug:
+        result["errors"] = errors
+    return result
 
 
 @app.get("/api/hot-concepts")
