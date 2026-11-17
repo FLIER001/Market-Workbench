@@ -529,28 +529,122 @@ def tencent_kline(code: str, period: str = "day", count: int = 250) -> list[dict
         return []
 
 
-def minute_kline(code: str) -> dict:
-    """分时图（当日分钟级）：腾讯 web.ifzq.gtimg.cn minute/query 接口，零鉴权。"""
-    symbol = code if code[:2].isalpha() else f"{get_prefix(code)}{code}"
-    url = f"https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={symbol}"
-    req = urllib.request.Request(url, headers={"User-Agent": UA, "Referer": "https://gu.qq.com/"})
-    with urllib.request.urlopen(req, timeout=12) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
-    data = (payload.get("data") or {}).get(symbol, {}).get("data", {})
-    rows = data.get("data", [])
-    date = data.get("date", "")
-    # 昨收
-    qt = (payload.get("data") or {}).get(symbol, {}).get("qt", {})
-    qt_data = qt.get(symbol, []) if isinstance(qt, dict) else []
-    prev_close = 0.0
-    if isinstance(qt_data, list) and len(qt_data) > 4:
-        try:
-            prev_close = float(qt_data[4])
-        except (ValueError, IndexError):
-            pass
+_TENCENT_MINUTE_HOSTS = (
+    # proxy 域名与主域名同路径；主域名 web.ifzq 在部分网络被腾讯 WAF 拦（HTTPS 501），
+    # 云端部署实测就是这种情形，所以 proxy 放第一位。
+    "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/minute/query",
+    "https://web.ifzq.gtimg.cn/appstock/app/minute/query",
+)
 
-    # 欧美指数腾讯只给当前 tick（无当日序列）：用东财 push2his 分钟历史补全
+
+def _tencent_minute_raw(symbol: str) -> tuple[list, str, float] | None:
+    """腾讯 minute/query 原始行 (rows, date, prev_close)。两个域名都不可用返回 None。
+
+    用 requests 且 trust_env=False：urllib 默认读 HTTP(S)_PROXY，云端容器有代理时
+    会被代理回 501，直连才是真实链路。
+    """
+    import requests as _req
+
+    s = _req.Session()
+    s.trust_env = False
+    for url in _TENCENT_MINUTE_HOSTS:
+        try:
+            resp = s.get(
+                url,
+                params={"code": symbol},
+                headers={"User-Agent": UA, "Referer": "https://gu.qq.com/"},
+                timeout=10,
+            )
+            payload = resp.json()
+        except Exception:  # noqa: BLE001 — 换下一个域名
+            continue
+        node = (payload.get("data") or {}).get(symbol) or {}
+        rows = (node.get("data") or {}).get("data") or []
+        if not rows:
+            continue
+        date = (node.get("data") or {}).get("date", "")
+        qt = node.get("qt") or {}
+        qt_data = qt.get(symbol, []) if isinstance(qt, dict) else []
+        prev_close = 0.0
+        if isinstance(qt_data, list) and len(qt_data) > 4:
+            try:
+                prev_close = float(qt_data[4])
+            except (ValueError, IndexError):
+                pass
+        return rows, date, prev_close
+    return None
+
+
+def _em_stock_minutes(symbol: str) -> dict | None:
+    """东财 trends2 个股/ETF 分时，带成交量（单位：手）。
+
+    腾讯两个域名都拿不到时兜底。A 股个股 secid：沪 `1.`，深/北 `0.`。
+    """
+    import requests as _req
+
+    prefix = symbol[:2].lower()
+    if prefix not in ("sh", "sz", "bj"):
+        return None
+    secid = f"{'1' if prefix == 'sh' else '0'}.{symbol[2:]}"
+    params = {
+        # fields1 必须带全：只给 f1-f4 时返回体不含 preClose，昨收会变成 0。
+        "secid": secid, "fields1": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11",
+        "fields2": "f51,f53,f56", "ndays": 1, "iscr": 0,
+    }
+    s = _req.Session()
+    s.trust_env = False  # push2 系走系统代理会 RemoteDisconnected
+    for host in _TRENDS_HOSTS:
+        try:
+            r = s.get(
+                f"https://{host}/api/qt/stock/trends2/get",
+                params=params, headers={"User-Agent": UA}, timeout=10,
+            )
+            d = r.json().get("data") or {}
+            trends = d.get("trends") or []
+        except Exception:  # noqa: BLE001 — 换下一个主机
+            continue
+        if not trends:
+            continue
+        points, day = [], ""
+        for line in trends:
+            parts = str(line).split(",")
+            if len(parts) < 3:
+                continue
+            try:
+                stamp = parts[0]
+                point_day = stamp.split(" ")[0]
+                hhmm = stamp.split(" ")[-1].replace(":", "")
+                price = float(parts[1])
+                volume = int(float(parts[2]))
+            except (ValueError, IndexError):
+                continue
+            day = point_day
+            points.append({"time": hhmm, "price": price, "volume": volume})
+        if not points:
+            continue
+        prev = d.get("preClose")
+        if not isinstance(prev, (int, float)):
+            prev = d.get("prePrice")  # 部分市场只有 prePrice
+        return {
+            "date": day.replace("-", ""),
+            "prev_close": float(prev) if isinstance(prev, (int, float)) else 0.0,
+            "points": points,
+        }
+    return None
+
+
+def minute_kline(code: str) -> dict:
+    """分时图（当日分钟级）：腾讯 minute/query（proxy → web 双域名），
+    都不可用时降级东财 trends2 个股分时（带成交量）。"""
+    symbol = code if code[:2].isalpha() else f"{get_prefix(code)}{code}"
+    fetched = _tencent_minute_raw(symbol)
+    rows, date, prev_close = fetched if fetched else ([], "", 0.0)
+
+    # 腾讯两个域名都没拿到：先试东财个股分时（带量），再试全球指数兜底
     if len(rows) < 2:
+        em_stock = _em_stock_minutes(symbol)
+        if em_stock is not None:
+            return em_stock
         secid = next((sec for sym, sec in GLOBAL_INDEX_MINUTE_SRC.values() if sym == symbol), None)
         if secid:
             em = em_index_minutes(secid)
