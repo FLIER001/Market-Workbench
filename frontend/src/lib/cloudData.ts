@@ -6,7 +6,7 @@
 //
 // 只有「通过 WorkBuddy 账号登录」且云会话仍有效时才走这里；账号密码登录仍走后端 SQLite，
 // 避免两个数据源互相覆盖。
-import { cloud } from "./cloud";
+import { cloud, CLOUD_ENABLED } from "./cloud";
 import { storageGet } from "./storage";
 
 const TABLE = "user_data";
@@ -29,6 +29,7 @@ function unwrap<T>(result: Envelope<T>): T {
 
 /** 当前会话是否应该读写云数据库。 */
 export async function cloudDataActive(): Promise<boolean> {
+  if (!CLOUD_ENABLED) return false;
   if (storageGet(CLOUD_DATA_FLAG) !== "1") return false;
   try {
     const { data } = await cloud.auth.getSession();

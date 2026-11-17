@@ -2,7 +2,7 @@
 // 解决纯 localStorage 存自选时换域名(localhost/127.0.0.1)/换浏览器就丢的问题。
 
 import { storageGet, storageSet, storageRemove } from "./storage";
-import { cloud } from "./cloud";
+import { cloud, CLOUD_ENABLED } from "./cloud";
 import {
   CLOUD_DATA_FLAG,
   cloudDataActive,
@@ -154,6 +154,7 @@ function sdkErrorMessage(error: unknown, fallback: string): string {
 
 /** 跳转到 WorkBuddy 授权页。必须是用户手势触发的同标签页跳转（PKCE 存在 sessionStorage）。 */
 export async function startWorkBuddyLogin(): Promise<void> {
+  if (!CLOUD_ENABLED) throw new Error("本次构建未启用云服务");
   const { data, error } = await cloud.auth.signInWithOAuth({
     provider: "workbuddy",
     redirectTo: window.location.origin,
@@ -179,6 +180,7 @@ async function clientProbe(): Promise<Record<string, unknown>> {
 
 /** 云会话 → 本地会话。 */
 export async function bridgeCloudSession(): Promise<void> {
+  if (!CLOUD_ENABLED) throw new Error("本次构建未启用云服务");
   // 先做浏览器侧自校验：SDK 可能会顺手续期并轮换 token，
   // 所以要等它跑完再取 token，避免拿一枚刚被轮换掉的旧 token 去后端。
   let probe = await clientProbe();

@@ -5,6 +5,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# /api/health 的 commit 字段：本地读 git，部署环境由启动命令注入。
+if [ -z "${MW_BUILD_COMMIT:-}" ] && command -v git >/dev/null 2>&1; then
+  MW_BUILD_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || true)"
+  export MW_BUILD_COMMIT
+fi
+
 # 本机私有配置（受 .gitignore 保护）；也可指定版本库外的配置文件。
 ENV_FILE="${MW_ENV_FILE:-backend/.env.local}"
 if [ -f "$ENV_FILE" ]; then

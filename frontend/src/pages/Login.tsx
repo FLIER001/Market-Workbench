@@ -9,14 +9,13 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { storageSet, storageRemove } from "@/lib/storage";
 import { CLOUD_DATA_FLAG } from "@/lib/cloudData";
-import { CLOUD_CONFIG } from "@/lib/cloud";
+import { CLOUD_ENABLED } from "@/lib/cloud";
 
 const inputCls =
   "w-full rounded-lg border border-border bg-card px-3 py-2.5 text-sm outline-none transition-colors focus:border-primary placeholder:text-muted-foreground";
 
-// 云服务按 Origin 精确校验，只有发布域名能用云登录；本机开发不显示该入口。
-const CLOUD_LOGIN_AVAILABLE =
-  window.location.hostname === new URL(CLOUD_CONFIG.endpoint).hostname;
+// 云服务配置由构建时注入（VITE_CLOUD_*）：未注入的构建自动隐藏该入口。
+const CLOUD_LOGIN_AVAILABLE = CLOUD_ENABLED;
 // 预览面板是 iframe，OAuth 的 PKCE 存在 sessionStorage、且必须同标签页跳转，iframe 里跳不动。
 const IN_EMBEDDED_PREVIEW = window.self !== window.top;
 

@@ -71,8 +71,9 @@ import users
 from version import read_version
 
 __version__ = read_version()
-# 启动时的提交号：/api/health 回给前端，用来判断「更新后新进程是否已经起来」
-_COMMIT = updater.head_commit()
+# 启动时的提交号：/api/health 回给前端，用来判断「更新后新进程是否已经起来」。
+# 云端镜像没有 .git，靠启动命令注入 MW_BUILD_COMMIT 才能显示版本。
+_COMMIT = (os.environ.get("MW_BUILD_COMMIT", "").strip() or None) or updater.head_commit()
 
 
 @asynccontextmanager

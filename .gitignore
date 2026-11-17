@@ -69,3 +69,7 @@ docs/reviews/
 
 # WorkBuddy 发布工具生成的应用标记文件
 .wbapp_*.genie
+
+# 发布构建配置（含公开 publicConfig，本地保留）
+.env.publish
+!.env.publish.example
