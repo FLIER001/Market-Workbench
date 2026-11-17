@@ -141,6 +141,38 @@ def user_count() -> int:
         return c.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
 
 
+def ensure_cloud_user(external_id: str, display_name: str = "") -> dict:
+    """云身份 → 本地影子账号。
+
+    云登录（WorkBuddy 账号 / 邮箱验证码）由云服务认证，本地只保存映射与业务数据。
+    影子账号的密码哈希写死为不可能匹配 PBKDF2 输出的标记，因此它无法走密码登录。
+    """
+    username = f"wb:{external_id}"
+    now = time.time()
+    with _conn() as c:
+        row = c.execute("SELECT id, username FROM users WHERE username=?", (username,)).fetchone()
+        if row:
+            return {"id": int(row["id"]), "username": row["username"]}
+        salt = secrets.token_hex(16)
+        c.execute(
+            "INSERT INTO users (username, pw_hash, salt, created_at) VALUES (?,?,?,?)",
+            (username, "!cloud-only", salt, now),
+        )
+        row = c.execute("SELECT id, username FROM users WHERE username=?", (username,)).fetchone()
+    return {"id": int(row["id"]), "username": display_name or row["username"]}
+
+
+def issue_session(user_id: int) -> str:
+    token = secrets.token_urlsafe(32)
+    now = time.time()
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?,?,?,?)",
+            (token, user_id, now, now + _SESSION_TTL),
+        )
+    return token
+
+
 def user_ids() -> list[int]:
     with _conn() as c:
         return [int(row["id"]) for row in c.execute("SELECT id FROM users ORDER BY id").fetchall()]

@@ -5,16 +5,23 @@
 // 侧栏折叠状态、主题这类外壳级设置尤其致命：一崩就是全站打不开。
 //
 // 这里统一兜底：存不下就算了，本次会话内功能照常，只是关掉页面后不被记住。
+// 但「登不上」不能只靠这条规则——token 落不了盘时，跳转会被守卫弹回登录页，
+// 所以额外加一层进程内内存兜底：localStorage 不可用时，本次会话内读写照常工作。
+
+const memory = new Map<string, string>();
 
 export function storageGet(key: string): string | null {
   try {
-    return localStorage.getItem(key);
+    const v = localStorage.getItem(key);
+    if (v !== null) return v;
   } catch {
-    return null;
+    /* 存储不可用，走内存 */
   }
+  return memory.get(key) ?? null;
 }
 
 export function storageSet(key: string, value: string): void {
+  memory.set(key, value);
   try {
     localStorage.setItem(key, value);
   } catch {
@@ -23,6 +30,7 @@ export function storageSet(key: string, value: string): void {
 }
 
 export function storageRemove(key: string): void {
+  memory.delete(key);
   try {
     localStorage.removeItem(key);
   } catch {

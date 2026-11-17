@@ -10,6 +10,8 @@ VibeResearch-专业化建议.md
 my-watchlist.json
 portfolio.json
 public/user-data/
+# 云端部署的挂载目录（users.db / 研报 / 快照）
+deploy/data/
 
 # ── 密钥 / 环境（绝不进仓库） ──────────────────────────────────────
 .env
@@ -61,3 +63,9 @@ DESIGN.md
 PRODUCT.md
 docs/handoffs/
 docs/reviews/
+
+# 发布到 WorkBuddy 应用的临时打包目录（由 .publish 生成）
+.publish/
+
+# WorkBuddy 发布工具生成的应用标记文件
+.wbapp_*.genie

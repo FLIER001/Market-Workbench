@@ -11,7 +11,7 @@
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `MW_ALLOW_ORIGINS` | `*` | 逗号分隔的 CORS 来源。仅限本地开发时保留默认值。 |
-| `MW_API_KEY` | 空 | 设置后，除健康检查外的 API 都要求 `Authorization: Bearer <key>`。 |
+| `MW_API_KEY` | 空 | 设置后，除健康检查与登录/注册端点外，API 都要求 `Authorization: Bearer <key>`（或 `X-VR-Access-Key`）。登录页会要求先填该密钥。 |
 
 公网部署至少应：
 

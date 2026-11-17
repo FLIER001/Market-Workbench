@@ -1,0 +1,13 @@
+# 与开发机一致的版本（2026-11-17 核对），避免构建时漂到未验证的新版本。
+# 仅锁主栈；其余传递依赖交给 pip 解析。
+fastapi==0.141.1
+uvicorn==0.53.0
+pydantic==2.13.5
+pandas==3.0.6
+numpy==2.5.3
+akshare==1.18.96
+baostock==0.9.4
+mootdx==0.11.7
+efinance==0.5.9
+requests==2.34.2
+lxml==6.1.3

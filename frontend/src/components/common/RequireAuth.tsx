@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { loadToken, loadUser, clearSession, auth } from "@/lib/auth";
+import { storageGet, storageRemove } from "@/lib/storage";
 import { pullBackendToLocal } from "@/lib/userData";
 import { Loader2 } from "lucide-react";
 
@@ -17,6 +18,14 @@ export function RequireAuth({ children }: { children: ReactNode }) {
     const token = loadToken();
     if (!token) {
       setState("deny");
+      return;
+    }
+    // 刚完成登录：登录响应本身已证明凭据有效，不再用 /auth/me 二次校验。
+    // 某些部署前面有网关/反代，可能改写或不再透传 Authorization，导致 /auth/me 误判 401，
+    // 表现就是「登录成功但立刻被弹回登录页」。后续任何接口真 401 仍会通过全局事件登出。
+    if (storageGet("vr-just-logged-in") === "1") {
+      storageRemove("vr-just-logged-in");
+      setState("ok");
       return;
     }
     let alive = true;

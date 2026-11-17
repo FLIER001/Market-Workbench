@@ -135,6 +135,8 @@ MCP Server 使用与网页相同的数据工具层，本地调用不需要 API k
 
 完整配置、可选数据源密钥和公网部署要求见 [配置说明](docs/configuration.md) 与 [环境变量示例](backend/.env.example)。公开部署前，至少收紧 CORS、设置强 API key，并在反向代理上启用 HTTPS。
 
+云主机（Docker Compose + 自动 HTTPS）的一键部署见 [deploy/README.md](deploy/README.md)。
+
 ## 开发与架构
 
 ```text

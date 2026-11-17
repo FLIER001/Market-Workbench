@@ -2180,7 +2180,7 @@ export interface UpdateApplied {
 
 export const api = {
   health: () => get<{ ok: boolean; version: string; commit: string | null }>("/health"),
-  authConfig: () => get<{ registration_open: boolean }>("/auth/config"),
+  authConfig: () => get<{ registration_open: boolean; api_key_required?: boolean }>("/auth/config"),
   sourceHealth: (refresh = false, source?: string) =>
     get<SourceHealthData>(`/source-health${refresh ? "?refresh=true" : ""}${source ? `${refresh ? "&" : "?"}source=${encodeURIComponent(source)}` : ""}`),
   indices: () => get<IndexQuote[]>("/indices"),

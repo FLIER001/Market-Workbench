@@ -1,0 +1,53 @@
+name: market-workbench
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: market-workbench:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TZ: Asia/Shanghai
+      PORT: "8900"
+      MW_HOST: 0.0.0.0
+      MW_PORT: "8900"
+    volumes:
+      # 用户库、自选/持仓、研报、各类快照全部落在这里
+      - ./data:/data
+    expose:
+      - "8900"
+    # 峰值 footprint 实测 1.24G；4G 机器留出系统与构建余量
+    mem_limit: 3g
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      MW_DOMAIN: ${MW_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  caddy_data:
+  caddy_config:

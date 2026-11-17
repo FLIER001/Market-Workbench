@@ -1,15 +1,24 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { LineChart, LogIn, UserPlus, Loader2 } from "lucide-react";
+import { Cloud, LineChart, LogIn, UserPlus, Loader2 } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { auth, saveSession } from "@/lib/auth";
-import { api } from "@/lib/api";
+import { auth, saveSession, startWorkBuddyLogin } from "@/lib/auth";
+import { api, ApiError, loadAccessKey, saveAccessKey } from "@/lib/api";
 import { pendingLocalData, importLocalToAccount, pullBackendToLocal, clearLocalUserData } from "@/lib/userData";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { storageSet, storageRemove } from "@/lib/storage";
+import { CLOUD_DATA_FLAG } from "@/lib/cloudData";
+import { CLOUD_CONFIG } from "@/lib/cloud";
 
 const inputCls =
   "w-full rounded-lg border border-border bg-card px-3 py-2.5 text-sm outline-none transition-colors focus:border-primary placeholder:text-muted-foreground";
+
+// 云服务按 Origin 精确校验，只有发布域名能用云登录；本机开发不显示该入口。
+const CLOUD_LOGIN_AVAILABLE =
+  window.location.hostname === new URL(CLOUD_CONFIG.endpoint).hostname;
+// 预览面板是 iframe，OAuth 的 PKCE 存在 sessionStorage、且必须同标签页跳转，iframe 里跳不动。
+const IN_EMBEDDED_PREVIEW = window.self !== window.top;
 
 export function Login() {
   const nav = useNavigate();
@@ -19,20 +28,63 @@ export function Login() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
+  const [cloudBusy, setCloudBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [needKey, setNeedKey] = useState(false); // 后端设了 MW_API_KEY 时，登录前必须先填访问密钥
+  const [accessKey, setAccessKey] = useState(loadAccessKey());
   const [pendingData, setPendingData] = useState<{ key: string; count: number; preview: string }[]>([]);
   const [loggedInName, setLoggedInName] = useState("");
 
   useEffect(() => {
+    // 回调阶段失败的原因由 main.tsx 暂存到这里，登录页负责显示出来
+    try {
+      const stored = sessionStorage.getItem("vr-cloud-login-error");
+      if (stored) {
+        sessionStorage.removeItem("vr-cloud-login-error");
+        setErr(stored);
+        toast.error(stored);
+      }
+    } catch {
+      /* sessionStorage 不可用时忽略 */
+    }
     // 后端不可达时静默保持只登录（注册按钮不出现），不影响登录使用
-    api.authConfig().then((c) => setRegOpen(c.registration_open)).catch(() => {});
+    api.authConfig()
+      .then((c) => {
+        setRegOpen(c.registration_open);
+        setNeedKey(Boolean(c.api_key_required));
+      })
+      .catch((e) => {
+        // 旧版后端不返回该字段时兜底：401 说明部署启用了 MW_API_KEY
+        if (e instanceof ApiError && e.status === 401) setNeedKey(true);
+      });
   }, []);
+
+  const loginWithWorkBuddy = async () => {
+    setErr("");
+    setCloudBusy(true);
+    try {
+      await startWorkBuddyLogin();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "无法发起 WorkBuddy 登录";
+      setErr(msg);
+      toast.error(msg);
+      setCloudBusy(false);
+    }
+  };
 
   const submit = async () => {
     setErr("");
     if (!username.trim() || !password) {
       setErr("请填写用户名和密码");
       return;
+    }
+    if (needKey) {
+      if (!accessKey.trim()) {
+        setErr("请填写访问密钥");
+        return;
+      }
+      saveAccessKey(accessKey.trim());
+      api.authConfig().then((c) => setRegOpen(c.registration_open)).catch(() => {});
     }
     if (mode === "register") {
       if (password.length < 6) {
@@ -51,7 +103,11 @@ export function Login() {
           ? await auth.register(username.trim(), password)
           : await auth.login(username.trim(), password);
       const userId = "user_id" in res && typeof res.user_id === "number" ? res.user_id : 0;
+      // 账号密码登录属于本地账号，数据仍走后端 SQLite；避免误读到上一次云账号的数据。
+      storageRemove(CLOUD_DATA_FLAG);
       saveSession(res.token, { id: userId, username: res.username });
+      // 让路由守卫跳过 /auth/me 的二次校验（网关改写 Authorization 时会被误判登出）
+      storageSet("vr-just-logged-in", "1");
       // 检测本地是否有可导入的数据，由用户确认后再导入（不静默搬数据）
       const pending = await pendingLocalData();
       if (pending.length > 0) {
@@ -128,6 +184,33 @@ export function Login() {
             </div>
           ) : (
           <>
+          {/* 云身份登录：由 WorkBuddy 云服务认证，登录后换本地会话 */}
+          {CLOUD_LOGIN_AVAILABLE && (
+            <>
+              {IN_EMBEDDED_PREVIEW ? (
+                <div className="mb-4 rounded-lg border border-border bg-muted/20 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+                  当前在预览窗口内，「WorkBuddy 账号登录」需要同标签页跳转，请在系统浏览器里打开本页后再登录。
+                </div>
+              ) : (
+                <>
+                  <button
+                    onClick={loginWithWorkBuddy}
+                    disabled={cloudBusy || busy}
+                    className="mb-4 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted/30 disabled:opacity-50"
+                  >
+                    {cloudBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Cloud className="h-4 w-4" />}
+                    {cloudBusy ? "正在跳转…" : "使用 WorkBuddy 账号登录"}
+                  </button>
+                  <div className="mb-4 flex items-center gap-2 text-[11px] text-muted-foreground">
+                    <span className="h-px flex-1 bg-border" />
+                    或使用账号密码
+                    <span className="h-px flex-1 bg-border" />
+                  </div>
+                </>
+              )}
+            </>
+          )}
+
           {/* 模式切换：注册关闭时只显示登录（后端 /api/auth/config 控制） */}
           {regOpen ? (
           <div className="mb-5 grid grid-cols-2 gap-1 rounded-lg bg-black/20 p-1">
@@ -147,6 +230,22 @@ export function Login() {
           ) : null}
 
           <div className="space-y-3">
+            {needKey && (
+              <>
+                <input
+                  type="password"
+                  value={accessKey}
+                  onChange={(e) => setAccessKey(e.target.value)}
+                  placeholder="访问密钥（后端 MW_API_KEY）"
+                  autoComplete="off"
+                  className={inputCls}
+                  onKeyDown={(e) => e.key === "Enter" && submit()}
+                />
+                <p className="-mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                  该站点启用了访问密钥，请向管理员索取后填入。
+                </p>
+              </>
+            )}
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}

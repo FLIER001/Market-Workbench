@@ -1,0 +1,33 @@
+# 构建上下文排除项 —— 仓库 2.1G，源码本体只有几十 M
+.git
+.gitignore
+.workbuddy
+.impeccable
+.pi
+.zcode
+.launchd
+.vscode
+.idea
+
+# 体积大头
+docs/
+outputs/
+xhs-cards/
+a-stock-data/
+global-stock-data/
+frontend/node_modules/
+frontend/dist/
+backend/.venv/
+backend/.ruff_cache/
+backend/.pytest_cache/
+**/__pycache__/
+**/*.pyc
+
+# 本地私有配置与数据（镜像里不带任何密钥）
+**/.env
+**/.env.local
+backend/.env.*
+!backend/.env.example
+backend/data/*.bak
+*.log
+.DS_Store

@@ -247,13 +247,21 @@ _API_KEY = os.environ.get("MW_API_KEY", "").strip()
 _REGISTRATION = os.environ.get("MW_ALLOW_REGISTRATION", "").strip().lower() in ("1", "true", "yes", "on")
 
 
+# 登录前浏览器还拿不到访问密钥，这几个端点必须豁免；其余 /api/* 仍全部要求密钥。
+# 不放宽会导致公网部署里「设了 MW_API_KEY → 登录接口 401 → 谁都登不进来」。
+_KEY_FREE_PATHS = frozenset({
+    "/api/health", "/api/auth/config", "/api/auth/login", "/api/auth/register",
+    "/api/auth/cloud", "/api/auth/cloud/data-probe",
+})
+
+
 @app.middleware("http")
 async def _require_api_key(request: Request, call_next):
     if (
         _API_KEY
         and request.method != "OPTIONS"
         and request.url.path.startswith("/api/")
-        and request.url.path != "/api/health"
+        and request.url.path not in _KEY_FREE_PATHS
     ):
         bearer_ok = request.headers.get("authorization", "") == f"Bearer {_API_KEY}"
         if request.headers.get("x-vr-access-key", "") != _API_KEY and not bearer_ok:
@@ -353,15 +361,194 @@ class DataSetReq(BaseModel):
     value: object
 
 
+class CloudLoginReq(BaseModel):
+    access_token: str
+    # 浏览器侧 SDK 自校验的结果（不含 token），只用于对账诊断。
+    client_probe: dict | None = None
+
+
+_CLOUD_ENDPOINT = os.environ.get("MW_CLOUD_ENDPOINT", "").strip().rstrip("/")
+_CLOUD_PUBLISHABLE_KEY = os.environ.get("MW_CLOUD_PUBLISHABLE_KEY", "").strip()
+
+
+# 上一次云校验的现场（只存状态码与错误码，不存 token），供 /api/auth/cloud/diag 自查。
+_CLOUD_LAST_PROBE: dict = {}
+_CLOUD_DATA_PROBE: dict = {}
+
+
+@app.post("/api/auth/cloud/data-probe")
+def auth_cloud_data_probe(req: dict):
+    """前端上报的云数据库自检结果（只存状态码/错误码，不存业务数据或 token）。"""
+    _CLOUD_DATA_PROBE.clear()
+    _CLOUD_DATA_PROBE.update({
+        "at": int(__import__("time").time()),
+        **{k: v for k, v in req.items() if k in ("ok", "migrated", "error", "code", "status")},
+    })
+    return {"data": {"ok": True}}
+
+
+def _token_shape(token: str) -> dict:
+    """只描述 token 外形（不落原文），用于判断是 JWT 还是透明串、是否已过期。"""
+    import base64
+    import json as _json
+    import time as _time
+
+    shape: dict = {"len": len(token), "jwt": False, "server_time": int(_time.time())}
+    parts = token.split(".")
+    if len(parts) == 3:
+        shape["jwt"] = True
+        try:
+            pad = parts[1] + "=" * (-len(parts[1]) % 4)
+            claims = _json.loads(base64.urlsafe_b64decode(pad))
+            shape["claims"] = {
+                k: claims.get(k) for k in ("iss", "aud", "sub", "exp", "iat", "client_id") if k in claims
+            }
+            if isinstance(claims.get("exp"), (int, float)):
+                shape["expired"] = claims["exp"] < _time.time()
+        except Exception:  # noqa: BLE001 - 解不开就只报外形
+            shape["claims_error"] = True
+    else:
+        shape["prefix"] = token[:4]
+    return shape
+
+
+def _cloud_user_from_token(token: str, client_probe: dict | None = None) -> dict:
+    """用云服务的 Auth 数据面校验 access token，返回云端用户。
+
+    同一请求按几种头部组合各试一次：数据面可能要求请求带应用自己的 Origin
+    （浏览器调用天然有、服务端调用没有），缺了会被判成 invalid_client。
+    """
+    import requests as _requests
+
+    url = f"{_CLOUD_ENDPOINT}/.cloud/auth/v1/user/me"
+    base = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {token}",
+        "x-wb-webapp-access-key": _CLOUD_PUBLISHABLE_KEY,
+    }
+    variants = [
+        ("origin", {**base, "Origin": _CLOUD_ENDPOINT, "Referer": f"{_CLOUD_ENDPOINT}/"}),
+        ("plain", base),
+    ]
+    probes: list[dict] = []
+    body = None
+    for name, headers in variants:
+        try:
+            resp = _requests.get(url, headers=headers, timeout=10)
+        except Exception as exc:  # noqa: BLE001 - 网络异常记一笔后继续换组合
+            probes.append({"variant": name, "status": 0, "error": str(exc)[:160]})
+            continue
+        snippet = resp.text[:300]
+        probes.append({"variant": name, "status": resp.status_code, "body": snippet})
+        if resp.status_code < 400:
+            try:
+                body = resp.json()
+            except ValueError as exc:
+                raise HTTPException(502, "云服务返回格式异常") from exc
+            break
+        if resp.status_code >= 500:
+            break
+
+    _CLOUD_LAST_PROBE.clear()
+    _CLOUD_LAST_PROBE.update({
+        "at": int(__import__("time").time()),
+        "endpoint": _CLOUD_ENDPOINT,
+        "has_key": bool(_CLOUD_PUBLISHABLE_KEY),
+        "probes": probes,
+        "token": _token_shape(token),
+        "client": client_probe,
+    })
+
+    if body is None:
+        status = probes[-1].get("status") if probes else 0
+        if status in (401, 403):
+            code = ""
+            try:
+                code = str((__import__("json").loads(probes[-1].get("body") or "{}") or {}).get("error") or "")
+            except Exception:  # noqa: BLE001
+                code = ""
+            raise HTTPException(401, f"云会话已失效，请重新登录（{code or status}）")
+        if status == 0:
+            raise HTTPException(502, f"云服务不可达：{probes[-1].get('error', '')}")
+        raise HTTPException(502, f"云服务返回 {status}")
+    return body
+
+
+@app.get("/api/auth/cloud/diag")
+def auth_cloud_diag():
+    """云登录自查：返回上一次校验的头部组合、状态码与 token 外形（不含 token 原文）。"""
+    return {"data": {
+        "configured": bool(_CLOUD_ENDPOINT and _CLOUD_PUBLISHABLE_KEY),
+        "last": _CLOUD_LAST_PROBE or None,
+        "cloud_data": _CLOUD_DATA_PROBE or None,
+    }}
+
+
+@app.get("/api/auth/cloud/selftest")
+def auth_cloud_selftest():
+    """用一枚故意无效的 token 探一次数据面，只回报状态码与错误码。
+
+    用来区分「应用凭据（publishable key / Origin）不被接受」和「token 本身被拒」，
+    不涉及任何真实会话，也不回显密钥。
+    """
+    if not (_CLOUD_ENDPOINT and _CLOUD_PUBLISHABLE_KEY):
+        return {"data": {"configured": False}}
+    import requests as _requests
+
+    url = f"{_CLOUD_ENDPOINT}/.cloud/auth/v1/user/me"
+    base = {"x-wb-webapp-access-key": _CLOUD_PUBLISHABLE_KEY, "Authorization": "Bearer selftest.invalid.token"}
+    out = []
+    for name, headers in (
+        ("origin", {**base, "Origin": _CLOUD_ENDPOINT, "Referer": f"{_CLOUD_ENDPOINT}/"}),
+        ("plain", base),
+    ):
+        try:
+            r = _requests.get(url, headers=headers, timeout=8)
+            code = ""
+            try:
+                code = str((r.json() or {}).get("error") or "")
+            except ValueError:
+                code = ""
+            out.append({"variant": name, "status": r.status_code, "error": code})
+        except Exception as exc:  # noqa: BLE001
+            out.append({"variant": name, "status": 0, "error": str(exc)[:120]})
+    return {"data": {"configured": True, "endpoint": _CLOUD_ENDPOINT, "probes": out}}
+
+
+@app.post("/api/auth/cloud")
+def auth_cloud_login(req: CloudLoginReq):
+    """云身份换本地会话：校验云服务签发的 access token，映射成本地影子账号。
+
+    云端只负责「你是谁」，业务数据仍按本地 user_id 隔离，现有接口无需改动。
+    """
+    if not (_CLOUD_ENDPOINT and _CLOUD_PUBLISHABLE_KEY):
+        raise HTTPException(501, "云登录未配置：缺少 MW_CLOUD_ENDPOINT / MW_CLOUD_PUBLISHABLE_KEY")
+    if not req.access_token:
+        raise HTTPException(400, "缺少云会话")
+
+    body = _cloud_user_from_token(req.access_token, req.client_probe)
+
+    user = body.get("user") or (body.get("data") or {}).get("user") or body.get("data") or body
+    cloud_id = str(user.get("id") or user.get("uid") or user.get("sub") or "")
+    if not cloud_id:
+        raise HTTPException(502, "云服务未返回用户标识")
+    display = str(user.get("name") or user.get("email") or user.get("phone") or "")
+
+    local = users.ensure_cloud_user(cloud_id, display)
+    token = users.issue_session(local["id"])
+    return {"data": {"token": token, "user_id": local["id"], "username": local["username"], "cloud_id": cloud_id}}
+
+
 class DataMergeReq(BaseModel):
     items: dict
 
 
 @app.get("/api/auth/config")
 def auth_config():
-    """登录页公开配置：注册是否开放（空用户库时恒真，保证新部署能建出主账号）。"""
+    """登录页公开配置：注册是否开放（空用户库时恒真，保证新部署能建出主账号），
+    以及该部署是否启用了访问密钥（前端据此在登录前先要密钥）。"""
     open_reg = _REGISTRATION or users.user_count() == 0
-    return {"data": {"registration_open": open_reg}}
+    return {"data": {"registration_open": open_reg, "api_key_required": bool(_API_KEY)}}
 
 
 @app.post("/api/auth/register")
@@ -2324,8 +2511,13 @@ def factor_custom_delete(fid: str):
 # （dev 模式常驻 250MB+；静态托管只花 FileResponse 的零头）。
 # 必须放在文件末尾：catch-all 路由若注册在 API 路由之前会把它们全部吃掉。
 # dist 缺失时（只跑后端开发）这些路由不注册，不影响 /api。
+# MW_FRONTEND_DIST 可覆盖目录（打包/托管平台会把 dist 当构建产物过滤掉时，
+# 换成非默认目录名再指过来）。
 # ---------------------------------------------------------------------------
-_FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+_FRONTEND_DIST = Path(
+    os.environ.get("MW_FRONTEND_DIST")
+    or (Path(__file__).resolve().parent.parent / "frontend" / "dist")
+)
 
 if _FRONTEND_DIST.is_dir():
     app.mount("/assets", StaticFiles(directory=_FRONTEND_DIST / "assets"), name="assets")
