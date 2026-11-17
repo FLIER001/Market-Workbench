@@ -35,30 +35,32 @@ COMMIT="$(git rev-parse --short HEAD)"
 TAG="$(git describe --tags --always 2>/dev/null || echo "$COMMIT")"
 
 echo "==> 构建前端 (${TAG} / ${COMMIT})"
+# 直接输出到发布目录，不碰 frontend/dist：否则本地启动会复用这份含云配置的产物。
+rm -rf .publish/app/frontend/web
+mkdir -p .publish/app/frontend
 (
   cd frontend
   VITE_CLOUD_ENDPOINT="${VITE_CLOUD_ENDPOINT:-}" \
   VITE_CLOUD_PUBLISHABLE_KEY="${VITE_CLOUD_PUBLISHABLE_KEY:-}" \
   VITE_CLOUD_OAUTH_RELAY="${VITE_CLOUD_OAUTH_RELAY:-}" \
-  npm run build
+  npm run build -- --outDir ../.publish/app/frontend/web --emptyOutDir
 )
 
 # 注入自检：声明了 endpoint 却没进产物，说明 VITE_* 没被 Vite 读到。
 if [[ -n "${VITE_CLOUD_ENDPOINT:-}" ]]; then
-  if ! grep -rq "$VITE_CLOUD_ENDPOINT" frontend/dist/assets/*.js; then
+  if ! grep -rq "$VITE_CLOUD_ENDPOINT" .publish/app/frontend/web/assets/*.js; then
     echo "构建产物中未找到云服务 endpoint，VITE_CLOUD_* 注入失败" >&2
     exit 1
   fi
 fi
 
 echo "==> 同步 .publish/app"
-mkdir -p .publish/app/backend .publish/app/frontend
+mkdir -p .publish/app/backend
 rsync -a --delete \
   --exclude '.venv' --exclude '__pycache__' --exclude 'tests' \
   --exclude '.pytest_cache' --exclude '.ruff_cache' --exclude '*.pyc' \
   backend/ .publish/app/backend/
-rm -rf .publish/app/backend/.cache .publish/app/frontend/web
-cp -R frontend/dist .publish/app/frontend/web
+rm -rf .publish/app/backend/.cache
 cp frontend/package.json .publish/app/frontend/package.json
 
 echo
