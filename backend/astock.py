@@ -309,17 +309,127 @@ def profit_forecast(code: str) -> list[dict]:
     return df.to_dict("records") if df is not None and not df.empty else []
 
 
+def _run_with_timeout(fn, timeout: float):
+    """把阻塞调用放进线程里限时执行：超时抛 TimeoutError。
+
+    用于 akshare 里那些 `requests.get` 不带 timeout 的抓取函数——云主机连不上时
+    会把整条 API 请求挂死（乐咕就是这么挂住 /market/overview 的）。
+    """
+    box: dict = {}
+
+    def _work():
+        try:
+            box["value"] = fn()
+        except Exception as exc:  # noqa: BLE001 - 原样抛给调用方
+            box["error"] = exc
+
+    th = threading.Thread(target=_work, daemon=True)
+    th.start()
+    th.join(timeout)
+    if "error" in box:
+        raise box["error"]
+    if "value" not in box:
+        raise TimeoutError(f"超过 {timeout:g}s 未返回")
+    return box["value"]
+
+
+_SINA_NEWS = ("https://vip.stock.finance.sina.com.cn/corp/go.php/"
+              "vCB_AllNewsStock/symbol/{sym}.phtml")
+_SINA_NEWS_ITEM = re.compile(
+    r"(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})\s*<a[^>]*href='([^']+)'[^>]*>(.*?)</a>", re.S)
+
+
+def _news_sina(code: str, limit: int) -> list[dict]:
+    """新浪个股新闻页（服务端渲染，云主机可达）。
+
+    只给标题/时间/链接，没有摘要——契约里的「新闻内容」留空，
+    字段名与东财口径保持一致，前端按可选字段处理。
+    """
+    import requests
+    from html import unescape
+
+    sym = f"{get_prefix(code)}{code}"
+    try:
+        r = requests.get(
+            _SINA_NEWS.format(sym=sym),
+            headers={"User-Agent": UA, "Referer": "https://finance.sina.com.cn/"},
+            timeout=10,
+        )
+        r.encoding = r.apparent_encoding or "gbk"
+        # 该页日期与时间是靠 &nbsp; 分隔的，不换成空格则正则匹配不到
+        page = unescape(r.text).replace("\xa0", " ")
+    except Exception:  # noqa: BLE001 - 源不可用返回空
+        return []
+
+    out: list[dict] = []
+    for date, clock, url, title in _SINA_NEWS_ITEM.findall(page):
+        title = unescape(re.sub(r"<[^>]+>", "", title)).strip()
+        if not title:
+            continue
+        out.append({
+            "关键词": code, "新闻标题": title, "新闻内容": "",
+            "发布时间": f"{date} {clock}:00", "文章来源": "新浪财经", "新闻链接": url,
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
 def stock_news(code: str, limit: int = 20) -> list[dict]:
-    """个股新闻（东财）。"""
-    ak = _akshare()
-    df = ak.stock_news_em(symbol=code)
-    return df.head(limit).to_dict("records") if df is not None and not df.empty else []
+    """个股新闻：东财为主，新浪个股新闻页兜底。
+
+    东财 search-api-web 与搜索同族，在云主机被按 IP 风控（返回非 JSON）；
+    且 akshare 该函数不带超时，故限制 8s 后直接换新浪。
+    """
+    rows: list[dict] = []
+    try:
+        rows = _run_with_timeout(lambda: _akshare().stock_news_em(symbol=code), 8) \
+            .head(limit).to_dict("records")
+    except Exception:  # noqa: BLE001 - 主源不可用即降级
+        rows = []
+    if not rows:
+        rows = _news_sina(code, limit)
+    return rows[:limit]
+
+
+_INFO_FIELDS = "f43,f57,f58,f84,f85,f116,f117,f127,f189"
 
 
 def individual_info(code: str) -> dict:
-    """个股基本面（东财）：行业 / 总股本 / 上市时间等。"""
-    ak = _akshare()
-    df = ak.stock_individual_info_em(symbol=code)
+    """个股基本面：行业 / 总股本 / 上市时间等。
+
+    走东财 push2 直连（em_get：带浏览器 UA、直连优先）。akshare 的同名函数
+    自己 requests push2 且不带 UA，云主机按 IP 被拦成空表，故不再作主路径；
+    字段名保持与 akshare 一致，前端/调用方无需改动。
+    """
+    secid = f"{'1' if code.startswith('6') else '0'}.{code}"
+    try:
+        d = em_get(
+            "https://push2.eastmoney.com/api/qt/stock/get",
+            params={"secid": secid, "fields": _INFO_FIELDS, "fltt": 2, "invt": 2},
+            headers={"User-Agent": UA}, timeout=10,
+        ).json().get("data") or {}
+    except Exception:  # noqa: BLE001 - 源不可用走兜底
+        d = {}
+
+    if d.get("f57"):
+        listed = d.get("f189")
+        return {
+            "最新": d.get("f43"),
+            "股票代码": str(d.get("f57") or code),
+            "股票简称": d.get("f58") or "",
+            "总股本": d.get("f84"),
+            "流通股": d.get("f85"),
+            "总市值": d.get("f116"),
+            "流通市值": d.get("f117"),
+            "行业": d.get("f127") or "",
+            "上市时间": str(listed) if listed not in (None, "-", "") else "",
+        }
+
+    try:
+        df = _run_with_timeout(lambda: _akshare().stock_individual_info_em(symbol=code), 8)
+    except Exception:  # noqa: BLE001 - 兜底也失败则返回空
+        return {}
     if df is None or df.empty:
         return {}
     return {str(row["item"]): row["value"] for _, row in df.iterrows()}
@@ -1173,6 +1283,62 @@ def _em_session(direct: bool):
         pass  # 老版本 urllib3 缺参数时降级为无重试
     _EM_SESSIONS[direct] = s
     return s
+
+
+_SMARTBOX = "https://smartbox.gtimg.cn/s3/"
+# 腾讯美股代码带交易所后缀（aapl.oq / baba.n / xyz.a），对应东财 secid 市场号
+_US_SECID = {"oq": 105, "n": 106, "a": 107}
+_US_MARKET = {105: "NASDAQ", 106: "NYSE", 107: "US"}
+_US_SUFFIX = {105: ".O", 106: ".N", 107: ".O"}
+
+
+def tencent_suggest(q: str) -> list[dict]:
+    """腾讯 smartbox 代码联想：中文名 / 代码 / 拼音首字母都能命中。
+
+    东财 suggest 家族（searchapi / searchadapter）在云主机被 IP 风控，返回非 JSON，
+    个股搜索与美港股代码解析统一走这里。返回每项：
+    {code, name, market, secid_prefix, secucode}，market ∈ SH/SZ/BJ/HK/NASDAQ/NYSE/US。
+    失败返回 []（调用方按「源不可用」处理，不要当成「查无此票」）。
+    """
+    import requests
+
+    try:
+        r = requests.get(
+            _SMARTBOX, params={"q": q, "t": "all"},
+            headers={"User-Agent": UA, "Referer": "https://gu.qq.com/"}, timeout=6,
+        )
+        m = re.search(r'v_hint="(.*)"', r.text or "", re.S)
+        if not m:
+            return []
+        # 接口把中文转义成 \uXXXX，解码后才是可读名称
+        payload = json.loads(f'"{m.group(1)}"')
+    except Exception:  # noqa: BLE001 - 源不可用统一返回空
+        return []
+
+    out: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for item in payload.split("^"):
+        parts = item.split("~")
+        if len(parts) < 5:
+            continue
+        mk, raw_code, name = parts[0], parts[1], parts[2]
+        if not raw_code or not name or (mk, raw_code) in seen:
+            continue
+        seen.add((mk, raw_code))
+        if mk in ("sh", "sz", "bj"):
+            prefix = 1 if mk == "sh" else 0
+            out.append({"code": raw_code, "name": name, "market": mk.upper(),
+                        "secid_prefix": prefix, "secucode": f"{raw_code}.{mk.upper()}"})
+        elif mk == "hk":
+            out.append({"code": raw_code, "name": name, "market": "HK",
+                        "secid_prefix": 116, "secucode": f"{raw_code}.HK"})
+        elif mk == "us":
+            cls = raw_code.rsplit(".", 1)[-1].lower() if "." in raw_code else ""
+            code = raw_code.split(".", 1)[0].upper()
+            prefix = _US_SECID.get(cls, 105)
+            out.append({"code": code, "name": name, "market": _US_MARKET[prefix],
+                        "secid_prefix": prefix, "secucode": f"{code}{_US_SUFFIX[prefix]}"})
+    return out
 
 
 def em_get(url: str, params: dict | None = None, headers: dict | None = None, timeout: int = 15):

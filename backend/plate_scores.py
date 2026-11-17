@@ -855,6 +855,65 @@ def _fetch_quotes(codes: list[str]) -> dict[str, dict]:
     return quotes
 
 
+def _methodology() -> dict:
+    """评分方法学。前端「方法说明」直接读这些字段（无空值保护），契约不可省——
+    冷构建的占位快照也必须带上，否则页面会在渲染阶段崩掉。"""
+    return {
+        "framework": "板块强度分 + 板块机会分（防追涨双评分）",
+        "strength_weights": {"relative_trend": 25, "breadth_impulse": 30, "flow_confirmation": 20, "trend_quality": 15, "leader_concentration": 10},
+        "opportunity_weights": {"fundamental": 30, "earnings_revision": 20, "valuation_match": 15, "position_score": 20, "crowding_score": 15, "catalyst": 0},
+        "hard_constraints": [
+            "机会分<40：不进入建议参与名单",
+            "强度分<40：只能进入左侧观察",
+            "拥挤惩罚≥15：标记为强势但不追",
+        ],
+        "definitions": [
+            "强度分：确认趋势和市场共识，不直接表示买入价值",
+            "机会分：判断当前价格位置下的未来收益风险比",
+            "相对趋势：板块综合指数 20/60 日相对中证全指超额收益",
+            "板块权重：人工核心股加东财板块补充股，前一日流通市值形成权重；单股有效上限7%，同时满足单股不高于8%和前五大不高于35%。",
+            "扩散改善：MA20覆盖变化、收益中位数、等权限权差和新高新低改善。",
+            "交易确认：板块真实成交额占中证全指成交额的MA5/MA20变化，不解释为资金净流入。",
+            "估值匹配：成分股真实近五年PE/PB历史分位；盈利修正取下一预测年度EPS相对上月变化。",
+            "价格位置与拥挤程度：均使用板块自身时间序列历史分位；催化未取得结构化数据前不计分。",
+            "成分范围：人工核心股全部保留，东财概念/行业板块成分按流通市值降序补足，每板块最多300只最相关成分（不足300只不补）；交易日按当日权重覆盖率≥80%保留。",
+        ],
+        "sources": [
+            {"label": "腾讯财经个股行情与K线", "url": "https://stockapp.finance.qq.com/"},
+            {"label": "东方财富中证全指日K", "url": "https://quote.eastmoney.com/"},
+            {"label": "东方财富业绩报表", "url": "https://data.eastmoney.com/"},
+            {"label": "东方财富F10盈利预测", "url": "https://emweb.securities.eastmoney.com/"},
+            {"label": "百度股市通历史估值（经AKShare）", "url": "https://gushitong.baidu.com/"},
+            {"label": "用户附件：A股板块评分系统技术方案_防追涨优化版_V1.1", "url": None},
+        ],
+    }
+
+
+def _pending_snapshot() -> dict:
+    """冷建占位：契约字段齐全但没有数据。
+
+    `cache_state=refreshing` 会让前端 pollRefreshing 继续轮询，
+    比直接 504 或返回空对象更诚实——页面显示「正在构建」而不是报错。
+    `refresh_error` 带上一次失败原因（有的话），线上不必翻容器日志。
+    """
+    return {
+        "schema_version": _SCHEMA_VERSION,
+        "as_of": "",
+        "generated_at": "",
+        "is_intraday": False,
+        "quote_time": None,
+        "financial_period": None,
+        "board_count": 0,
+        "boards": [],
+        "thresholds": None,
+        "methodology": _methodology(),
+        "cache_state": "refreshing",
+        "stale": True,
+        "cached_at": None,
+        "refresh_error": cache_runtime.peek_error("plate_scores:v5"),
+    }
+
+
 def _build() -> dict:
     now = datetime.now(BEIJING)
     boards = _enrich_boards(_load_constituents())
@@ -1042,35 +1101,7 @@ def _build() -> dict:
         "board_count": len(rows),
         "boards": rows,
         "thresholds": {"strong": round(strong_line, 1), "weak": round(weak_line, 1), "opportunity": round(opp_line, 1)},
-        "methodology": {
-            "framework": "板块强度分 + 板块机会分（防追涨双评分）",
-            "strength_weights": {"relative_trend": 25, "breadth_impulse": 30, "flow_confirmation": 20, "trend_quality": 15, "leader_concentration": 10},
-            "opportunity_weights": {"fundamental": 30, "earnings_revision": 20, "valuation_match": 15, "position_score": 20, "crowding_score": 15, "catalyst": 0},
-            "hard_constraints": [
-                "机会分<40：不进入建议参与名单",
-                "强度分<40：只能进入左侧观察",
-                "拥挤惩罚≥15：标记为强势但不追",
-            ],
-            "definitions": [
-                "强度分：确认趋势和市场共识，不直接表示买入价值",
-                "机会分：判断当前价格位置下的未来收益风险比",
-                "相对趋势：板块综合指数 20/60 日相对中证全指超额收益",
-                "板块权重：人工核心股加东财板块补充股，前一日流通市值形成权重；单股有效上限7%，同时满足单股不高于8%和前五大不高于35%。",
-                "扩散改善：MA20覆盖变化、收益中位数、等权限权差和新高新低改善。",
-                "交易确认：板块真实成交额占中证全指成交额的MA5/MA20变化，不解释为资金净流入。",
-                "估值匹配：成分股真实近五年PE/PB历史分位；盈利修正取下一预测年度EPS相对上月变化。",
-                "价格位置与拥挤程度：均使用板块自身时间序列历史分位；催化未取得结构化数据前不计分。",
-                "成分范围：人工核心股全部保留，东财概念/行业板块成分按流通市值降序补足，每板块最多300只最相关成分（不足300只不补）；交易日按当日权重覆盖率≥80%保留。",
-            ],
-            "sources": [
-                {"label": "腾讯财经个股行情与K线", "url": "https://stockapp.finance.qq.com/"},
-                {"label": "东方财富中证全指日K", "url": "https://quote.eastmoney.com/"},
-                {"label": "东方财富业绩报表", "url": "https://data.eastmoney.com/"},
-                {"label": "东方财富F10盈利预测", "url": "https://emweb.securities.eastmoney.com/"},
-                {"label": "百度股市通历史估值（经AKShare）", "url": "https://gushitong.baidu.com/"},
-                {"label": "用户附件：A股板块评分系统技术方案_防追涨优化版_V1.1", "url": None},
-            ],
-        },
+        "methodology": _methodology(),
     }
 
 
@@ -1122,11 +1153,15 @@ def get_cached_plate_scores() -> dict | None:
 
 def get_plate_scores(force: bool = False) -> dict:
     cached = cache_runtime.peek("plate_scores:v5") or _load_cache()
-    return cache_runtime.get(
+    value = cache_runtime.get(
         "plate_scores:v5", lambda: score_worker.rebuild(__name__, _load_cache),
         valid=lambda value: bool(value.get("boards")),
         ttl=_cache_ttl(cached or {}), warm=lambda: cached, force=force,
+        cold_nonblocking=True,
     )
+    # 无快照时不在请求线程里同步等重建：云端冷建要逐只抓成分股行情与日 K，
+    # 实测 >120s，网关会先返回 504。改为返回 refreshing 占位，前端自动轮询。
+    return value if value is not None else _pending_snapshot()
 
 
 def rebuild_snapshot() -> dict:

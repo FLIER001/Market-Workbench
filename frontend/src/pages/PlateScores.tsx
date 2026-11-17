@@ -288,6 +288,19 @@ export function PlateScoresPanel() {
     return () => window.clearInterval(timer);
   }, [load]);
 
+  // 冷建（云端无快照）可能超出通用轮询窗口（约 2 分钟）。仍在构建且没有数据时
+  // 按 60s 继续追，最多 10 次；拿到数据或转为非 refreshing 状态即停。
+  const [buildRetry, setBuildRetry] = useState(0);
+  useEffect(() => {
+    if (!data || data.board_count > 0 || data.cache_state !== "refreshing") return;
+    if (buildRetry >= 10 || document.hidden) return;
+    const timer = window.setTimeout(() => {
+      setBuildRetry((n) => n + 1);
+      void load(false);
+    }, 60_000);
+    return () => window.clearTimeout(timer);
+  }, [data, buildRetry, load]);
+
   const states = useMemo(() => {
     const values = new Set(data?.boards.map((r) => r.state) || []);
     return ["全部", ...Array.from(values)];
@@ -624,7 +637,13 @@ export function PlateScoresPanel() {
                   })}
                 </tbody>
               </table>
-              {rows.length === 0 && <p className="py-12 text-center text-sm text-muted-foreground">没有匹配板块</p>}
+              {rows.length === 0 && (
+                <p className="py-12 text-center text-sm text-muted-foreground">
+                  {data.cache_state === "refreshing" && data.board_count === 0
+                    ? "正在构建板块评分（首次需抓取全部成分股行情与日 K，约数分钟），完成后自动刷新"
+                    : "没有匹配板块"}
+                </p>
+              )}
             </div>
             <div className="border-t border-border/50 px-4 py-2 text-[11px] text-muted-foreground/60">
               显示 {rows.length}/{data.board_count} · 强度分确认趋势，机会分判断价值，不作为投资建议

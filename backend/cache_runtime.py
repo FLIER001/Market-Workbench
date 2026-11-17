@@ -118,6 +118,16 @@ def peek(key: str) -> Any:
         return _entries.get(key, _Entry()).value
 
 
+def peek_error(key: str) -> str | None:
+    """最近一次后台重建的失败原因（成功后被清空）。
+
+    给「冷建占位」用：没有 last-good 时把真实错误带到响应里，
+    否则页面只能显示「构建中」，线上排查看不到任何线索。
+    """
+    with _lock:
+        return _entries.get(key, _Entry()).error
+
+
 def update_value(key: str, mutator: Callable[[Any], Any]) -> Any:
     """Mutate the last-good value in place under the lock and return it.
 
@@ -248,12 +258,17 @@ def get(
     save: Callable[[Any], None] | None = None,
     force: bool = False,
     decorate: bool = True,
+    cold_nonblocking: bool = False,
 ) -> Any:
     """Return last-good immediately and refresh stale data once in background.
 
     With no usable value, the first request builds synchronously because there
     is nothing truthful to render.  ``force`` bypasses TTL/backoff but reuses an
     already-running refresh.
+
+    ``cold_nonblocking``：没有可用值时**不再同步等待**，只把后台重建挂起来并返回
+    None。给「冷建时间远超网关超时」的数据集用（板块评分要逐只抓成分股行情与日 K，
+    云端实测 >120s，同步等只会换来 504）；调用方拿到 None 后自行返回占位快照。
     """
     now = time.time()
     with _lock:
@@ -293,6 +308,12 @@ def get(
             cold_owner = False
 
     if cold_owner:
+        if cold_nonblocking:
+            threading.Thread(
+                target=_refresh, args=(key, build, valid, save), daemon=True,
+                name=f"cache-cold:{key}",
+            ).start()
+            return None
         _refresh(key, build, valid, save)
     else:
         # Cold starts are rare; wait for the owner instead of building twice.

@@ -74,3 +74,32 @@ def test_unregistered_keys_are_never_evicted():
     for i in range(50):
         cache_runtime.get(f"score:{i}", lambda i=i: {"i": i}, ttl=600)
     assert cache_runtime.peek("score:0") == {"i": 0}
+
+
+def test_cold_nonblocking_returns_none_and_builds_in_background():
+    """冷建不许卡住请求线程：立即返回 None，值在后台补齐。
+
+    板块评分云端冷建 >120s，同步等会被网关先判 504，这条是那次的回归保护。
+    """
+    started = []
+
+    def build():
+        started.append(1)
+        time.sleep(0.05)
+        return {"value": 7}
+
+    first = cache_runtime.get("cold", build, ttl=60, cold_nonblocking=True)
+    assert first is None
+    assert started == [1]
+    time.sleep(0.08)
+    assert cache_runtime.peek("cold") == {"value": 7}
+
+
+def test_cold_nonblocking_exposes_last_error():
+    def boom():
+        time.sleep(0.01)
+        raise RuntimeError("上游失败")
+
+    assert cache_runtime.get("cold-err", boom, ttl=60, cold_nonblocking=True) is None
+    time.sleep(0.05)
+    assert "上游失败" in (cache_runtime.peek_error("cold-err") or "")

@@ -385,11 +385,27 @@ def _search(q: str) -> dict | None:
             "secucode": f"{code}{suffix}", "market": market}
 
 
+def _search_tencent(q: str) -> dict | None:
+    """腾讯 smartbox 兜底解析（东财 suggest 在云主机被 IP 风控，返回非 JSON）。
+
+    优先取代码完全相等的条目——搜 AAPL 时腾讯会同时给 AAPL 与 AAPL 相关票据/ETF。
+    """
+    hits = astock.tencent_suggest(q)
+    if not hits:
+        return None
+    hit = next((h for h in hits if str(h.get("code", "")).upper() == q), hits[0])
+    return {"code": hit["code"], "name": hit["name"], "secid_prefix": hit["secid_prefix"],
+            "secucode": hit["secucode"], "market": hit["market"]}
+
+
 def resolve_symbol(query: str) -> dict | None:
     """代码/名称 → {code, name, secid_prefix, secucode, market}。认美股/港股/韩股。
     数字型港股短代码（如 `700`）补零到 5 位再试一次（东财按 `00700` 收）。
     韩股用国际后缀 `.KS`/`.KQ`/`.KR`（如三星 `005930.KS`）——韩股代码与 A 股同为 6 位数字，
-    需显式后缀区分，否则前端会按 A 股处理、后端也搜不到韩股。"""
+    需显式后缀区分，否则前端会按 A 股处理、后端也搜不到韩股。
+
+    东财搜索不可用时降级腾讯 smartbox，否则云端所有美港股查询（行情/财务/现金流）全挂。
+    """
     q = query.strip().upper()
     if not q:
         return None
@@ -397,9 +413,19 @@ def resolve_symbol(query: str) -> dict | None:
         if q.endswith(suf):
             q = q[: -len(suf)]
             break
-    hit = _search(q)
+    try:
+        hit = _search(q)
+    except SearchUnavailable:
+        hit = None
     if hit is None and q.isdigit() and len(q) < 5:
-        hit = _search(q.zfill(5))
+        try:
+            hit = _search(q.zfill(5))
+        except SearchUnavailable:
+            hit = None
+    if hit is None:
+        hit = _search_tencent(q)
+        if hit is None and q.isdigit() and len(q) < 5:
+            hit = _search_tencent(q.zfill(5))
     return hit
 
 

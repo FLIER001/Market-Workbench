@@ -20,10 +20,18 @@ _T = TypeVar("_T")
 
 def rebuild(module: str, load: Callable[[], _T], *, entry: str = "rebuild_snapshot()") -> _T:
     with _LOCK:
-        subprocess.run(
+        proc = subprocess.run(
             [sys.executable, "-c", f"import {module}; {module}.{entry}"],
             cwd=_BACKEND_DIR,
             timeout=1800,
-            check=True,
+            capture_output=True,
+            text=True,
         )
+        if proc.returncode != 0:
+            # 子进程的失败原因默认沉在容器里看不到；把它带进异常，
+            # 上层 cache_runtime 会写进 refresh_error，页面/接口就能直接读到。
+            tail = [ln for ln in ((proc.stderr or "") + (proc.stdout or "")).strip().splitlines() if ln]
+            raise RuntimeError(
+                f"{module} 重建失败（退出码 {proc.returncode}）：" + " | ".join(tail[-5:])
+            )
         return load()
