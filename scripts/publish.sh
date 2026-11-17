@@ -34,7 +34,7 @@ fi
 COMMIT="$(git rev-parse --short HEAD)"
 TAG="$(git describe --tags --always 2>/dev/null || echo "$COMMIT")"
 
-echo "==> 构建前端（$TAG / $COMMIT）"
+echo "==> 构建前端 (${TAG} / ${COMMIT})"
 (
   cd frontend
   VITE_CLOUD_ENDPOINT="${VITE_CLOUD_ENDPOINT:-}" \
