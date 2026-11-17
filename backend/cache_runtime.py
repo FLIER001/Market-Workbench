@@ -319,6 +319,10 @@ def get(
         # Cold starts are rare; wait for the owner instead of building twice.
         # Bounded so a wedged owner cannot hang this caller forever — falling
         # through returns the error decoration below.
+        # cold_nonblocking：别人正在建也直接返回 None。启动预热往往已经占着锁，
+        # 若还在这里等，等于把 120s 的等待从「自己建」挪到「等别人建」，一样 504。
+        if cold_nonblocking:
+            return None
         deadline = time.time() + _COLD_WAIT_MAX
         while time.time() < deadline:
             with _lock:

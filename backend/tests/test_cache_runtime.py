@@ -103,3 +103,17 @@ def test_cold_nonblocking_exposes_last_error():
     assert cache_runtime.get("cold-err", boom, ttl=60, cold_nonblocking=True) is None
     time.sleep(0.05)
     assert "上游失败" in (cache_runtime.peek_error("cold-err") or "")
+
+
+def test_cold_nonblocking_does_not_wait_for_another_builder():
+    """别人正在建（启动预热占锁）时也必须立即返回，否则等于换个姿势等 120s。"""
+    def build():
+        time.sleep(0.3)
+        return {"value": 9}
+
+    assert cache_runtime.get("cold-busy", build, ttl=60, cold_nonblocking=True) is None
+    t0 = time.time()
+    again = cache_runtime.get("cold-busy", build, ttl=60, cold_nonblocking=True)
+    assert again is None and time.time() - t0 < 0.1
+    time.sleep(0.35)
+    assert cache_runtime.peek("cold-busy") == {"value": 9}
