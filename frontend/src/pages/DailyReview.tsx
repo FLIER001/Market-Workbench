@@ -248,7 +248,7 @@ export function DailyReview() {
 
   // —— 把页面上各数据块都打包给 AI（指数只是其一）——
   const sentimentText = sentiment
-    ? `涨${sentiment.up}/跌${sentiment.down}/平${sentiment.flat}家，涨停${sentiment.zt}（真实${sentiment.zt_real}）、跌停${sentiment.dt}（真实${sentiment.dt_real}），活跃度${sentiment.active}，市场广度${sentiment.breadth}`
+    ? `涨${sentiment.up}/跌${sentiment.down}/平${sentiment.flat}家，涨停${sentiment.zt}（真实${sentiment.zt_real}）、跌停${sentiment.dt}（真实${sentiment.dt_real}），活跃度${sentiment.active}，市场广度${sentiment.breadth}${sentiment.source ? `（数据源：${sentiment.source}）` : ""}`
     : "（情绪数据未取到）";
 
   const sectorText = sectors.length
@@ -419,7 +419,14 @@ export function DailyReview() {
         <section className="flex flex-col px-4 pb-3 pt-4 md:px-[22px] xl:border-r xl:border-border">
           <div className="section-heading justify-between">
             <h2>市场情绪</h2>
-            <span className="text-[10px] font-normal tracking-normal text-muted-foreground">{sentiment?.date ?? "等待数据"}</span>
+            <span
+              className="text-[10px] font-normal tracking-normal text-muted-foreground"
+              title={sentiment?.source === "东方财富"
+                ? "乐咕乐股不可达，此处按东方财富口径：涨跌家数取沪深指数成分统计，涨跌停取东财涨停/跌停池（不含 ST、北证），跌停数会略低于乐咕"
+                : undefined}
+            >
+              {[sentiment?.date, sentiment?.source].filter(Boolean).join(" · ") || "等待数据"}
+            </span>
           </div>
           {!sentiment?.breadth ? pending(ovDone) : (
             <>

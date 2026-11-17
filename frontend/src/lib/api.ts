@@ -305,6 +305,8 @@ export interface IndexQuote {
 export interface MarketSentiment {
   up: number; down: number; flat: number; zt: number; zt_real: number; dt: number; dt_real: number;
   active: string; breadth: string; speculation: string; date: string;
+  /** 取数口径：乐咕乐股（默认）/ 东方财富（云端降级） */
+  source?: string;
 }
 export interface SectorFlow {
   name: string; pct: number; net: number; inflow: number; outflow: number; firms: number;

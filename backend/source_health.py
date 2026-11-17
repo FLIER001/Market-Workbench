@@ -85,6 +85,23 @@ def _probe_em_datacenter() -> str | None:
     return None if rows else "无数据返回"
 
 
+def _probe_legu() -> str | None:
+    """乐咕乐股·赚钱效应（市场情绪卡的涨跌家数/真实涨跌停主源）。"""
+    import requests
+
+    try:
+        r = requests.get(
+            "https://legulegu.com/stockdata/market-activity",
+            headers={"User-Agent": astock.UA},
+            timeout=8,
+        )
+        if r.status_code >= 400:
+            return f"HTTP {r.status_code}"
+        return None if "market-activity" in r.text else "页面结构异常"
+    except Exception as e:  # noqa: BLE001
+        return f"连接失败：{type(e).__name__}"
+
+
 def _probe_em_search() -> str | None:
     """东财搜索 suggest（个股搜索框；走 em_get 含直连/代理自适应）。"""
     try:
@@ -236,6 +253,7 @@ _PROBES: list[tuple[str, str, str, object]] = [
     ("em_push2",  "东财 push2 系",   "全球指数 / 分时 / 资金流", _probe_em_push2),
     ("em_dc",     "东财数据中心",    "两融 / 解禁 / 龙虎榜 / 大宗", _probe_em_datacenter),
     ("em_search", "东财搜索",        "个股搜索框", _probe_em_search),
+    ("legu",      "乐咕乐股",        "市场情绪 / 涨跌家数", _probe_legu),
     ("sws",       "申万研究",        "行业评分 / 二级行业", _probe_sws),
     ("fred",      "FRED",           "黄金 / 宏观 / 资金面", _probe_fred),
     ("chinabond", "中债曲线(AKShare)", "债市页", _probe_chinabond),

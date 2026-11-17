@@ -272,14 +272,112 @@ def _num(v) -> int:
         return 0
 
 
-def _sentiment() -> dict:
-    """市场情绪：涨跌家数/涨停跌停/活跃度 + 大盘宽度、题材投机（客观数据机械分档）。"""
+_LEGU_COOLDOWN = 1800  # 秒；乐咕失败后暂停重试，免得每次请求都白等一次超时
+_legu_down_until = 0.0
+
+
+def _legu_activity(timeout: float = 8.0) -> dict | None:
+    """乐咕乐股·赚钱效应（涨跌家数 / 真实涨跌停 / 活跃度 / 统计日期）。
+
+    akshare 的实现是 HTML 抓取，且 `requests.get` **不带超时**——云端一旦连不上
+    乐咕就会把 /api/market/overview 整条请求挂死。这里放到线程里限时取，
+    失败后进入冷却期直接跳过，不再每个请求都试一遍。
+    """
+    global _legu_down_until
+    now = time.time()
+    if now < _legu_down_until:
+        return None
+    box: dict = {}
+
+    def _work():
+        try:
+            box["df"] = astock._akshare().stock_market_activity_legu()
+        except Exception as exc:  # noqa: BLE001 - 统一按「源不可用」处理
+            box["err"] = exc
+
+    th = threading.Thread(target=_work, daemon=True)
+    th.start()
+    th.join(timeout)
+    df = box.get("df")
+    if df is None:
+        _legu_down_until = time.time() + _LEGU_COOLDOWN
+        return None
     try:
-        # akshare 惰性导入（同 astock 模式）：未装时降级返回空，不挡整个服务启动
-        df = astock._akshare().stock_market_activity_legu()
-        d = {row["item"]: row["value"] for _, row in df.iterrows()}
-    except Exception:
+        return {str(row["item"]): row["value"] for _, row in df.iterrows()}
+    except Exception:  # noqa: BLE001 - 表结构变化按不可用处理
+        return None
+
+
+def _em_activity() -> dict | None:
+    """东财口径的市场情绪，字段名与乐咕对齐，供云端降级使用。
+
+    涨跌家数取沪（1.000001）+ 深（0.399106）指数成分的上涨/下跌/平盘统计；
+    涨停/跌停取东财涨停板四池。真实涨/跌停按乐咕口径剔除 ST 与一字板
+    （首次封板 ≤09:30 且当日未炸板）——实测该口径与乐咕当日值完全一致。
+    """
+    try:
+        r = astock.em_get(
+            "https://push2.eastmoney.com/api/qt/ulist.np/get",
+            params={"fltt": 2, "secids": "1.000001,0.399106",
+                    "fields": "f12,f14,f104,f105,f106"},
+            headers={"User-Agent": astock.UA}, timeout=10,
+        )
+        rows = (r.json().get("data") or {}).get("diff") or []
+    except Exception:  # noqa: BLE001 - 源不可用
+        return None
+    up = sum(_num(x.get("f104")) for x in rows)
+    down = sum(_num(x.get("f105")) for x in rows)
+    flat = sum(_num(x.get("f106")) for x in rows)
+    if not (up or down or flat):
+        return None
+
+    # 定位最近交易日：往前回溯，第一日有涨停池即取（非交易日/盘前返空则继续回溯）。
+    today = datetime.now(BEIJING).date()
+    resolved, zt = "", []
+    for back in range(8):
+        d = (today - timedelta(days=back)).strftime("%Y%m%d")
+        zt = astock.em_zt_topic_pool("getTopicZTPool", d, "fbt:asc")
+        if zt:
+            resolved = d
+            break
+    dt = astock.em_zt_topic_pool("getTopicDTPool", resolved, "fund:asc") if resolved else []
+
+    def _real(pool: list[dict]) -> int:
+        """真实涨跌停：剔除 ST 与一字板（开盘即封且未炸板）。"""
+        n = 0
+        for row in pool:
+            name = str(row.get("n", "")).upper()
+            if "ST" in name:
+                continue
+            fbt = _num(row.get("fbt")) or 999999
+            zbc = _num(row.get("zbc"))
+            if fbt <= 93000 and zbc == 0:
+                continue
+            n += 1
+        return n
+
+    total = up + down + flat
+    return {
+        "上涨": up, "下跌": down, "平盘": flat,
+        "涨停": len(zt), "真实涨停": _real(zt),
+        "跌停": len(dt), "真实跌停": _real(dt),
+        "活跃度": f"{up / total * 100:.2f}%" if total else "",
+        "统计日期": f"{resolved[:4]}-{resolved[4:6]}-{resolved[6:]} 15:00:00" if resolved else "",
+    }
+
+
+def _sentiment() -> dict:
+    """市场情绪：涨跌家数/涨停跌停/活跃度 + 大盘宽度、题材投机（客观数据机械分档）。
+
+    主源乐咕乐股；云端乐咕不可达时降级东财（同口径），并回传 source 供页面标注，
+    避免把两个口径的数字混在一起却不说明。
+    """
+    raw, source = _legu_activity(), "乐咕乐股"
+    if not raw:
+        raw, source = _em_activity(), "东方财富"
+    if not raw:
         return {}
+    d = raw
     up, down, flat = _num(d.get("上涨")), _num(d.get("下跌")), _num(d.get("平盘"))
     zt, zt_real = _num(d.get("涨停")), _num(d.get("真实涨停"))
     dt, dt_real = _num(d.get("跌停")), _num(d.get("真实跌停"))
@@ -301,6 +399,7 @@ def _sentiment() -> dict:
         "active": str(d.get("活跃度", "")),
         "breadth": breadth, "speculation": speculation,
         "date": str(d.get("统计日期", "")),
+        "source": source,
     }
 
 
@@ -1745,11 +1844,13 @@ def _market_breadth_card(previous: dict | None = None) -> dict | None:
     total = sum(s.get(k, 0) for k in ("up", "down", "flat"))
     if not total:
         return None
+    src = s.get("source") or "乐咕乐股"
     card = {
         "label": "全A上涨家数占比", "value": round(s["up"] / total * 100.0, 2),
         "forecast": None, "prev": None, "date": str(s.get("date", ""))[:10], "hist": [],
-        "unit": "%", "source": "乐咕乐股·全市场涨跌家数",
-        "source_url": "https://legulegu.com/stockdata/market-activity",
+        "unit": "%", "source": f"{src}·全市场涨跌家数",
+        "source_url": ("https://legulegu.com/stockdata/market-activity" if src == "乐咕乐股"
+                       else "https://quote.eastmoney.com/center/gridlist.html"),
         "scope": "全A股（上涨/下跌/平盘家数）",
         "sample_size": total,
     }
