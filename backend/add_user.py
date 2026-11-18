@@ -42,12 +42,14 @@ def cmd_add(argv: list[str]) -> None:
 
 def cmd_list(_argv: list[str]) -> None:
     with users._conn() as c:
-        rows = c.execute("SELECT id, username, created_at FROM users ORDER BY id").fetchall()
+        rows = c.execute("SELECT id, username, display_name, created_at FROM users ORDER BY id").fetchall()
     if not rows:
         print("（空）尚无账号")
         return
     for r in rows:
-        print(f"  {r['id']:>4}  {r['username']}")
+        label = (r["display_name"] or "").strip()
+        hint = f"  ← {label}" if label else ""
+        print(f"  {r['id']:>4}  {r['username']}{hint}")
 
 
 def cmd_passwd(argv: list[str]) -> None:

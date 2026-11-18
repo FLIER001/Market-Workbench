@@ -35,9 +35,13 @@ export function loadUser(): AuthUser | null {
   }
 }
 
+export function saveUser(user: AuthUser) {
+  storageSet(USER_KEY, JSON.stringify(user));
+}
+
 export function saveSession(token: string, user: AuthUser) {
   storageSet(TOKEN_KEY, token);
-  storageSet(USER_KEY, JSON.stringify(user));
+  saveUser(user);
 }
 
 export function clearSession() {
@@ -91,7 +95,13 @@ export const auth = {
     ),
   login: (username: string, password: string) =>
     req<{ token: string; username: string; user_id: number }>("/auth/login", "POST", { username, password }),
-  me: () => req<AuthUser>("/auth/me"),
+  // /auth/me 的 username 是后端算出的展示名（云账号取云端昵称，而不是 wb:<id>），
+  // 用它刷新本地缓存，避免刷新页面后还顶着上次存的旧名字。
+  me: async (): Promise<AuthUser> => {
+    const u = await req<AuthUser>("/auth/me");
+    if (u && typeof u.username === "string" && u.username) saveUser(u);
+    return u;
+  },
   logout: () => req<{ ok: boolean }>("/auth/logout", "POST"),
   // 云会话用户读写云数据库（RLS 按 owner_id 隔离）；其余会话沿用后端 SQLite。
   getData: async (): Promise<Record<string, unknown>> =>

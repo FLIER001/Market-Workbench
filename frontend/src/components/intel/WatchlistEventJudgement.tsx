@@ -616,7 +616,9 @@ export function WatchlistEventJudgement() {
     etfs: initialSeeds.filter((asset) => asset.kind === "etf").length,
   });
   const [localError, setLocalError] = useState<string | null>(null);
-  const owner = loadUser()?.username || "local";
+  // 用账号 id 而不是用户名做任务键：云账号的显示名会变（云端改名/首次补昵称），
+  // 用用户名会让已有任务的进度凭空消失。
+  const owner = String(loadUser()?.id ?? "local");
   const taskKey = backgroundTaskKey("watchlist-event-judgement", owner);
   const task = useBackgroundTask<EventJudgementTaskData>(taskKey, EMPTY_TASK);
   const running = task.status === "running";

@@ -74,6 +74,11 @@ def init_db() -> None:
         columns = {row["name"] for row in c.execute("PRAGMA table_info(user_data)").fetchall()}
         if "version" not in columns:
             c.execute("ALTER TABLE user_data ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
+        # 影子账号（WorkBuddy 云身份）的 username 是 `wb:<cloud_id>` 这种内部标识，
+        # 展示名要单独存一列，否则界面会露出 `wb:6MCV...`。老库就地补列，幂等。
+        ucols = {row["name"] for row in c.execute("PRAGMA table_info(users)").fetchall()}
+        if "display_name" not in ucols:
+            c.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
         c.execute(
             """CREATE TABLE IF NOT EXISTS user_data_backups (
                    user_id INTEGER NOT NULL,
@@ -90,6 +95,14 @@ def _hash_pw(password: str, salt: str) -> str:
         "sha256", password.encode("utf-8"), bytes.fromhex(salt), _PBKDF2_ROUNDS
     )
     return dk.hex()
+
+
+def _label(display_name: str | None, username: str) -> str:
+    """对外展示名：昵称优先；影子账号没昵称时给可读占位，不把内部 id 甩给用户。"""
+    name = (display_name or "").strip()
+    if name:
+        return name
+    return "WorkBuddy 用户" if username.startswith("wb:") else username
 
 
 def register(username: str, password: str) -> dict:
@@ -133,7 +146,7 @@ def login(username: str, password: str) -> dict:
             "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?,?,?,?)",
             (token, row["id"], now, now + _SESSION_TTL),
         )
-    return {"token": token, "username": row["username"], "user_id": row["id"]}
+    return {"token": token, "username": _label(row["display_name"], row["username"]), "user_id": row["id"]}
 
 
 def user_count() -> int:
@@ -148,18 +161,25 @@ def ensure_cloud_user(external_id: str, display_name: str = "") -> dict:
     影子账号的密码哈希写死为不可能匹配 PBKDF2 输出的标记，因此它无法走密码登录。
     """
     username = f"wb:{external_id}"
+    display = (display_name or "").strip()
     now = time.time()
     with _conn() as c:
-        row = c.execute("SELECT id, username FROM users WHERE username=?", (username,)).fetchone()
+        row = c.execute(
+            "SELECT id, username, display_name FROM users WHERE username=?", (username,)
+        ).fetchone()
         if row:
-            return {"id": int(row["id"]), "username": row["username"]}
+            # 云端昵称会变（改名、换绑账号），每次登录同步一次；取不到就保留旧值。
+            if display and display != (row["display_name"] or ""):
+                c.execute("UPDATE users SET display_name=? WHERE id=?", (display, row["id"]))
+            elif not display:
+                display = row["display_name"] or ""
+            return {"id": int(row["id"]), "username": _label(display, row["username"])}
         salt = secrets.token_hex(16)
-        c.execute(
-            "INSERT INTO users (username, pw_hash, salt, created_at) VALUES (?,?,?,?)",
-            (username, "!cloud-only", salt, now),
+        cur = c.execute(
+            "INSERT INTO users (username, pw_hash, salt, created_at, display_name) VALUES (?,?,?,?,?)",
+            (username, "!cloud-only", salt, now, display or None),
         )
-        row = c.execute("SELECT id, username FROM users WHERE username=?", (username,)).fetchone()
-    return {"id": int(row["id"]), "username": display_name or row["username"]}
+        return {"id": int(cur.lastrowid), "username": _label(display, username)}
 
 
 def issue_session(user_id: int) -> str:
@@ -186,14 +206,14 @@ def resolve_token(token: str) -> dict | None:
     with _conn() as c:
         c.execute("DELETE FROM sessions WHERE expires_at < ?", (now,))
         row = c.execute(
-            """SELECT s.user_id AS uid, u.username AS uname
+            """SELECT s.user_id AS uid, u.username AS uname, u.display_name AS dname
                  FROM sessions s JOIN users u ON u.id = s.user_id
                 WHERE s.token = ? AND s.expires_at >= ?""",
             (token, now),
         ).fetchone()
     if not row:
         return None
-    return {"id": row["uid"], "username": row["uname"]}
+    return {"id": row["uid"], "username": _label(row["dname"], row["uname"])}
 
 
 def logout(token: str) -> None:
