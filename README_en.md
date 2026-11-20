@@ -4,7 +4,7 @@
 
 [简体中文](README.md) · [English](README_en.md) · [Changelog](CHANGELOG.md) · [Roadmap](ROADMAP.md)
 
-[![Version](https://img.shields.io/badge/version-1.8.3-1f6feb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.9.2-1f6feb)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)](https://react.dev/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
@@ -16,6 +16,8 @@ A self-hosted research application for China A-shares, with Hong Kong and US mar
 ## Highlights
 
 - **Local data**: accounts, portfolios and reports are stored in `~/.market-workbench/` by default.
+- **Two ways to run**: locally with `run.sh` / launchd, or on a cloud host via the Docker Compose setup in `deploy/`. Same code, different environment variables, data kept on a mounted volume.
+- **Optional cloud sign-in**: with WorkBuddy cloud service configured, the login page adds a third-party account entry and user data moves to a cloud table guarded by row-level security. Leave it unconfigured and both the entry and the cloud data layer stay off.
 - **Public data sources**: Eastmoney, Tencent, Sina, AkShare, FRED, EIA, IMF, Polymarket, Kalshi and others; most sources do not require an API key.
 - **Pluggable AI**: use an OpenAI-compatible API or a local CLI such as Claude Code, Codex, Qwen, Gemini or DeepSeek. AI settings are stored in the browser.
 - **One data layer for UI and agents**: the FastAPI HTTP API and dependency-free MCP server share 43 data tools.
@@ -131,8 +133,19 @@ No extra configuration is needed for local use. Set environment variables only w
 | `MW_API_KEY` | empty | Enables Bearer authentication for the API, except health checks |
 | `MW_ALLOW_REGISTRATION` | off | Set to `1` to allow web registration |
 | `MW_DATA_PROXY` | off | Set to `1` to use the system proxy for data requests |
+| `MW_UPDATE_REMOTE` / `MW_UPDATE_BRANCH` | `origin` / `main` | Upstream used by "Check for updates" in settings |
+| `MW_CLOUD_ENDPOINT` / `MW_CLOUD_PUBLISHABLE_KEY` | empty | Enables WorkBuddy cloud sign-in and the cloud data layer; leave empty to hide the entry |
+| `MW_BUILD_COMMIT` | empty | Commit injected at build/start; fills `/api/health` `commit` when the image has no `.git` |
 
 See the [configuration guide](docs/configuration.md) and [environment example](backend/.env.example) for all variables, optional source keys and public-deployment requirements. Before exposing the service, restrict CORS, set a strong API key, and enable HTTPS on the reverse proxy.
+
+The Docker Compose setup with automatic HTTPS is documented in [deploy/README.md](deploy/README.md). Build the release bundle with the script rather than by hand:
+
+```bash
+scripts/publish.sh    # refuses a dirty tree → builds → verifies cloud config is inlined → syncs .publish/app
+```
+
+The cloud service validates `Origin` strictly, so cloud sign-in only works on the exact published domain; leave `MW_CLOUD_*` empty for self-hosted domains.
 
 ## Development and architecture
 

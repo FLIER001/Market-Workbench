@@ -4,7 +4,7 @@
 
 [简体中文](README.md) · [English](README_en.md) · [更新记录](CHANGELOG.md) · [路线图](ROADMAP.md)
 
-[![Version](https://img.shields.io/badge/version-1.8.3-1f6feb)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.9.2-1f6feb)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab?logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-19-61dafb?logo=react&logoColor=white)](https://react.dev/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
@@ -16,6 +16,8 @@
 ## 主要特点
 
 - **本地数据**：账号、持仓和研报默认保存在 `~/.market-workbench/`。
+- **两种跑法**：本机自托管（`run.sh` / launchd），或用 `deploy/` 的 Docker Compose 部署到云主机。同一份代码，靠环境变量区分，数据目录挂卷持久化。
+- **云账号登录（可选）**：接入 WorkBuddy 云服务后，登录页多一个第三方账号入口，用户数据按行级权限存云数据库；不配置则该入口与云端数据层完全关闭，只保留账号密码。
 - **公开数据源**：使用东方财富、腾讯、新浪、AkShare、FRED、EIA、IMF、Polymarket、Kalshi 等接口；多数数据源无需 API key。
 - **AI 可插拔**：支持 OpenAI 兼容 API，以及 Claude Code、Codex、Qwen、Gemini、DeepSeek 等本机 CLI；浏览器保存 AI 配置。
 - **网页与 Agent 共用数据层**：FastAPI HTTP API 和零第三方依赖的 MCP Server 共用 43 个数据工具。
@@ -132,10 +134,18 @@ MCP Server 使用与网页相同的数据工具层，本地调用不需要 API k
 | `MW_ALLOW_REGISTRATION` | 关闭 | 设为 `1` 时允许网页注册 |
 | `MW_DATA_PROXY` | 关闭 | 设为 `1` 时数据请求使用系统代理 |
 | `MW_UPDATE_REMOTE` / `MW_UPDATE_BRANCH` | `origin` / `main` | 设置页「程序更新」拉取的上游 |
+| `MW_CLOUD_ENDPOINT` / `MW_CLOUD_PUBLISHABLE_KEY` | 空 | 启用 WorkBuddy 云账号登录与云数据层；留空则登录页不显示该入口 |
+| `MW_BUILD_COMMIT` | 空 | 构建/启动时注入的提交号，云端没有 `.git` 时用它填 `/api/health` 的 `commit` |
 
 完整配置、可选数据源密钥和公网部署要求见 [配置说明](docs/configuration.md) 与 [环境变量示例](backend/.env.example)。公开部署前，至少收紧 CORS、设置强 API key，并在反向代理上启用 HTTPS。
 
-云主机（Docker Compose + 自动 HTTPS）的一键部署见 [deploy/README.md](deploy/README.md)。
+云主机（Docker Compose + 自动 HTTPS）的部署步骤见 [deploy/README.md](deploy/README.md)。发布包用脚本生成，不要手工拼：
+
+```bash
+scripts/publish.sh    # 脏工作区拒绝运行 → 构建 → 校验云配置已注入 → 同步到 .publish/app
+```
+
+`MW_CLOUD_*` 指向的云服务会按 Origin 精确校验，只有与云应用发布域名完全一致的部署才能用云登录；自建域名留空即可。
 
 ## 开发与架构
 
@@ -146,7 +156,8 @@ React 19 + TypeScript + Vite
 FastAPI :8900 ── 公开市场数据 / 本地 SQLite 与文件 / 自有 AI 或 CLI
      │
      ├── 静态托管 frontend/dist
-     └── MCP Server（stdio，共用数据工具层）
+     ├── MCP Server（stdio，共用数据工具层）
+     └── 云服务（可选）：身份校验 + user_data 云表（RLS 按用户隔离）
 ```
 
 前端开发需要热更新时，另运行 `cd frontend && npm run dev`；Vite 使用 5899 端口，并将 `/api` 代理到 8900。

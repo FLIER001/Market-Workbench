@@ -1,3 +1,7 @@
+// 断言里的 +08:00 是北京时间，但结果按本地时区渲染。把进程时区钉死，
+// 否则在 +9 / UTC 的机器上跑会差一小时（实测 KST 下 17:10 渲染成 18:10）。
+process.env.TZ = 'Asia/Shanghai';
+
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';

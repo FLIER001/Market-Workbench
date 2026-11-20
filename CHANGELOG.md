@@ -3,6 +3,35 @@
 本项目的版本号唯一来源是 `frontend/package.json`；后端 HTTP API、`/api/health`、
 前端界面与 MCP `serverInfo` 全部从它读取（见 `backend/version.py`）。
 
+## 1.9.2 — 2026-11-20
+
+云端部署上线后按「源是否真能用」逐项实测（15 个上游探针 + 60 多个接口实调），修掉一批只在公网出口才暴露的故障。本机自托管不受影响。
+
+- **个股搜索**：东财 `suggest` 按出口 IP 返回非 JSON，原实现异常时直接返回空数组，云端搜索框是哑的。主源补 `Referer`、兼容 JSONP 包裹；失败或零命中降级腾讯 `smartbox`（中文名 / 代码 / 拼音首字母，A 股与港股均可）。`/api/search` 增 `source`，`debug=1` 给出各源失败原因。
+- **分时**：腾讯主域名 `web.ifzq.gtimg.cn` 在云端被 WAF 拦（HTTPS 501），而分时只挂了这一个域名且无降级。改为主用 `proxy.finance.qq.com`、失败再退 `web.ifzq`；两条都不通时用东财 `trends2` 兜底（`fields1` 必须带全 f1–f11，否则拿不到 `preClose`）。请求库由 `urllib` 换成 `requests` + `trust_env=False`，容器代理不再把请求变成 501。
+- **市场情绪**：乐咕乐股在云端 504，且 akshare 该函数是 HTML 抓取、**没有超时**，会把 `/api/market/overview` 整条拖住。改为子线程限时 8 秒、失败进 30 分钟冷却；新增东财口径兜底（涨跌家数取沪深指数成分 `f104/f105/f106`，涨跌停取东财四池，真实涨跌停按乐咕口径剔除 ST 与一字板）。返回 `source` 字段，页面标注来源并说明两源口径差异；数据源健康页新增乐咕探针。
+- **个股基本面**：`akshare.stock_individual_info_em` 自己 requests push2、不带浏览器 UA，云端被拦成空表。改走 `em_get`（带 UA）直取，akshare 仅兜底，字段名不变。
+- **个股新闻**：东财 `search-api-web` 与搜索同族被拦，且 akshare 该函数无超时。限时 8 秒后降级新浪个股新闻页（该页日期用 `&nbsp;` 分隔，正则需先做实体解码）。
+- **美港股与港股现金流**：代码解析走东财 `searchadapter`，与搜索同一限制组。`resolve_symbol` 降级腾讯 `smartbox`，美股交易所按后缀判定（`.oq`=NASDAQ、`.n`=NYSE、`.a`=AMEX）。`/api/global/stock` 与 `/api/global/hk/cashflow` 恢复。
+- **板块双评分**：冷建要逐只算估值分位与盈利预测（东财串行限流，3000+ 只），云端实测 40 分钟仍未完成，网关 120 秒先判 504。`cache_runtime.get` 新增 `cold_nonblocking`：无快照时立即返回 `cache_state=refreshing` 的完整契约占位，后台继续构建、前端轮询追新；「等别人建」的分支同样立即返回（启动预热占先时会走那条）。另把本地算好的三份快照作为首启种子随包带上，首次打开即有 last-good。
+- **腾讯 K 线**：主域名被拦后，整批拉 3000+ 只日 K 时每只都先撞一遍。改为失败一次即在本进程内旁路，后续直接走 proxy。
+- **云账号显示名**：界面原本显示 `wb:<cloud_id>` 内部标识——`ensure_cloud_user` 只在首次创建时返回云端昵称，`/api/auth/me` 又只读 username。`users` 表新增 `display_name` 列（就地 ALTER，幂等），云登录每次同步昵称，`login` / `resolve_token` 统一走展示名；无昵称的影子账号显示「WorkBuddy 用户」。事件研判的缓存键改用账号 id，避免改名后已有进度丢失。
+- **未修**：`/api/fedwatch` 与 `/api/pulse/overview` 依赖 Yahoo ZQ 期货、Polymarket、Kalshi，三个源都在境外且不可达，没有可替代的实时源。
+
+## 1.9.1 — 2026-11-17
+
+- 新增 `scripts/publish.sh`：工作区有未提交改动时拒绝运行 → 构建前端 → 校验云配置已注入产物 → rsync 到 `.publish/app` → 打印产物大小与版本。
+- 云服务配置改为构建期注入（`VITE_CLOUD_ENDPOINT` / `VITE_CLOUD_PUBLISHABLE_KEY`，本地放 `.env.publish`、已忽略）。代码不再写死发布域名；未注入即关闭云登录入口与云数据层。
+- 发布构建直接输出到 `.publish/app/frontend/web`，不再写 `frontend/dist`——否则本地 `run.sh` 会复用含云配置的产物，本机登录页会冒出 WorkBuddy 按钮。
+- `/api/health` 的 `commit` 优先读 `MW_BUILD_COMMIT`（云端镜像没有 `.git`），本地由 `run.sh` 取 git 短哈希。
+
+## 1.9.0 — 2026-11-17
+
+- **云身份登录**：登录页新增 WorkBuddy 账号入口 + OAuth 回调（在挂载前消费，避免被路由守卫弹回登录页）+ `POST /api/auth/cloud` 把云会话换成本地会话。云 access token 只用于确认「你是谁」，业务接口与本地 `user_id` 隔离不变。
+- **云数据层**：云会话用户的自选、备注、AI 配置等读写 `user_data` 云表（RLS：`owner_id = auth.uid()`，只授予 `authenticated`；回收平台默认多给的 `TRUNCATE / REFERENCES / TRIGGER`，匿名角色无匹配策略）。账号密码登录仍走本地 SQLite，两套数据互不覆盖；首次云登录只在云表为空时迁移一次浏览器本地数据。
+- **云端部署包**：`deploy/` 提供 Dockerfile（node:22 构建前端 → python:3.14-slim 运行时，gosu 降权到 uid 10001）、compose（app + caddy，数据卷、内存上限、日志轮转）、Caddyfile（自动 HTTPS、长请求超时）与约束文件（锁定与开发机一致的依赖版本）。
+- **修掉两处上线即炸**：设了 `MW_API_KEY` 后 `/api/auth/config|login|register` 也被 401 拦死，谁都登不进来；访问密钥原本只能在登录后的设置页填，形成死循环。三个端点加入豁免，`/api/auth/config` 增 `api_key_required`，登录页据此在登录前先要密钥。
+
 ## 1.8.3 — 2026-11-12
 
 - 设置页新增「程序更新」（`backend/updater.py` + `GET /api/update/check` / `POST /api/update/apply`）：`git fetch` 上游（默认 `origin/main`），显示落后提交数与提交列表，一键 `git pull --ff-only` 后原地重启（`os.execv` 到 `run.sh`，由它按需重建前端）。重启后进程号不变，launchd 的 KeepAlive 与手动启动都能接着跑。
