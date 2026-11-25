@@ -77,6 +77,9 @@ def test_expanded_fields_and_ops(monkeypatch):
     import factor_expr
 
     panel = _make_panel(seed=5)
+    # 成交量要逐日变化：合成面板默认恒为 1e6，而 ts_corr(close, volume, n) 在 volume 窗口内
+    # 不变时无定义（标准差为 0）。此前这个断言在 pandas 3.0 下是靠 ±inf 才「非空」通过的。
+    panel["volume"] = 1e6 * np.random.default_rng(11).uniform(0.5, 2.0, len(panel))
     _install_panel(monkeypatch, panel)
     fields = factor_expr.build_fields(panel)
 
@@ -95,6 +98,11 @@ def test_expanded_fields_and_ops(monkeypatch):
               "cs_rank(kmid*vol_ratio5)", "cs_rank(ts_corr(close,volume,60))"]:
         out = factor_expr.evaluate(factor_expr.compile_expr(e), fields)
         assert out.notna().sum().sum() > 0
+
+    # 窗口内不变的序列与别的序列做相关，结果必须是缺失，不能是 ±inf
+    flat = factor_expr.evaluate(factor_expr.compile_expr("ts_corr(close, volume*0, 60)"), fields)
+    assert not np.isinf(flat.to_numpy(dtype=float)).any()
+    assert flat.notna().sum().sum() == 0
 
 
 def test_cs_rank_is_cross_sectional(monkeypatch):

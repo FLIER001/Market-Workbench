@@ -26,6 +26,7 @@
 ### 缺陷
 
 - **因子表达式引擎重复求值**：`ts_mean` 等六个算子对首个参数求值两次，嵌套 N 层即 2^N 次（实测深度 8 → 256 次），单条公式可占满 CPU 与内存。
+- **`ts_corr` 在窗口内一侧不变时返回 ±inf**：pandas 3.0 的滚动相关在标准差为 0 时给出 `inf` 而不是 `NaN`，会流进 `cs_rank` / 回测。现统一归为缺失。由 CI 在 pandas 3.1.1 下发现——旧用例正是靠这些 `inf` 才「非空」通过的，已改为变化的成交量并显式断言不变序列得缺失。
 - **黄金期货分时在无数据时 NameError**：`astock.futures_minute_kline` 的空数据分支引用了不存在的 `get_today_cn`。新增 `ruff` 的未定义名称检查，该项由它发现。
 - **MCP server 收到非对象 JSON 行时退出**。
 - `kline_minute` 重复判空、行业排名与全球指数分时共用一张缓存表、`_optional_user_id` 无调用：已清理。
@@ -46,6 +47,7 @@
 - 新增 CI（`.github/workflows/ci.yml`）：后端 `ruff` + `pytest`（含覆盖率）、前端 `tsc -b` + 测试 + 构建 + 生产依赖审计、Docker 镜像构建与启动检查。
 - `ruff` 规则与 `pytest-cov` 入 `requirements-dev.txt`；修复全部未使用 import。
 - 测试修复：`test_spa_security` 的命名空间缺 `_KEY_FREE_PATHS` 导致路径穿越用例长期红灯；`test_fixes` 的降级用例断言过期且实际联网；`test_bond_priors` 依赖已移出版本控制的研究产物。
+- CI 首次真实运行（Linux、依赖不锁版本）暴露并修复的三处：`setup-node` 在仓库根找不到 `frontend/package-lock.json`；`ts_corr` 的 `inf`（见「缺陷」）；`test_gold_environment` 的快照不可变用例被别的用例留下的 `warm:*` 预热线程污染——该线程用真实数据重建黄金评分，并写进当时被 monkeypatch 的临时目录。现规定该文件只允许主线程落盘。
 - 基础镜像钉到 digest；`.dockerignore` 补 `backend/.cache/`、`.publish/`、`deploy/.env`、`deploy/data/`；Caddy 增加 HSTS；云 SDK 钉精确版本；`react-router` 升到 7.18.7 修复高危公告。
 - 文档：新增 `SECURITY.md`；安装命令统一带 `-c deploy/constraints.txt`；补齐 6 个未入文档的环境变量；`.env.example` 的鉴权说明与实际行为对齐，移除已下线的 Gemini CLI。
 

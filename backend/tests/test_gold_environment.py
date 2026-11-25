@@ -2,8 +2,29 @@
 from copy import deepcopy
 from datetime import datetime, date, timedelta
 import math
+import threading
 import pytest
 import gold_score as g
+
+
+@pytest.fixture(autouse=True)
+def _only_main_thread_persists(monkeypatch):
+    """用例期间只允许主线程落盘黄金快照。
+
+    别的用例进过真实 lifespan，会留下 warm:* 预热线程；择时预热会调 get_gold_score()，
+    让 cache_runtime 在后台线程里用真实数据重建黄金评分并 _persist_gold。那个线程读到的是
+    「当时」的 _RECORD_DIR / _INPUT_DIR，也就是本用例 monkeypatch 的临时目录，于是往里
+    多写一条真实行情的记录。CI 机器慢、线程活得久才撞得上（本机稳定复现不了）。
+    本文件的落盘都发生在主线程；后台线程的落盘一律拒绝。
+    """
+    real = g._persist_gold
+
+    def persist(payload, inputs):
+        if threading.current_thread() is not threading.main_thread():
+            raise RuntimeError("用例期间不允许后台线程落盘黄金快照")
+        return real(payload, inputs)
+
+    monkeypatch.setattr(g, "_persist_gold", persist)
 
 
 @pytest.fixture(scope='module')

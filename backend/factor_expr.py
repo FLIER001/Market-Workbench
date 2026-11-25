@@ -490,7 +490,10 @@ def _call(name: str, args: list[tuple], w: dict[str, pd.DataFrame]):
         y = _eval(args[1], w)
         if not isinstance(y, pd.DataFrame):
             raise ValueError("ts_corr 的第二个参数必须是字段/序列表达式")
-        return x.rolling(int(args[2][1])).corr(y)
+        out = x.rolling(int(args[2][1])).corr(y)
+        # 窗口内某一侧不变时它的标准差为 0，相关系数无定义。pandas 3.0 在这里给出的是 ±inf
+        # 而不是 NaN，会流进 cs_rank / 回测污染结果，所以统一归为缺失（3.1 起已直接给 NaN）。
+        return out.replace([np.inf, -np.inf], np.nan)
     if name == "ts_cov":
         y = _eval(args[1], w)
         if not isinstance(y, pd.DataFrame):

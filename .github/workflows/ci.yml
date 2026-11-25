@@ -52,6 +52,8 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+          # working-directory 只作用于 run 步骤；action 自己找 lock 文件，要显式指路
+          cache-dependency-path: frontend/package-lock.json
       - run: npm ci --no-fund --no-audit
       - name: 生产依赖漏洞（high 及以上即失败）
         run: npm audit --omit=dev --audit-level=high
