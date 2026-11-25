@@ -18,6 +18,8 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
+import logutil
+_log = logutil.get(__name__)
 
 # 提示词投递方式（各 CLI 接口不同）：
 #   system-file —— 系统提示词写临时文件用 flag 传，用户提示词走 stdin（Claude）
@@ -58,9 +60,38 @@ _EXTRA_PATH_DIRS = [
 _CLI_TIMEOUT_S = 300  # 子进程兜底超时（秒）
 _MAX_ARG_BYTES = 110_000  # 位置参数投递的提示词字节上限
 
+# 以「全自动」模式运行的 CLI（自动批准工具调用，可读写本机文件、执行命令）。喂给它们的
+# context 来自页面上的新闻、公告、资讯正文——外部可写的不可信文本，其中的诱导性内容
+# 会被 agent 当指令执行。Claude 一侧用 --disallowedTools 禁掉了全部工具，不受此限。
+# 这三家默认关闭；确认只在本机单人使用、信任页面内容时，设 MW_CLI_AGENTS=1 显式开启。
+_AGENT_KINDS = frozenset({"qwen", "deepseek", "codex"})
+_AGENTS_ENABLED = os.environ.get("MW_CLI_AGENTS", "").strip().lower() in ("1", "true", "yes", "on")
+_AGENT_NOTICE = (
+    "「{kind}」订阅接入会以全自动模式运行（可读写本机文件、执行命令），默认关闭。"
+    "确需使用请设置 MW_CLI_AGENTS=1 后重启后端，或改用 Claude Code / API 接入。"
+)
+
 
 class CliUnavailable(RuntimeError):
-    """本机未检测到对应 CLI（未安装 / 不在 PATH）。"""
+    """本机未检测到对应 CLI（未安装 / 不在 PATH），或该 CLI 当前被禁用。"""
+
+
+def agent_notice(kind: str) -> str | None:
+    """全自动 agent 类 CLI 被禁用时的说明；可用返回 None。"""
+    if kind in _AGENT_KINDS and not _AGENTS_ENABLED:
+        return _AGENT_NOTICE.format(kind=kind)
+    return None
+
+
+def ensure_available(kind: str) -> None:
+    """HTTP 入口统一用它给出可操作的错误（比「未检测到命令」准确）。"""
+    notice = agent_notice(kind)
+    if notice:
+        raise CliUnavailable(notice)
+    if not detect_cli(kind):
+        raise CliUnavailable(
+            f"未检测到「{kind}」对应的本机命令。请先安装并登录该 CLI，或改用「API 接入」。"
+        )
 
 
 def _find_bin(name: str) -> str | None:
@@ -75,7 +106,9 @@ def _find_bin(name: str) -> str | None:
 
 
 def detect_cli(kind: str) -> str | None:
-    """返回某订阅 CLI 的可执行路径，未装则 None。"""
+    """返回某订阅 CLI 的可执行路径，未装或当前被禁用则 None。"""
+    if agent_notice(kind):
+        return None
     d = _CLI_DEFS.get(kind)
     if not d:
         return None
@@ -93,8 +126,9 @@ def supported_kinds() -> list[str]:
 def run_cli(kind: str, system_prompt: str, user_prompt: str) -> str:
     """起 CLI 子进程，一次性作答，返回纯文本 stdout。失败抛异常。"""
     d = _CLI_DEFS.get(kind)
+    ensure_available(kind)
     bin_path = detect_cli(kind)
-    if not d or not bin_path:
+    if not d:
         raise CliUnavailable(
             f"未检测到「{kind}」对应的本机命令。请先安装并登录该 CLI，或改用「API 接入」。"
         )
@@ -149,8 +183,9 @@ def run_cli(kind: str, system_prompt: str, user_prompt: str) -> str:
 def run_cli_stream(kind: str, system_prompt: str, user_prompt: str):
     """流式版：起 CLI 子进程，stdout 边出边 yield 纯文本块。失败抛异常。"""
     d = _CLI_DEFS.get(kind)
+    ensure_available(kind)
     bin_path = detect_cli(kind)
-    if not d or not bin_path:
+    if not d:
         raise CliUnavailable(
             f"未检测到「{kind}」对应的本机命令。请先安装并登录该 CLI，或改用「API 接入」。"
         )
@@ -188,7 +223,7 @@ def run_cli_stream(kind: str, system_prompt: str, user_prompt: str):
                 for ln in (stderr or []):
                     err_tail.append(ln)
             except Exception:
-                pass
+                _log.debug("已吞掉的异常（降级路径）", exc_info=True)
 
         err_thread = threading.Thread(target=_drain_err, daemon=True)
         err_thread.start()
@@ -211,7 +246,7 @@ def run_cli_stream(kind: str, system_prompt: str, user_prompt: str):
                 for ln in (stdout or []):
                     q.put(ln)
             except Exception:
-                pass
+                _log.debug("已吞掉的异常（降级路径）", exc_info=True)
             finally:
                 q.put(None)  # EOF 哨兵
 

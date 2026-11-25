@@ -114,12 +114,10 @@ def test_cs_rank_is_cross_sectional(monkeypatch):
 
 def test_custom_factor_end_to_end(monkeypatch, tmp_path):
     """保存自定义因子 → evaluate/backtest 用 custom: 前缀跑通。"""
-    import factor_backtest
     import factor_data
     import factor_expr
     import factors
 
-    import os
     monkeypatch.setattr(factor_expr, "_CUSTOM_FILE", str(tmp_path / "custom.json"))
     monkeypatch.setattr(factor_data, "DATA_DIR", str(tmp_path), raising=False)
 

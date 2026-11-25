@@ -6,8 +6,9 @@ import json
 import os
 import threading
 import time
+import paths
 
-DATA_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
+DATA_DIR = paths.DATA_DIR
 CACHE_FILE = os.path.join(DATA_DIR, "stock_query_cache.json")
 MAX_STOCKS = 20
 _LOCK = threading.Lock()

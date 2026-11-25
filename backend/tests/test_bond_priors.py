@@ -1,7 +1,7 @@
-import json
 from datetime import datetime
 from pathlib import Path
 import numpy as np
+import pytest
 import bond_priors
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -15,10 +15,15 @@ def frozen_inputs():
 
 
 def test_current_estimates_reproduce_research_models_including_ensemble():
+    # 对照物是研究产物 predictions_*.npz（两批共 213MB，只在本地 docs/research/output，
+    # 不入库）。产物不在时跳过：此前路径还指向已废弃的 research/output，任何干净环境都必挂。
+    research_output=ROOT/'docs/research/output'
+    if not research_output.is_dir():
+        pytest.skip('研究产物未入库（docs/research/ 只存本地），无法与离线模型预测逐值对照')
     curve,auxiliary=frozen_inputs();result=bond_priors.forecast(curve,auxiliary,datetime(2026,10,19))
     for row in result['rows']:
         folder='bonds_short_tenor_2026-10-21' if row['family']=='short_curve' else 'bonds_tuning'
-        data=np.load(ROOT/'research/output'/folder/f"predictions_{row['id']}.npz")
+        data=np.load(research_output/folder/f"predictions_{row['id']}.npz")
         expected=np.mean([data[member][-1] for member in row['members']])
         assert row['status']=='ready',row
         assert abs(row['forecast_bp']-expected)<1e-5,(row['id'],row['forecast_bp'],expected)
@@ -89,7 +94,9 @@ def test_http_route_exposes_candidate_version_and_forwards_refresh(monkeypatch):
     monkeypatch.setattr(bonds,'get_priors',lambda force=False:(calls.append(force) or {
         'model_version':'test-candidate-v1','rows':[],'status':'experimental'}))
     # No lifespan context: this route test must not start unrelated schedulers.
-    response=TestClient(app.app).get('/api/bonds/priors?refresh=true')
+    import conftest
+    # refresh=true 会绕过 TTL 直接打上游，现要求登录
+    response=TestClient(app.app).get('/api/bonds/priors?refresh=true',headers=conftest.auth_headers())
     assert response.status_code==200
     assert response.json()['data']['model_version']=='test-candidate-v1'
     assert calls==[True]

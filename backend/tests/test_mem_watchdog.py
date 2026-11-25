@@ -82,13 +82,48 @@ def test_disabled_import_never_loads_platform_library(monkeypatch):
     module.start()
 
 
-def test_non_mac_platform_never_loads_library_or_starts_thread(monkeypatch):
+def test_unsupported_platform_never_loads_library_or_starts_thread(monkeypatch):
     monkeypatch.setattr(mem_watchdog, "_ENABLED", True)
-    monkeypatch.setattr(mem_watchdog.sys, "platform", "linux")
+    monkeypatch.setattr(mem_watchdog.sys, "platform", "win32")
     monkeypatch.setattr(mem_watchdog.ctypes, "CDLL", lambda *a, **kw: pytest.fail("non-mac loads libSystem"))
-    monkeypatch.setattr(mem_watchdog.threading, "Thread", lambda *a, **kw: pytest.fail("non-mac starts watchdog"))
+    monkeypatch.setattr(mem_watchdog.threading, "Thread", lambda *a, **kw: pytest.fail("unsupported platform starts watchdog"))
     assert mem_watchdog.footprint_mb() is None
     mem_watchdog.start()
+
+
+def test_linux_reads_cgroup_and_starts_watchdog(monkeypatch):
+    """容器里看门狗照常生效：读 cgroup 用量，阈值取 cgroup 上限的 80%。"""
+    fake = {}
+    monkeypatch.setattr(mem_watchdog.sys, "platform", "linux")
+    monkeypatch.setattr(mem_watchdog.ctypes, "CDLL", lambda *a, **kw: pytest.fail("linux loads libSystem"))
+    monkeypatch.setattr(mem_watchdog, "_cgroup_bytes", lambda path: fake.get(path))
+    # 没有 cgroup 文件（非容器的裸 Linux）：读不到用量按「不触发」处理
+    assert mem_watchdog.footprint_mb() is None
+    assert mem_watchdog.max_footprint_mb() == mem_watchdog._MAX_FOOTPRINT_MB
+    # cgroup v2：memory.current / memory.max
+    fake["/sys/fs/cgroup/memory.current"] = 3 * 1024 * 1024 * 1024 // 2
+    fake["/sys/fs/cgroup/memory.max"] = 3 * 1024 * 1024 * 1024
+    assert mem_watchdog.footprint_mb() == 1536.0
+    assert abs(mem_watchdog.max_footprint_mb() - 0.8 * 3072) < 0.01
+    # v2 的「无上限」不是整数：退回固定阈值
+    fake["/sys/fs/cgroup/memory.max"] = None
+    assert mem_watchdog.max_footprint_mb() == mem_watchdog._MAX_FOOTPRINT_MB
+    # 显式环境变量优先
+    monkeypatch.setenv("MW_MEM_WATCHDOG_MAX_MB", "1234")
+    assert mem_watchdog.max_footprint_mb() == 1234.0
+    started = []
+    monkeypatch.setattr(mem_watchdog.threading, "Thread", lambda *a, **kw: started.append(kw) or type("T", (), {"start": lambda self: None})())
+    monkeypatch.setattr(mem_watchdog.sys, "platform", "linux")
+    monkeypatch.setattr(mem_watchdog, "_ENABLED", True)
+    mem_watchdog.start()
+    assert len(started) == 1
+
+
+def test_linux_limit_derives_from_cgroup_limit():
+    now = 10_000.0
+    started = now - mem_watchdog._GRACE - 1
+    assert mem_watchdog.should_restart(now, started, 2000.0, 0.0, max_mb=2430.0) is None
+    assert mem_watchdog.should_restart(now, started, 2500.0, 0.0, max_mb=2430.0) == "mem"
 
 
 def test_missing_mac_library_returns_unavailable(monkeypatch):

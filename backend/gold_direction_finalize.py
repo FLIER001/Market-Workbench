@@ -7,7 +7,7 @@ import math
 import numpy as np
 import gold_score as gold
 from gold_direction import forecast, PARAMETERS
-from gold_direction_research import feature_series, walk, directional_metrics, balanced, auc
+from gold_direction_research import feature_series, walk, directional_metrics, balanced
 from gold_tuning import raw_samples,dump,nonoverlap_indices
 from gold_research import SEED
 

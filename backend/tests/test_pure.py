@@ -300,7 +300,6 @@ def test_indicator_metadata_marks_last_good_fallback():
 
 def test_fund_top_holdings_parse_mixed_markets():
     """QDII 持仓页：A股链接(0./1.)解析为字符串代码；港/美/韩(116/105/177)解析为 (mkt, code) 元组。"""
-    import fund
     html = """
     <tr><td class='toc'><a href='//quote.eastmoney.com/unify/r/0.300750'>300750</a></td><td>9.50%</td></tr>
     <tr><td class='toc'><a href='//quote.eastmoney.com/unify/r/116.02419'>02419</a></td><td>8.92%</td></tr>
@@ -413,7 +412,6 @@ def test_fund_global_index_proxy_covers_qdii():
 
 def test_fund_self_estimate_coverage_threshold():
     """重仓覆盖率 <15% 的基金（债基零头/LOF披露不全）不给伪精确估值。"""
-    import fund
     # 直接验证门槛逻辑：覆盖率计算
     low = [(("105", "NVDA"), 0.08)]           # 501312 实际披露
     high = [("300750", 9.5), (("116", "02419"), 8.92), (("105", "KLAC"), 8.56)]

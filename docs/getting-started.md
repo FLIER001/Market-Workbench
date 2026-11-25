@@ -11,7 +11,7 @@
 ## 启动（统一入口）
 
 ```bash
-cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && cd ..
+cd backend && python3 -m venv .venv && .venv/bin/pip install -c ../deploy/constraints.txt -r requirements.txt && cd ..
 ./run.sh
 ```
 

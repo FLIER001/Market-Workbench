@@ -150,7 +150,8 @@ def test_sector_scores_api_contract(monkeypatch):
     )
     client = TestClient(app_module.app)
 
-    response = client.get("/api/sector-scores?refresh=true")
+    # refresh=true 会绕过 TTL 直接打上游，现要求登录
+    response = client.get("/api/sector-scores?refresh=true", headers=__import__("conftest").auth_headers())
 
     assert response.status_code == 200
     assert response.json()["data"]["schema_version"] == 4

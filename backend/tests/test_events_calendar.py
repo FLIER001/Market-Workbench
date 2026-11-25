@@ -1,7 +1,6 @@
 """事件日历口径：代码分类、时间窗过滤、排序、缺口文案、天数兜底、解禁占比换算。"""
 from datetime import date, timedelta
 
-import pytest
 
 import events_calendar as ec
 

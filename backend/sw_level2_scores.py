@@ -15,18 +15,16 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 
-import requests
-import urllib3
+
 import cache_runtime
 import score_worker
+import paths
 
 from sector_scores import (
-    _HEADERS,
     _activity_confirmation,
     _percentile,
     _relative_change,
@@ -37,10 +35,9 @@ from sector_scores import (
     _write_json_with_fallback,
 )
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 BEIJING = timezone(timedelta(hours=8))
-DATA_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
+DATA_DIR = paths.DATA_DIR
 _PRIMARY_CACHE_FILE = os.path.join(DATA_DIR, "sw_level2_scores.json")
 _FALLBACK_CACHE_FILE = os.path.join(os.path.dirname(__file__), ".cache", "sw_level2_scores.json")
 _PRIMARY_SNAPSHOT_FILE = os.path.join(DATA_DIR, "sw_level2_snapshots.json")

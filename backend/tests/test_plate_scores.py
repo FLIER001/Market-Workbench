@@ -1,6 +1,5 @@
 """板块双评分纯逻辑与 API 契约测试。"""
 
-import json
 import math
 from unittest.mock import patch
 

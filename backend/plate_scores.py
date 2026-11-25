@@ -18,16 +18,16 @@ from __future__ import annotations
 import json
 import math
 import os
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
 import astock
 import cache_runtime
 import score_worker
+import paths
 
 BEIJING = timezone(timedelta(hours=8))
-DATA_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
+DATA_DIR = paths.DATA_DIR
 _CONSTITUENTS_FILE = os.path.join(os.path.dirname(__file__), "data", "plate_constituents.json")
 _PRIMARY_CACHE_FILE = os.path.join(DATA_DIR, "plate_scores.json")
 _FALLBACK_CACHE_FILE = os.path.join(os.path.dirname(__file__), ".cache", "plate_scores.json")

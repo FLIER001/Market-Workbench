@@ -17,9 +17,7 @@ from urllib.parse import urlparse
 
 import requests
 
-import astock
 import cli_runtime
-import gstock
 import tools
 
 # 工具定义与执行统一由 tools.py 提供（chat / mcp_server 共用一套）。
@@ -132,12 +130,9 @@ def _call_llm(cfg: dict, messages: list, use_tools: bool) -> dict:
     if use_tools:
         payload["tools"] = TOOLS
         payload["tool_choice"] = "auto"
-    r = requests.post(
-        f"{base}/chat/completions",
-        headers={"Authorization": f"Bearer {cfg['apiKey']}", "Content-Type": "application/json"},
-        json=payload,
-        timeout=90,
-    )
+    r = _post_no_redirect(f"{base}/chat/completions", cfg, payload, timeout=90, stream=False)
+    if r.status_code >= 300 and r.status_code < 400:
+        raise RuntimeError("模型接口返回了重定向，已拒绝（baseURL 请填最终地址）")
     if r.status_code != 200:
         raise RuntimeError(f"模型接口 HTTP {r.status_code}: {r.text[:300]}")
     return r.json()
@@ -213,14 +208,22 @@ def _call_llm_stream(cfg: dict, messages: list, use_tools: bool):
     if use_tools:
         payload["tools"] = TOOLS
         payload["tool_choice"] = "auto"
-    r = requests.post(
-        f"{_resolve_base(cfg)}/chat/completions",
-        headers={"Authorization": f"Bearer {cfg['apiKey']}", "Content-Type": "application/json"},
-        json=payload, timeout=120, stream=True,
-    )
+    r = _post_no_redirect(f"{_resolve_base(cfg)}/chat/completions", cfg, payload, timeout=120, stream=True)
+    if r.status_code >= 300 and r.status_code < 400:
+        raise RuntimeError("模型接口返回了重定向，已拒绝（baseURL 请填最终地址）")
     if r.status_code != 200:
         raise RuntimeError(f"模型接口 HTTP {r.status_code}: {r.text[:300]}")
     return r
+
+
+def _post_no_redirect(url: str, cfg: dict, payload: dict, *, timeout: float, stream: bool):
+    """统一出口：禁用自动重定向。_check_base_url 只校验了首跳地址；若放行重定向，
+    攻击者可用自己的公网域名 302 跳到云元数据或内网，绕过整道 SSRF 校验。"""
+    return requests.post(
+        url,
+        headers={"Authorization": f"Bearer {cfg['apiKey']}", "Content-Type": "application/json"},
+        json=payload, timeout=timeout, stream=stream, allow_redirects=False,
+    )
 
 
 def _iter_sse_deltas(resp):

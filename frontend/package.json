@@ -10,7 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@tencent-ai/workbuddy-cloud-sdk": "^0.1.4-dev.71e5d1e.202611161655",
+    "@tencent-ai/workbuddy-cloud-sdk": "0.1.4-dev.71e5d1e.202611161655",
     "clsx": "^2.1.0",
     "echarts": "^6.0.0",
     "lucide-react": "^0.460.0",

@@ -1,6 +1,5 @@
 """Synthetic checks only: dates, units, missingness and authenticated API."""
 from copy import deepcopy
-from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd

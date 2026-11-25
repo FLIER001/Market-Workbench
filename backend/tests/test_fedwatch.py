@@ -1,7 +1,7 @@
 """FedWatch 离线单元测试：概率引擎 / 日历解析 / 声明解析 / 对比矩阵（不触网）。"""
 
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import fedwatch

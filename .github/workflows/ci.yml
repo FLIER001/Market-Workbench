@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一分支的新推送取消还在跑的旧任务
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: 后端 lint + 测试
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      # akshare 在 Linux 依赖 py-mini-racer，其 cp314 轮子只提供给 manylinux_2.28+（ubuntu-latest 满足）
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: ruff（语法错误 / 未定义名称 / 未使用 import）
+        run: ruff check . --output-format concise
+      # 接口里「数据为空」的分支只有真实上游才走得到，离线单测覆盖不到；单独守住未定义名称
+      - name: pytest（离线用例 + 覆盖率）
+        run: pytest -m "not live" -q -p no:cacheprovider --cov=. --cov-report=term-missing:skip-covered
+
+  frontend:
+    name: 前端类型检查 + 测试 + 构建
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --no-fund --no-audit
+      - name: 生产依赖漏洞（high 及以上即失败）
+        run: npm audit --omit=dev --audit-level=high
+      - name: tsc -b（漏一个类型错误就是整页白屏）
+        run: npx tsc -b
+      - run: npm test
+      - name: 构建产物
+        run: npm run build
+
+  docker:
+    name: 镜像可构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # 基础镜像钉在 digest 上（见 deploy/Dockerfile）：这一步同时验证 digest 仍然有效
+      - name: docker build
+        run: docker build -f deploy/Dockerfile -t market-workbench:ci .
+      - name: 容器能起、健康检查能过
+        run: |
+          docker run -d --name mw-ci -e MW_API_KEY=ci-only market-workbench:ci
+          for i in $(seq 1 60); do
+            if docker exec mw-ci python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8900/api/health', timeout=4)" 2>/dev/null; then
+              echo "healthy"; docker rm -f mw-ci; exit 0
+            fi
+            sleep 3
+          done
+          docker logs mw-ci; docker rm -f mw-ci; exit 1

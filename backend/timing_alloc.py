@@ -27,13 +27,14 @@ import gold_score
 import market
 import oil
 import sector_scores
+import paths
 
 _BEIJING = timezone(timedelta(hours=8))
 
 _SCHEMA_VERSION = 1
 _MODEL_VERSION = "timing_alloc v1.0"
 _STATE_FILE = os.path.join(
-    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
+    paths.DATA_DIR,
     "allocation_state.json",
 )
 _SNAPSHOT_FILE = os.path.join(os.path.dirname(_STATE_FILE), "allocation_snapshot.json")

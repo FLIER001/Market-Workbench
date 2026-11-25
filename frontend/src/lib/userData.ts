@@ -2,7 +2,7 @@
 // 这样自选/备注/笔记等在任何浏览器、任何域名下都跟随账号，不再丢失。
 
 import { auth, loadToken } from "./auth";
-import { storageGet, storageSet } from "./storage";
+import { storageGet, storageSet, storageRemove } from "./storage";
 
 const PREFIX = "vr-";
 
@@ -124,15 +124,18 @@ export async function importLocalToAccount(): Promise<{ migrated: string[] }> {
   return { migrated: Object.keys(toPush) };
 }
 
+// 不属于 user_data、但同样含上一账号私有内容的本地派生缓存：
+// 深度分析结果（按自选代码存）与持仓代码集合。登出时一并清掉，共用浏览器时不留给下一个账号。
+const PRIVATE_LOCAL_CACHES = ["vr-background-ai-tasks", "vr-portfolio-codes"];
+
 // 退出登录 / 切换账号时清空本地缓存的用户数据，避免下一个账号读到上一个的数据。
 // 只清用户私有数据，保留主题、侧栏折叠这类本机外观设置。
-export function clearLocalUserData(): void {
-  for (const key of MIGRATABLE_KEYS) {
-    try {
-      localStorage.removeItem(localKey(key));
-    } catch {
-      /* ignore */
-    }
+// includeCaches：仅登出时为 true。登录流程也会调本函数，那时不能清派生缓存——
+// 本地已完成、尚未同步到账号的深度分析结果只在缓存里，登录时清掉就丢了。
+export function clearLocalUserData({ includeCaches = false } = {}): void {
+  const keys = [...MIGRATABLE_KEYS.map(localKey), ...(includeCaches ? PRIVATE_LOCAL_CACHES : [])];
+  for (const key of keys) {
+    storageRemove(key);
   }
 }
 

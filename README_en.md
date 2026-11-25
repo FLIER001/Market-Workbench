@@ -62,7 +62,7 @@ cd Market-Workbench
 
 cd backend
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -c ../deploy/constraints.txt -r requirements.txt
 cd ..
 
 ./run.sh
@@ -130,14 +130,15 @@ No extra configuration is needed for local use. Set environment variables only w
 | `MW_DATA_DIR` / `MW_REPORTS_DIR` | `~/.market-workbench/` | User data and report directories |
 | `MW_ENV_FILE` | `backend/.env.local` | Private configuration loaded by `run.sh` |
 | `MW_ALLOW_ORIGINS` | `*` | CORS origin allowlist |
-| `MW_API_KEY` | empty | Enables Bearer authentication for the API, except health checks |
+| `MW_API_KEY` | empty | Enables Bearer authentication for the API (except the auth entry points and health checks) and disables `/docs`; every mutating, force-refresh or LLM endpoint requires a login regardless |
 | `MW_ALLOW_REGISTRATION` | off | Set to `1` to allow web registration |
 | `MW_DATA_PROXY` | off | Set to `1` to use the system proxy for data requests |
 | `MW_UPDATE_REMOTE` / `MW_UPDATE_BRANCH` | `origin` / `main` | Upstream used by "Check for updates" in settings |
 | `MW_CLOUD_ENDPOINT` / `MW_CLOUD_PUBLISHABLE_KEY` | empty | Enables WorkBuddy cloud sign-in and the cloud data layer; leave empty to hide the entry |
 | `MW_BUILD_COMMIT` | empty | Commit injected at build/start; fills `/api/health` `commit` when the image has no `.git` |
+| `MW_CLI_AGENTS` | off | Set to `1` to allow the Codex / Qwen / DeepSeek subscription CLIs (they run in fully automatic mode and can touch local files); Claude Code is unaffected |
 
-See the [configuration guide](docs/configuration.md) and [environment example](backend/.env.example) for all variables, optional source keys and public-deployment requirements. Before exposing the service, restrict CORS, set a strong API key, and enable HTTPS on the reverse proxy.
+See the [configuration guide](docs/configuration.md) and [environment example](backend/.env.example) for all variables, optional source keys and public-deployment requirements. Before exposing the service, restrict CORS, set a strong API key, and enable HTTPS on the reverse proxy. See [SECURITY.md](SECURITY.md) for the security boundary and reporting.
 
 The Docker Compose setup with automatic HTTPS is documented in [deploy/README.md](deploy/README.md). Build the release bundle with the script rather than by hand:
 

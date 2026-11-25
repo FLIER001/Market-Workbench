@@ -14,17 +14,19 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import sys
 import threading
 import time
 from datetime import datetime, timezone, timedelta
 
 import astock
+import paths
+import logutil
+_log = logutil.get(__name__)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _OLD_PF_FILE = os.path.join(HERE, ".cache", "portfolio.json")  # ≤v0.1.1 旧位置
 # CACHE_DIR 名字保留（测试/外部按此名 monkeypatch），实际已是用户数据目录
-CACHE_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
+CACHE_DIR = paths.DATA_DIR
 PF_FILE = os.path.join(CACHE_DIR, "portfolio.json")
 BEIJING = timezone(timedelta(hours=8))
 _LOCK = threading.Lock()
@@ -61,7 +63,7 @@ def _migrate_legacy() -> None:
             os.replace(tmp, PF_FILE)  # 原子落位：复制中断不会留半截 portfolio.json 挡住下次重试
     except OSError as e:
         # 迁移失败不阻塞启动，但要出声——旧数据原样保留在 _OLD_PF_FILE，可手工复制
-        print(f"[market-workbench] 持仓数据迁移失败（旧数据仍在 {_OLD_PF_FILE}）: {e}", file=sys.stderr)
+        _log.warning(f"[market-workbench] 持仓数据迁移失败（旧数据仍在 {_OLD_PF_FILE}）: {e}")
 
 
 _migrate_legacy()
@@ -441,7 +443,7 @@ def start_scheduler(interval: int = 300, user_ids=lambda: ()) -> None:
                 for user_id in user_ids():
                     _refresh_snapshot(user_id)
             except Exception:
-                pass
+                _log.debug("已吞掉的异常（降级路径）", exc_info=True)
     threading.Thread(target=loop, daemon=True).start()
 
 

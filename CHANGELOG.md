@@ -3,6 +3,52 @@
 本项目的版本号唯一来源是 `frontend/package.json`；后端 HTTP API、`/api/health`、
 前端界面与 MCP `serverInfo` 全部从它读取（见 `backend/version.py`）。
 
+## 未发布 — 2026-11-25 安全与质量修复
+
+依据 `docs/reviews/2026-11-25-code-review.md` 全量修复（内置更新的权限维持原状）。安全边界见 [SECURITY.md](SECURITY.md)。
+
+### 安全
+
+- **写操作默认要求登录**：此前 `/api/chat`、`/api/reflect`、`/api/deep-analysis`、`/api/myreports*`、`/api/radar/refresh`、`/api/factor/build|validate|custom`、`/api/pulse/insight`、`/api/screening/pool` 等端点没有登录校验，匿名即可调 LLM、触发 20–40 分钟的数据构建、读写删全体用户的研报。现在中间件对所有 POST / PUT / PATCH / DELETE 在解析请求体之前校验会话（仅登录、注册、云身份登录、退出登录例外），各处理函数另行校验。`refresh=true` / `force=true` 与各 `*/insight?refresh=true` 同样要求登录；不带开关的读取保持开放。
+- **研报按用户隔离**：索引记录 `owner_id`，列表 / 下载 / 删除只作用于本人。修复前的无主记录由第一个列出它的登录用户认领。
+- **全自动 CLI 默认关闭**：Codex / Qwen / DeepSeek 以全自动模式运行（可读写本机文件、执行命令），而提示词带着页面上的外部文本。需 `MW_CLI_AGENTS=1` 显式开启；Claude Code 已禁用全部工具，不受影响。
+- **登录防撞库**：同一 IP 对同一用户名 5 分钟内失败 10 次后返回 429；用户不存在时也执行一次等价耗时的哈希，不再能用响应时间枚举用户名。
+- **云账号防预劫持**：`users` 表新增 `cloud_id` 列（唯一索引），云登录按它匹配；`wb:` 前缀保留给影子账号，注册时拒绝。此前抢注 `wb:<他人 cloud_id>` 即可让受害者的云登录落到自己的账号上。
+- **会话令牌只存哈希**：`sessions.token` 改存 SHA-256，老库明文会话启动时就地迁移、登录态不丢。
+- **访问密钥常量时间比较**；设了 `MW_API_KEY` 即关闭 `/docs`、`/redoc`、`/openapi.json`。
+- **云登录诊断接口要求登录**，且不再保留上游响应体（含用户 id / 邮箱 / 手机）与 token 的 `sub`。
+- **SSRF**：模型端点请求不再跟随重定向——此前 `baseURL` 校验只管首跳，自建域名 302 到云元数据或内网即可绕过。
+- **体积上限**：单个请求体 40MB（实测此前 60MB 可直接入库）；单个用户数据 key 2MB；研报在解码前按 base64 长度预判。
+- **申万数据源恢复 TLS 校验**：该站只下发叶子证书，此前用 `verify=False` 绕过。改为随仓库带上缺失的中间证书，与 certifi 根证书拼成专用 CA 包（`tls_verify.py`）。
+- 深度分析并发上限 4（`MW_DEEP_ANALYSIS_SLOTS`），超出立即 429，不再排队占线程池。
+- 新增 `tests/test_auth_boundary.py`（静态 + 动态守住「写端点必须登录」）与 `tests/test_security_hardening.py`（24 个回归用例）。
+
+### 缺陷
+
+- **因子表达式引擎重复求值**：`ts_mean` 等六个算子对首个参数求值两次，嵌套 N 层即 2^N 次（实测深度 8 → 256 次），单条公式可占满 CPU 与内存。
+- **黄金期货分时在无数据时 NameError**：`astock.futures_minute_kline` 的空数据分支引用了不存在的 `get_today_cn`。新增 `ruff` 的未定义名称检查，该项由它发现。
+- **MCP server 收到非对象 JSON 行时退出**。
+- `kline_minute` 重复判空、行业排名与全球指数分时共用一张缓存表、`_optional_user_id` 无调用：已清理。
+- 列表类载荷的 ETag 此前是与内容无关的常量（同一 URL 内容变了也永远 304），改为按内容取。
+
+### 性能与可靠性
+
+- 鉴权请求不再每个执行一次 `DELETE FROM sessions`（每请求一个写事务）；过期会话改为建会话时按 10 分钟时间片清理。SQLite 开启 WAL 与 `busy_timeout`。
+- 缓存冷启动的等待者改用事件唤醒，不再每 20ms 抢一次全局缓存锁；磁盘快照预热移到锁外。
+- `/api/health` 改为 `async`：同步端点排队进线程池，线程池被长任务占满时健康检查会跟着挂起。
+- 内存看门狗支持 Linux / 容器（读 cgroup 用量，阈值取上限的 80%），`deploy/compose.yaml` 默认开启。
+- 前端 `/auth/me` 每个会话只校验一次（此前每次路由切换都校验）；登出时一并清理深度分析结果与持仓代码缓存。
+
+### 工程与依赖
+
+- 数据目录解析收拢到 `backend/paths.py`（此前同一表达式重复 27 处，`market.py` 与 `users.py` 还绕过了 `MW_DATA_DIR`；`add_user.py remove` 删号时会留下账本文件）。
+- 运行期日志改用 `logging`（`backend/logutil.py`），登录成功 / 失败 / 限流、研报删除、自定义因子增删、更新应用留审计事件；44 处静默 `pass` 的异常改为 debug 级记录。
+- 新增 CI（`.github/workflows/ci.yml`）：后端 `ruff` + `pytest`（含覆盖率）、前端 `tsc -b` + 测试 + 构建 + 生产依赖审计、Docker 镜像构建与启动检查。
+- `ruff` 规则与 `pytest-cov` 入 `requirements-dev.txt`；修复全部未使用 import。
+- 测试修复：`test_spa_security` 的命名空间缺 `_KEY_FREE_PATHS` 导致路径穿越用例长期红灯；`test_fixes` 的降级用例断言过期且实际联网；`test_bond_priors` 依赖已移出版本控制的研究产物。
+- 基础镜像钉到 digest；`.dockerignore` 补 `backend/.cache/`、`.publish/`、`deploy/.env`、`deploy/data/`；Caddy 增加 HSTS；云 SDK 钉精确版本；`react-router` 升到 7.18.7 修复高危公告。
+- 文档：新增 `SECURITY.md`；安装命令统一带 `-c deploy/constraints.txt`；补齐 6 个未入文档的环境变量；`.env.example` 的鉴权说明与实际行为对齐，移除已下线的 Gemini CLI。
+
 ## 1.9.2 — 2026-11-20
 
 云端部署上线后按「源是否真能用」逐项实测（15 个上游探针 + 60 多个接口实调），修掉一批只在公网出口才暴露的故障。本机自托管不受影响。

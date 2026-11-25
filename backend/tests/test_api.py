@@ -38,28 +38,48 @@ def test_public_news_search_validation():
     assert client.get("/api/public-news-search?q=major&count=9").status_code == 422
 
 
-def test_chat_empty_messages_400():
-    r = client.post("/api/chat", json={"messages": [], "llm": {"model": "x", "baseURL": "http://x", "apiKey": "k"}})
+def test_chat_requires_login():
+    # 对话端点会调本机 CLI 订阅 / 任意 OpenAI 兼容端点，不能匿名调用
+    r = client.post("/api/chat", json={
+        "messages": [{"role": "user", "content": "hi"}],
+        "llm": {"model": "x", "baseURL": "http://x", "apiKey": "k"},
+    })
+    assert r.status_code == 401
+
+
+def test_chat_empty_messages_400(logged_in):
+    r = client.post("/api/chat", headers=logged_in, json={"messages": [], "llm": {"model": "x", "baseURL": "http://x", "apiKey": "k"}})
     assert r.status_code == 400
 
 
-def test_chat_api_missing_key_400():
+def test_chat_api_missing_key_400(logged_in):
     # API 接入缺 baseURL/apiKey → 400（在开流前拦下）
-    r = client.post("/api/chat", json={
+    r = client.post("/api/chat", headers=logged_in, json={
         "messages": [{"role": "user", "content": "hi"}],
         "llm": {"provider": "deepseek", "model": "deepseek-chat", "baseURL": "", "apiKey": ""},
     })
     assert r.status_code == 400
 
 
-def test_chat_cli_not_installed_400():
+def test_chat_cli_not_installed_400(logged_in):
     # 订阅接入选一个本机没装的 CLI → 400 明确提示（不静默失败）
-    r = client.post("/api/chat", json={
+    r = client.post("/api/chat", headers=logged_in, json={
         "messages": [{"role": "user", "content": "hi"}],
         "llm": {"provider": "cli-qwen", "model": "qwen-code", "baseURL": "", "apiKey": ""},
     })
-    # qwen 一般未装 → 400；若恰好装了 qwen 则会进流式（放宽断言）
-    assert r.status_code in (400, 200)
+    # qwen 以全自动模式运行、默认关闭：无论本机装没装都应被挡下（403 说明原因；未装时 400）
+    assert r.status_code in (400, 403)
+
+
+def test_chat_auto_agent_cli_disabled_by_default(monkeypatch):
+    # 即使本机装了 qwen（这里伪造二进制存在），默认也不放行全自动 agent
+    import cli_runtime
+    monkeypatch.setattr(cli_runtime, "_find_bin", lambda name: f"/usr/local/bin/fake-{name}")
+    r = client.post("/api/chat", headers=__import__("conftest").auth_headers(), json={
+        "messages": [{"role": "user", "content": "hi"}],
+        "llm": {"provider": "cli-qwen", "model": "qwen-code"},
+    })
+    assert r.status_code == 403 and "MW_CLI_AGENTS" in r.json()["detail"]
 
 
 def test_global_stock_404(monkeypatch):

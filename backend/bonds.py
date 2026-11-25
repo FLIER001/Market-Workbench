@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import hashlib
-import math
 import os
 import threading
 import time
@@ -24,9 +23,10 @@ import astock
 import cache_runtime
 from bond_math import TENOR_YEARS, finite, scenario_rows
 from bisect import bisect_left
+import paths
 
 BEIJING = timezone(timedelta(hours=8))
-DATA_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
+DATA_DIR = paths.DATA_DIR
 
 
 def _stamp(value: dict) -> dict:

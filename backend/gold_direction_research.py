@@ -1,7 +1,6 @@
 """Exploratory directional gold priors; probabilities, abstention and honest baselines."""
 from __future__ import annotations
 import argparse
-from bisect import bisect_right
 from datetime import datetime, timezone
 import hashlib
 import math

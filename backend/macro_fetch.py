@@ -33,6 +33,8 @@ from datetime import datetime, timezone, timedelta
 
 import requests
 import cache_runtime
+import logutil
+_log = logutil.get(__name__)
 
 BEIJING = timezone(timedelta(hours=8))
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -354,7 +356,7 @@ def _pbc_latest_year_index() -> str | None:
         if m:
             return f"http://www.pbc.gov.cn{m.group(1)}"
     except Exception:
-        pass
+        _log.debug("已吞掉的异常（降级路径）", exc_info=True)
     # 退化为当年
     year = datetime.now(BEIJING).year
     return f"http://www.pbc.gov.cn/diaochatongjisi/116219/116319/{year}ntjsj/index.html"
@@ -369,7 +371,7 @@ def _pbc_sub_page(year_index_url: str, sub: str) -> str | None:
         if m:
             return f"http://www.pbc.gov.cn{m.group(1)}"
     except Exception:
-        pass
+        _log.debug("已吞掉的异常（降级路径）", exc_info=True)
     return None
 
 
@@ -875,7 +877,7 @@ def financial_conditions() -> dict:
             card["source_url"] = "https://www.chinamoney.com.cn/chinese/bkfrr/"
             out["dr007_policy_spread"] = card
     except Exception:
-        pass
+        _log.debug("已吞掉的异常（降级路径）", exc_info=True)
 
     # 中债 AAA 中短期票据 3Y - 国债 3Y。
     try:
@@ -892,7 +894,7 @@ def financial_conditions() -> dict:
             card["source_url"] = "https://yield.chinabond.com.cn/"
             out["credit_spread_aaa"] = card
     except Exception:
-        pass
+        _log.debug("已吞掉的异常（降级路径）", exc_info=True)
 
     # 中国货币网 AAA 同业存单 1Y - 7天逆回购政策利率。接口单次仅返回50行，分窗取数。
     try:
@@ -917,7 +919,7 @@ def financial_conditions() -> dict:
             card["source_url"] = "https://www.chinamoney.com.cn/chinese/bkcurvclosedyhis/"
             out["ncd_aaa_spread"] = card
     except Exception:
-        pass
+        _log.debug("已吞掉的异常（降级路径）", exc_info=True)
     return out
 
 
@@ -1255,7 +1257,6 @@ def policy_execution() -> dict | None:
 
     取三者方向的简单合成（改善数），0-3 分，越高=执行越实。
     """
-    import market
     ind = {}
     try:
         # 财政支出同比
@@ -1275,7 +1276,7 @@ def policy_execution() -> dict | None:
             h = cbs["corp_ml_loan_hist"]
             ind["corp_loan_chg"] = round(h[-1]["v"] - h[-4]["v"], 0)
     except Exception:
-        pass
+        _log.debug("已吞掉的异常（降级路径）", exc_info=True)
     if not ind:
         return None
     # 合成：财政>0、专项债动量>0、企业贷款增 → 各记 1 分

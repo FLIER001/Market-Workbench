@@ -21,7 +21,8 @@ macOS 上 Python/NumPy 释放的页不会还给系统：实测 2M 行 DataFrame 
    `_MIN_INTERVAL` 秒则整轮禁用。**即使判断逻辑写错也不会连环重启。**
 3. 双条件：只有「footprint 超 `_MAX_FOOTPRINT_MB`」或「运行超 `_MAX_UPTIME`」
    才触发，任一条件都不至于误伤。
-4. 默认关闭：仅有进程守护的 macOS 部署显式设置 `MW_MEM_WATCHDOG=1`。
+4. 显式开启：设 `MW_MEM_WATCHDOG=1`。macOS 需有 launchd KeepAlive 之类的进程守护；
+   Linux / 容器需配 `restart: unless-stopped`，阈值默认取 cgroup 上限的 80%。
 """
 
 from __future__ import annotations
@@ -31,6 +32,9 @@ import os
 import sys
 import threading
 import time
+import paths
+import logutil
+_log = logutil.get(__name__)
 
 _ENABLED = os.environ.get("MW_MEM_WATCHDOG", "0").lower() in ("1", "true", "yes", "on")
 _POLL = 60.0              # 每分钟巡检一次（rusage 一次开销可忽略）；间隔越短触发越精准
@@ -40,12 +44,29 @@ _MAX_FOOTPRINT_MB = 500.0  # 稳态约 300MB（评分重算已下沉子进程）
 _MAX_UPTIME = 8 * 3600    # 兜底：即便内存没涨，跑满 8 小时也回收一次
 
 _STAMP = os.path.join(
-    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
+    paths.DATA_DIR,
     "backend_last_selfrestart",
 )
 
 _libc = None
 _RUSAGE_INFO_V2 = 2
+
+
+def _cgroup_bytes(path: str) -> int | None:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return int(handle.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _linux_footprint_mb() -> float | None:
+    """容器 / Linux：读 cgroup 的内存用量（v2 memory.current，v1 memory.usage_in_bytes）。
+    与 macOS 的 physical footprint 口径相近（含本 cgroup 的匿名页与页缓存）。"""
+    raw = _cgroup_bytes("/sys/fs/cgroup/memory.current")
+    if raw is None:
+        raw = _cgroup_bytes("/sys/fs/cgroup/memory/memory.usage_in_bytes")
+    return raw / 1048576.0 if raw is not None else None
 
 
 def footprint_mb() -> float | None:
@@ -54,6 +75,12 @@ def footprint_mb() -> float | None:
     注意读的是 rusage_info_v2 的 offset 72；offset 80 是 ri_proc_start_abstime，
     读错了会得到一个荒谬的大值。取不到时返回 None，调用方按「不触发」处理。
     """
+    if sys.platform == "linux":
+        return _linux_footprint_mb()
+    return _darwin_footprint_mb()
+
+
+def _darwin_footprint_mb() -> float | None:
     global _libc
     if sys.platform != "darwin":
         return None
@@ -68,14 +95,34 @@ def footprint_mb() -> float | None:
     return ctypes.c_uint64.from_buffer(buf, 72).value / 1048576.0
 
 
+def max_footprint_mb() -> float:
+    """触发阈值（MB）。可用 MW_MEM_WATCHDOG_MAX_MB 显式指定；容器里未指定时取
+    cgroup 上限的 80%（compose 的 mem_limit 3g → 约 2.4g，给 OOM killer 留在前面的余地）；
+    其余平台沿用固定阈值。"""
+    env = os.environ.get("MW_MEM_WATCHDOG_MAX_MB", "").strip()
+    if env:
+        try:
+            return float(env)
+        except ValueError:
+            pass
+    if sys.platform == "linux":
+        limit = _cgroup_bytes("/sys/fs/cgroup/memory.max")
+        if limit is None or limit <= 0 or limit > (1 << 60):  # v2 的 "max" 读不出整数或近似无限
+            limit = _cgroup_bytes("/sys/fs/cgroup/memory/memory.limit_in_bytes")
+        if limit and 0 < limit < (1 << 60):
+            return limit / 1048576.0 * 0.8
+    return _MAX_FOOTPRINT_MB
+
+
 def should_restart(now: float, started: float, foot: float | None,
-                   last_restart: float) -> str | None:
+                   last_restart: float, max_mb: float | None = None) -> str | None:
     """纯判定：该重启就返回原因（"mem" / "uptime"），否则 None。便于单测覆盖。"""
     if now - started < _GRACE:
         return None
     if now - last_restart < _MIN_INTERVAL:
         return None
-    if foot is not None and foot > _MAX_FOOTPRINT_MB:
+    limit = _MAX_FOOTPRINT_MB if max_mb is None else max_mb
+    if foot is not None and foot > limit:
         return "mem"
     if now - started > _MAX_UPTIME:
         return "uptime"
@@ -103,32 +150,26 @@ def _loop(started: float) -> None:
     while True:
         time.sleep(_POLL)
         now = time.time()
-        reason = should_restart(now, started, footprint_mb(), _last_restart())
+        reason = should_restart(now, started, footprint_mb(), _last_restart(), max_footprint_mb())
         if reason is None:
             continue
         _mark_restart(now)
         foot = footprint_mb()
         foot_text = f"{foot:.0f}MB" if foot is not None else "n/a"
-        print(
-            f"[mem-watchdog] 触发回收（{reason}）：footprint={foot_text} "
+        _log.info(f"[mem-watchdog] 触发回收（{reason}）：footprint={foot_text} "
             f"uptime={(now - started) / 3600:.1f}h → 主动退出，"
-            f"KeepAlive 拉起后由磁盘快照兜底（首请求毫秒级）",
-            flush=True,
-        )
+            f"KeepAlive 拉起后由磁盘快照兜底（首请求毫秒级）")
         os._exit(75)
 
 
 def start() -> None:
-    if not _ENABLED or sys.platform != "darwin":
+    if not _ENABLED or sys.platform not in ("darwin", "linux"):
         return
     threading.Thread(
         target=_loop, args=(time.time(),), daemon=True, name="mem-watchdog"
     ).start()
     # 留一行启动日志：这套机制只在「该回收」时才出声，不打印的话运维无法确认它
     # 究竟有没有挂上（线程数会被预热线程淹没，看不出来）。
-    print(
-        f"[mem-watchdog] 已挂载：footprint 超 {_MAX_FOOTPRINT_MB:.0f}MB 或运行超 "
-        f"{_MAX_UPTIME / 3600:.0f}h 时主动退出回收内存，由 KeepAlive 拉起"
-        f"（启动宽限 {_GRACE // 60}min / 冷却 {_MIN_INTERVAL // 60}min）",
-        flush=True,
-    )
+    _log.info(f"[mem-watchdog] 已挂载：footprint 超 {max_footprint_mb():.0f}MB 或运行超 "
+        f"{_MAX_UPTIME / 3600:.0f}h 时主动退出回收内存，由进程守护（KeepAlive / restart 策略）拉起"
+        f"（启动宽限 {_GRACE // 60}min / 冷却 {_MIN_INTERVAL // 60}min）")

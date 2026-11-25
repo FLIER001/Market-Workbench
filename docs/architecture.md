@@ -31,6 +31,16 @@ React + Vite (5899) ── development proxy ──► FastAPI (8900)
 
 `backend/version.py` 从 `frontend/package.json` 读取版本号，避免各入口出现不同版本。
 
+横切约定（新增模块时照做）：
+
+| 关注点 | 位置 | 约定 |
+|---|---|---|
+| 数据路径 | `backend/paths.py` | 所有落盘路径从这里取（`DATA_DIR` / `USERS_DB` / `REPORTS_DIR` / `subdir()`）。不要在模块里再写 `MW_DATA_DIR` 的解析表达式。 |
+| 日志 | `backend/logutil.py` | `log = logutil.get(__name__)`。子进程与脚本里也有 INFO 级 stderr 输出；命令行工具的用户可见输出仍用 `print`。 |
+| 登录校验 | `app._current_user` / `_require_user_if` | 写操作与调 LLM 的端点首行调用 `_current_user(request)`；带 `refresh` / `force` 开关的读取端点调用 `_require_user_if(refresh, request)`。中间件对非 GET 请求另有默认拒绝，白名单只有登录注册入口。`tests/test_auth_boundary.py` 守住这两条。 |
+| 特定站点 TLS | `backend/tls_verify.py` | 证书链不完整的上游在这里补中间证书；不要写 `verify=False`。 |
+| 请求体上限 | `app._MAX_BODY_BYTES` | 中间件按 `Content-Length` 拦截；比它更小的限额（如单个用户数据 key）在各模块里再判一次。 |
+
 ## 因子研究接口契约
 
 既有 `/api/factor/*` 接口保持兼容。新增的 `/api/factor/research/*` 需要已登录的 user-token，统一返回 `{data: ...}`，记录按账户隔离。实现分布在 `factor_lab_routes.py`（路由）、`factor_lab.py`（持久化与任务）、`factor_lab_worker.py`（执行）、`factor_analysis.py`（纯函数计算）、`factor_data.py` 与 `factor_pit.py`（数据与点位）、`factor_expr.py`（表达式沙箱）。

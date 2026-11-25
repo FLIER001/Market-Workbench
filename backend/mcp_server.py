@@ -123,6 +123,8 @@ def main() -> None:
             msg = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if not isinstance(msg, dict):
+            continue  # 数组 / 数字等合法 JSON 但不是请求对象；往下走会在 msg.get 上抛异常并退出进程
         try:
             _handle(msg)
         except Exception as e:  # noqa: BLE001 — 单条消息出错不拖垮 server

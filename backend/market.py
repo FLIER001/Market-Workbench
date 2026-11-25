@@ -17,6 +17,9 @@ import astock
 import gstock
 import macro_fetch
 import cache_runtime
+import paths
+import logutil
+_log = logutil.get(__name__)
 
 BEIJING = timezone(timedelta(hours=8))
 _CACHE: dict = {}
@@ -66,7 +69,7 @@ def _cached(key: str, fn, valid=bool, ttl: int | None = None):
 
 # 冷启动兜底：服务重启后若源仍不可用，从磁盘快照恢复整页 last-good，页面直接可渲染
 _LIQUIDITY_SNAPSHOT = os.path.join(
-    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
+    paths.DATA_DIR,
     "liquidity_snapshot.json")
 
 
@@ -239,7 +242,7 @@ def _empty_to_none(v):
 
 # 主力资金流历史快照：push2his 时通时断，成功时落盘，断连时回退快照，避免页面图表数据时有时无
 _FLOWS_SNAPSHOT = os.path.join(
-    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
+    paths.DATA_DIR,
     "index_flows_snapshot.json")
 
 
@@ -607,7 +610,7 @@ def _fred_csv(series_id: str, limit: int = 260) -> list[tuple[str, float]]:
 
 # FRED 序列磁盘兜底：重启后 / 连续故障期，用最近一次成功的序列保证国外单卡与指数不断档
 _FRED_SNAPSHOT = os.path.join(
-    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
+    paths.DATA_DIR,
     "fred_series_snapshot.json")
 _FRED_SERIES_TTL = 6 * 3600  # FRED 日频更新，6 小时内直接用缓存，0 外呼
 
@@ -690,7 +693,7 @@ def _mk_us_index(label: str, kind: str, comps: list[dict], interpretation: str,
 
 # 两融历史快照：东财数据中心偶发断连时回退最近一次成功抓取，保证指数子指标图表不断数据
 _MARGIN_SNAPSHOT = os.path.join(
-    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
+    paths.DATA_DIR,
     "margin_hist_snapshot.json")
 
 
@@ -851,7 +854,7 @@ def _cn_index_flows_fetch() -> dict:
                 if hist:
                     return hist
             except Exception:
-                pass
+                _log.debug("已吞掉的异常（降级路径）", exc_info=True)
             if attempt < retries:
                 _time.sleep(0.8 * (attempt + 1))
         return []
@@ -878,7 +881,7 @@ def _cn_index_flows_fetch() -> dict:
                 else:
                     hist.append(live[-1])
         except Exception:
-            pass
+            _log.debug("已吞掉的异常（降级路径）", exc_info=True)
         if hist:
             out[secid] = {
                 "name": name, "hist": hist, "latest": hist[-1],
@@ -966,7 +969,7 @@ def _kalshi_fed_odds_fetch() -> dict:
 
 
 # 美联储目标利率阈值概率的 last-good 文件：Kalshi 挂了时兜底，避免页面空白。
-_FED_ODDS_LAST = os.path.join(os.path.expanduser("~"), ".market-workbench", "fed_odds_last.json")
+_FED_ODDS_LAST = paths.subdir("fed_odds_last.json")
 
 
 def _fed_odds_with_fallback() -> dict:
@@ -981,7 +984,7 @@ def _fed_odds_with_fallback() -> dict:
             with open(_FED_ODDS_LAST, "w", encoding="utf-8") as f:
                 json.dump(result, f, ensure_ascii=False)
         except Exception:
-            pass
+            _log.debug("已吞掉的异常（降级路径）", exc_info=True)
         return result
     # 失败：读盘的最后良好值
     try:
@@ -991,7 +994,7 @@ def _fed_odds_with_fallback() -> dict:
             last["stale"] = True
             return last
     except Exception:
-        pass
+        _log.debug("已吞掉的异常（降级路径）", exc_info=True)
     return {}
 
 
@@ -1787,13 +1790,13 @@ def _liquidity_build() -> dict:
 
 _MACRO_TTL = 1800  # 聚合层 30 分钟检查；月/季底层源另有 12 小时缓存
 _MACRO_SNAPSHOT = os.path.join(
-    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
+    paths.DATA_DIR,
     "macro_snapshot.json")
 _MACRO_CLIMATE_SNAPSHOT = os.path.join(
-    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
+    paths.DATA_DIR,
     "macro_climate_hist.json")
 _MACRO_EPS_SNAPSHOT = os.path.join(
-    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
+    paths.DATA_DIR,
     "macro_eps_consensus.json")
 
 
@@ -3192,20 +3195,20 @@ def _macro_build(force_sources: bool = False) -> dict:
                         "unit": "亿", "source": "资金面·融资",
                     }
         except Exception:
-            pass
+            _log.debug("已吞掉的异常（降级路径）", exc_info=True)
 
         try:
             breadth = _market_breadth_card(previous_cn.get("market_breadth"))
             if breadth:
                 indicators["market_breadth"] = breadth
         except Exception:
-            pass
+            _log.debug("已吞掉的异常（降级路径）", exc_info=True)
         try:
             eps_revision = _eps_revision_breadth()
             if eps_revision:
                 indicators["eps_revision_breadth"] = eps_revision
         except Exception:
-            pass
+            _log.debug("已吞掉的异常（降级路径）", exc_info=True)
 
         # 盈利与估值层：盈利广度、PE-TTM、ERP
         try:
@@ -3213,13 +3216,13 @@ def _macro_build(force_sources: bool = False) -> dict:
             if profit:
                 indicators["profit_breadth"] = profit
         except Exception:
-            pass
+            _log.debug("已吞掉的异常（降级路径）", exc_info=True)
         try:
             val_cards = _index_valuation_cards()
             if val_cards:
                 indicators.update(val_cards)
         except Exception:
-            pass
+            _log.debug("已吞掉的异常（降级路径）", exc_info=True)
 
         # 市场确认层：新高占比
         try:
@@ -3227,7 +3230,7 @@ def _macro_build(force_sources: bool = False) -> dict:
             if nh:
                 indicators["new_high_breadth"] = nh
         except Exception:
-            pass
+            _log.debug("已吞掉的异常（降级路径）", exc_info=True)
 
         # 按八层框架分组，前端按组渲染
         groups = {

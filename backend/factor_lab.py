@@ -28,6 +28,8 @@ from collections import deque
 from contextlib import contextmanager
 
 import users
+import logutil
+_log = logutil.get(__name__)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TERMINAL = ("completed", "failed", "cancelled")
@@ -714,7 +716,7 @@ def worker_main() -> None:
             try:
                 finish_run(rid, status="failed", error="任务执行异常")
             except Exception as exc:  # noqa: BLE001
-                print(f"[factor-lab] 任务状态写入失败：{exc}", file=sys.stderr, flush=True)
+                _log.warning(f"[factor-lab] 任务状态写入失败：{exc}")
 
 
 def _ensure_worker() -> None:
@@ -795,7 +797,7 @@ def _execute_locked(rid: str, lane_fd: int) -> None:
         log.seek(0)
         err = log.read(4000).strip()
         if err:
-            print(f"[{WORKER_MODULE}] {rid}: {err}", file=sys.stderr, flush=True)
+            _log.warning(f"[{WORKER_MODULE}] {rid}: {err}")
         error = "计算进程异常退出" if proc.returncode else "计算未返回结果"
         finish_run(rid, status="failed", error=error)
 

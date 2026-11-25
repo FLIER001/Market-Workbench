@@ -19,13 +19,13 @@ import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
 
 import fund
 import cache_runtime
+import paths
 
 BEIJING = timezone(timedelta(hours=8))
-DATA_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
+DATA_DIR = paths.DATA_DIR
 _CACHE_FILE = os.path.join(DATA_DIR, "fund_pfs.json")
 _DB_FILE = os.path.join(DATA_DIR, "fund_pfs.sqlite")
 _SCHEMA_VERSION = 3

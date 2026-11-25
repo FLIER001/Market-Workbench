@@ -27,6 +27,8 @@ import pandas as pd
 
 import astock
 import factor_data
+import logutil
+_log = logutil.get(__name__)
 
 _FUND_FILE = os.path.join(factor_data.DATA_DIR, "fundamentals.csv.gz")
 _FUND_META_FILE = os.path.join(factor_data.DATA_DIR, "fundamentals_meta.json")
@@ -295,7 +297,7 @@ def pit_status() -> dict:
                     "notice_date_min": str(df["notice_date"].min()),
                     "notice_date_max": str(df["notice_date"].max())}
         except Exception:  # noqa: BLE001 — 状态查询不抛
-            pass
+            _log.debug("已吞掉的异常（降级路径）", exc_info=True)
     state = pit_state()
     return {
         "has_data": bool(info),

@@ -31,9 +31,11 @@ import gold_score
 import oil
 import fedwatch
 import sector_scores
-import sw_level2_scores
 import industry_chain
 import timing_alloc
+import paths
+import logutil
+_log = logutil.get(__name__)
 
 # ——— schema 简写：让 20+ 个工具定义保持一屏可读 ———
 
@@ -367,7 +369,7 @@ _FFLOW_DELAY = "https://push2delay.eastmoney.com/api/qt/stock/fflow/daykline/get
 # 主源（东财 push2his）断连时的历史序列快照：成功时落盘、失败时回补，
 # 避免第三方源再挂时近 5/20/60 日累计整体缺失（同 market.py 指数流向的思路）。
 _FFLOW_SNAPSHOT = os.path.join(
-    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
+    paths.DATA_DIR,
     "stock_fflow_snapshot.json")
 
 
@@ -475,7 +477,7 @@ def _fund_flow(args: dict):
                 if today and today[-1]["date"] > rows[-1]["date"]:
                     rows.append(today[-1])
             except Exception:  # noqa: BLE001
-                pass
+                _log.debug("已吞掉的异常（降级路径）", exc_info=True)
         # 第三层兜底：东财延迟线路（仅当天）+ 本地快照历史拼接
         if not rows:
             try:
@@ -532,7 +534,7 @@ def _company_info(args: dict):
         if info:
             return info
     except Exception:  # noqa: BLE001 — 上游接口不稳，转降级源
-        pass
+        _log.debug("已吞掉的异常（降级路径）", exc_info=True)
     q = (astock.tencent_quote([code]) or {}).get(code) or {}
     if not q:
         return {"error": "公司概况数据源当前不可达"}
@@ -541,7 +543,7 @@ def _company_info(args: dict):
         boards = (astock.concept_blocks(code).get("boards") or [])
         industry = boards[0].get("name", "") if boards else ""
     except Exception:  # noqa: BLE001 — 行业是加分项，拿不到不影响主体
-        pass
+        _log.debug("已吞掉的异常（降级路径）", exc_info=True)
     return {
         "name": q.get("name"), "code": code, "industry_or_board": industry,
         "total_mcap_yi": q.get("mcap_yi"), "float_mcap_yi": q.get("float_mcap_yi"),

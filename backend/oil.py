@@ -30,11 +30,13 @@ from datetime import date, datetime, timedelta, timezone
 
 import ai_insight
 import cache_runtime
+import paths
+import logutil
+_log = logutil.get(__name__)
 
 BEIJING = timezone(timedelta(hours=8))
 
-_SNAPSHOT_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(
-    os.path.expanduser("~"), ".market-workbench")
+_SNAPSHOT_DIR = paths.DATA_DIR
 _SNAPSHOT = os.path.join(_SNAPSHOT_DIR, "oil_score_snapshot.json")
 
 # EIA v2 / bulk：
@@ -121,7 +123,7 @@ def _save_bytes(path: str, raw: bytes) -> None:
             f.write(raw)
         os.replace(tmp, path)
     except Exception:  # noqa: BLE001
-        pass
+        _log.debug("已吞掉的异常（降级路径）", exc_info=True)
 
 
 def _save_json(path: str, obj) -> None:
@@ -132,7 +134,7 @@ def _save_json(path: str, obj) -> None:
             json.dump(obj, f, ensure_ascii=False)
         os.replace(tmp, path)
     except Exception:  # noqa: BLE001
-        pass
+        _log.debug("已吞掉的异常（降级路径）", exc_info=True)
 
 
 def _load_json(path: str):
@@ -450,7 +452,7 @@ def oil_spot() -> dict:
                 _SPOT_CACHE["spot"] = (now, payload)
                 return payload
         except Exception:  # noqa: BLE001
-            pass
+            _log.debug("已吞掉的异常（降级路径）", exc_info=True)
         if hit:
             return dict(hit[1], stale=True)
         return {"brent": None, "wti": None, "ng": None, "fetched_at": None, "stale": True}
@@ -542,7 +544,7 @@ def _hl_ctx() -> dict:
             if u.get("name") == _HL_WTI and i < len(ctxs):
                 return ctxs[i] or {}
     except Exception:  # noqa: BLE001
-        pass
+        _log.debug("已吞掉的异常（降级路径）", exc_info=True)
     return {}
 
 
@@ -650,7 +652,7 @@ def wti_hyper_spot() -> dict:
             _WTI_CACHE["wti"] = (now, payload)
             return payload
         except Exception:  # noqa: BLE001 — 网络/解析异常统一回退
-            pass
+            _log.debug("已吞掉的异常（降级路径）", exc_info=True)
         if hit:
             payload = dict(hit[1])
             payload["stale"] = True

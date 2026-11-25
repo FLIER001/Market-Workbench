@@ -1,7 +1,6 @@
 """Gold model invariants: no missing-data uplift, future data, or history rewrite."""
 from copy import deepcopy
 from datetime import datetime, date, timedelta
-import json
 import math
 import pytest
 import gold_score as g

@@ -62,7 +62,7 @@ cd Market-Workbench
 
 cd backend
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -c ../deploy/constraints.txt -r requirements.txt
 cd ..
 
 ./run.sh
@@ -130,14 +130,17 @@ MCP Server 使用与网页相同的数据工具层，本地调用不需要 API k
 | `MW_DATA_DIR` / `MW_REPORTS_DIR` | `~/.market-workbench/` | 用户数据与研报目录 |
 | `MW_ENV_FILE` | `backend/.env.local` | `run.sh` 加载的私有配置文件 |
 | `MW_ALLOW_ORIGINS` | `*` | CORS 来源白名单 |
-| `MW_API_KEY` | 空 | 设置后为 API 启用 Bearer 鉴权，健康检查除外 |
+| `MW_API_KEY` | 空 | 设置后为 API 启用 Bearer 鉴权（登录注册入口与健康检查除外），并关闭 `/docs`；所有写操作、强制刷新与调 LLM 的端点无论是否设置都要求登录 |
 | `MW_ALLOW_REGISTRATION` | 关闭 | 设为 `1` 时允许网页注册 |
 | `MW_DATA_PROXY` | 关闭 | 设为 `1` 时数据请求使用系统代理 |
 | `MW_UPDATE_REMOTE` / `MW_UPDATE_BRANCH` | `origin` / `main` | 设置页「程序更新」拉取的上游 |
 | `MW_CLOUD_ENDPOINT` / `MW_CLOUD_PUBLISHABLE_KEY` | 空 | 启用 WorkBuddy 云账号登录与云数据层；留空则登录页不显示该入口 |
 | `MW_BUILD_COMMIT` | 空 | 构建/启动时注入的提交号，云端没有 `.git` 时用它填 `/api/health` 的 `commit` |
+| `MW_CLI_AGENTS` | 关闭 | 设为 `1` 才允许 Codex / Qwen / DeepSeek 订阅接入（它们以全自动模式运行，可读写本机文件）；Claude Code 不受影响 |
+| `MW_USERS_DB` / `MW_FRONTEND_DIST` / `MW_DEEP_ANALYSIS_TIMEOUT` | 数据目录内 / `frontend/dist` / 2400 | 账号库路径 / 前端静态目录 / 深度分析超时（秒） |
+| `MW_PULSE_LLM_BASE_URL` / `MW_PULSE_LLM_API_KEY` / `MW_PULSE_LLM_MODEL` | 空 | 「全球预期」页 AI 研判卡片的模型（服务端配置） |
 
-完整配置、可选数据源密钥和公网部署要求见 [配置说明](docs/configuration.md) 与 [环境变量示例](backend/.env.example)。公开部署前，至少收紧 CORS、设置强 API key，并在反向代理上启用 HTTPS。
+完整配置、可选数据源密钥和公网部署要求见 [配置说明](docs/configuration.md) 与 [环境变量示例](backend/.env.example)。公开部署前，至少收紧 CORS、设置强 API key，并在反向代理上启用 HTTPS。安全边界与上报方式见 [SECURITY.md](SECURITY.md)。
 
 云主机（Docker Compose + 自动 HTTPS）的部署步骤见 [deploy/README.md](deploy/README.md)。发布包用脚本生成，不要手工拼：
 

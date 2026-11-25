@@ -66,6 +66,8 @@ docker compose exec app python add_user.py list
 |---|---|
 | `curl https://<域名>/api/health` | 200 + 版本号 JSON |
 | 登录页 | 首次登录会要求填「访问密钥」= `.env` 里的 `MW_API_KEY`；填对才能登录 |
+| `/openapi.json` | 404（设了 `MW_API_KEY` 即关闭接口文档） |
+| `curl -I https://<域名>/` | 响应头含 `Strict-Transport-Security` |
 | 行情 / 个股 / 黄金页 | 数据正常返回 |
 
 ## 7. 日常运维
@@ -73,6 +75,8 @@ docker compose exec app python add_user.py list
 | 事项 | 命令 |
 |---|---|
 | 更新代码 | 本机重跑 rsync → `docker compose up -d --build` |
+
+内存看门狗在 compose 里默认开启（`MW_MEM_WATCHDOG=1`）：用量超过 `mem_limit` 的 80% 或连续运行满 8 小时，后端主动退出并由 Docker 的 `restart` 策略拉起，磁盘快照兜底首请求。日志里出现 `[mem-watchdog] 触发回收` 属预期行为。
 | 备份数据 | `tar czf mw-$(date +%F).tgz -C deploy data` |
 | 看日志 | `docker compose logs -f --tail=200 app` |
 | 重启 | `docker compose restart app` |

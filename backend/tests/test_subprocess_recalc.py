@@ -5,6 +5,7 @@
 所以测试重点在**拾取通道的竞态安全**与**失败时保留旧值**。
 """
 
+import threading
 import types
 import subprocess
 import sys
@@ -13,11 +14,22 @@ from pathlib import Path
 import pytest
 
 import cache_runtime
+import score_worker
 import sector_scores
 
 
 def setup_function():
     cache_runtime.reset_for_tests()
+
+
+@pytest.fixture
+def private_worker_lock(monkeypatch):
+    """给 score_worker.rebuild 换一把本用例私有的锁。
+
+    `_LOCK` 是进程级全局锁，同一时刻只允许一个评分重算子进程。别的用例启动真实 lifespan
+    后会留下后台重算线程，占着这把锁跑分钟级的子进程；这里只验证 `_recalc_in_subprocess`
+    的包装逻辑（子进程已打桩），没理由排在真实重算后面等。"""
+    monkeypatch.setattr(score_worker, "_LOCK", threading.Lock())
 
 
 def _snapshot(gen: str) -> dict:
@@ -70,7 +82,7 @@ def test_adopt_no_snapshot_at_all(monkeypatch):
     assert sector_scores.adopt_disk_snapshot() is False
 
 
-def test_recalc_wrapper_success_invokes_adopt(monkeypatch):
+def test_recalc_wrapper_success_invokes_adopt(monkeypatch, private_worker_lock):
     """子进程成功（退出码 0）→ adopt 被调用。
 
     同时校验命令串必须是 `import m; m.fn(...)` 形态——写成
@@ -92,7 +104,7 @@ def test_recalc_wrapper_success_invokes_adopt(monkeypatch):
     assert captured["args"][2] == "import sector_scores; sector_scores.rebuild_snapshot()"
 
 
-def test_recalc_wrapper_failure_keeps_old(monkeypatch):
+def test_recalc_wrapper_failure_keeps_old(monkeypatch, private_worker_lock):
     """子进程失败（非零退出/超时/OSError）→ adopt 不被调用，内存旧值不动。"""
     import app
 

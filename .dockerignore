@@ -31,3 +31,10 @@ backend/.env.*
 backend/data/*.bak
 *.log
 .DS_Store
+
+# 本机运行缓存与私有数据：backend/.cache 里是行业链路等运行期缓存（研报 ≤v0.1.1 也放这里），
+# 随 `COPY backend/` 会进镜像；deploy/.env 是访问密钥，deploy/data 是用户库与研报
+backend/.cache/
+.publish/
+deploy/.env
+deploy/data/

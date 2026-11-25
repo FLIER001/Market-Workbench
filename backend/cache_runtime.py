@@ -32,6 +32,8 @@ class _Entry:
 
 
 _entries: dict[str, _Entry] = {}
+# 冷启动等待者的唤醒事件（key → Event）：构建线程结束时 set，等待者不再轮询抢锁
+_wake: dict[str, threading.Event] = {}
 _lock = threading.RLock()
 
 # 按键维度天然无上限的缓存族（如 stock:<endpoint>:<code>——浏览过的股票越多、
@@ -245,6 +247,9 @@ def _refresh(
     finally:
         with _lock:
             _entries.setdefault(key, _Entry()).refreshing = False
+            wake = _wake.pop(key, None)
+        if wake is not None:
+            wake.set()  # 在锁外 set：等锁的线程醒来后能立刻拿到锁读结果
 
 
 def get(
@@ -271,22 +276,31 @@ def get(
     云端实测 >120s，同步等只会换来 504）；调用方拿到 None 后自行返回占位快照。
     """
     now = time.time()
+    # 磁盘快照预热放在锁外：warm() 要读盘，原先它持着全局缓存锁执行，所有端点的
+    # 缓存读写都得排在一次磁盘 I/O 之后。
+    warmed = None
     with _lock:
         entry = _entries.setdefault(key, _Entry())
-        if entry.value is None and warm:
-            warmed = warm()
-            if warmed is not None:
-                if isinstance(warmed, tuple) and len(warmed) == 2:
-                    entry.cached_at, entry.value = float(warmed[0]), warmed[1]
-                else:
-                    entry.value = warmed
-                    # 快照里若带自身的数据时点（as_of/updated 等），以它为准并封顶：
-                    # 进程重启高频（launchd KeepAlive）时文件 mtime 恒新，但数据可能
-                    # 是很久前的——按 mtime 判 fresh 会让页面长期展示旧数据时点。
-                    entry.cached_at = warm_time() if warm_time else min(
-                        now, _time_from_value(warmed) or now)
-                _trim_group(key)
+        needs_warm = entry.value is None and warm is not None
+    if needs_warm:
+        warmed = warm()
+        if warmed is not None:
+            with _lock:
+                entry = _entries[key]
+                if entry.value is None:  # 期间已有并发请求建出结果时不覆盖
+                    if isinstance(warmed, tuple) and len(warmed) == 2:
+                        entry.cached_at, entry.value = float(warmed[0]), warmed[1]
+                    else:
+                        entry.value = warmed
+                        # 快照里若带自身的数据时点（as_of/updated 等），以它为准并封顶：
+                        # 进程重启高频（launchd KeepAlive）时文件 mtime 恒新，但数据可能
+                        # 是很久前的——按 mtime 判 fresh 会让页面长期展示旧数据时点。
+                        entry.cached_at = warm_time() if warm_time else min(
+                            now, _time_from_value(warmed) or now)
+                    _trim_group(key)
 
+    with _lock:
+        entry = _entries[key]
         if entry.value is not None:
             stale = force or now - entry.cached_at >= ttl
             can_start = not entry.refreshing and (force or now >= entry.retry_at)
@@ -304,8 +318,12 @@ def get(
         if not entry.refreshing:
             entry.refreshing = True
             cold_owner = True
+            wake = None
         else:
             cold_owner = False
+            # 在同一把锁里登记等待事件：要么此刻看到 refreshing 已复位（值已就绪），
+            # 要么事件先于构建线程的 finally 入表，不存在「事件永远不被唤醒」的窗口。
+            wake = _wake.setdefault(key, threading.Event())
 
     if cold_owner:
         if cold_nonblocking:
@@ -323,12 +341,18 @@ def get(
         # 若还在这里等，等于把 120s 的等待从「自己建」挪到「等别人建」，一样 504。
         if cold_nonblocking:
             return None
+        # 事件等待替代每 20ms 抢一次全局锁：原先每个等待者在最长 120 秒里
+        # 会抢锁约 6000 次，挤占全部端点的缓存读写。
         deadline = time.time() + _COLD_WAIT_MAX
-        while time.time() < deadline:
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0 or wake is None:
+                break
+            wake.wait(min(remaining, 5.0))
             with _lock:
                 if not _entries[key].refreshing:
                     break
-            time.sleep(0.02)
+                wake = _wake.setdefault(key, threading.Event())
 
     with _lock:
         entry = _entries[key]
@@ -347,5 +371,6 @@ def get(
 def reset_for_tests() -> None:
     with _lock:
         _entries.clear()
+        _wake.clear()
         # 组配置随状态一起清掉：测试各自 register_group，避免相互串味。
         _groups.clear()

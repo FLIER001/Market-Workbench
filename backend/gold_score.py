@@ -33,11 +33,14 @@ from xml.etree import ElementTree
 import ai_insight
 import cache_runtime
 import market
+import paths
+import logutil
+_log = logutil.get(__name__)
 
 BEIJING = timezone(timedelta(hours=8))
 
 _SNAPSHOT = os.path.join(
-    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
+    paths.DATA_DIR,
     "gold_score_snapshot.json")
 _CB_GOLD_VINTAGE_DIR = os.path.join(os.path.dirname(_SNAPSHOT), "gold_cb_vintages")
 _ETF_VINTAGE_DIR = os.path.join(os.path.dirname(_SNAPSHOT), "gold_etf_vintages")
@@ -233,7 +236,7 @@ def gold_spot() -> dict:
                 _GOLD_SPOT_CACHE["spot"] = (now, payload)
                 return payload
         except Exception:  # noqa: BLE001 — 网络/解析异常统一回退
-            pass
+            _log.debug("已吞掉的异常（降级路径）", exc_info=True)
         if hit:
             payload = dict(hit[1])
             payload["stale"] = True
@@ -381,7 +384,7 @@ def cn_gold_spot() -> dict:
                 _CN_GOLD_CACHE["cn"] = (now, payload)
                 return payload
         except Exception:  # noqa: BLE001 — 网络/解析异常统一回退
-            pass
+            _log.debug("已吞掉的异常（降级路径）", exc_info=True)
         if hit:
             payload = dict(hit[1])
             payload["stale"] = True
@@ -433,7 +436,7 @@ def au0_daily_history(days: int = 400) -> dict:
                         and (not points or points[-1]["date"] < today):
                     points.append({"date": today, "v": round(live["price"], 2)})
             except Exception:  # noqa: BLE001 — 实时补点失败不影响历史序列
-                pass
+                _log.debug("已吞掉的异常（降级路径）", exc_info=True)
             payload = {
                 "symbol": "AU0",
                 "points": points,
@@ -635,7 +638,7 @@ def paxg_usd_spot() -> dict:
             _PAXG_CACHE["paxg"] = (now, payload)
             return payload
         except Exception:  # noqa: BLE001 — 网络/解析异常统一回退
-            pass
+            _log.debug("已吞掉的异常（降级路径）", exc_info=True)
         if hit:
             payload = dict(hit[1])
             payload["stale"] = True

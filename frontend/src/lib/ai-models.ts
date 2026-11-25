@@ -48,9 +48,11 @@ export const PROVIDER_BASE: Partial<Record<ProviderId, string>> = {
 export const aiModels: ModelConfig[] = [
   // —— 订阅版（免 API key，调本机已登录的 CLI）——
   { id: "claude-code", name: "Claude Code", description: "用本机 Claude 订阅", provider: "cli-claude" },
-  { id: "qwen-code", name: "Qwen Code", description: "通义 Qwen Code 订阅", provider: "cli-qwen" },
-  { id: "deepseek-cli", name: "DeepSeek CLI", description: "DeepSeek 本机 CLI 订阅", provider: "cli-deepseek" },
-  { id: "codex", name: "Codex", description: "OpenAI Codex 订阅（需 codex login 登录）", provider: "cli-codex" },
+  // Qwen / DeepSeek / Codex 三个 CLI 以全自动模式运行（可读写本机文件），后端默认关闭；
+  // 确需使用要在后端设 MW_CLI_AGENTS=1。Claude 一侧禁用了全部工具，不受影响。
+  { id: "qwen-code", name: "Qwen Code", description: "通义 Qwen Code 订阅（默认关闭，需后端设 MW_CLI_AGENTS=1）", provider: "cli-qwen" },
+  { id: "deepseek-cli", name: "DeepSeek CLI", description: "DeepSeek 本机 CLI 订阅（默认关闭，需后端设 MW_CLI_AGENTS=1）", provider: "cli-deepseek" },
+  { id: "codex", name: "Codex", description: "OpenAI Codex 订阅（需 codex login；默认关闭，需后端设 MW_CLI_AGENTS=1）", provider: "cli-codex" },
   { id: "opencode", name: "OpenCode", description: "OpenCode 订阅", provider: "cli-opencode", comingSoon: true },
   { id: "cursor-agent", name: "Cursor Agent", description: "Cursor Agent 订阅", provider: "cli-cursor", comingSoon: true },
   { id: "kimi", name: "Kimi", description: "Kimi 订阅", provider: "cli-kimi", comingSoon: true },

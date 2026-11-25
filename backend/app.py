@@ -10,11 +10,13 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import subprocess
 import threading
 import time as _time
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +28,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 import astock
 import abnormal
@@ -68,9 +71,20 @@ import timing_alloc
 import tools as tools_layer
 import updater
 import users
+import logutil
 from version import read_version
 
 __version__ = read_version()
+_log = logutil.get(__name__)
+# 访问密钥：设了即视为对外部署（见 _require_api_key）
+_API_KEY = os.environ.get("MW_API_KEY", "").strip()
+
+
+def _configure_logging() -> None:
+    """进程级日志：此前后端没有 logging，运行期事件全靠 print（无级别、无时间戳）。"""
+    logutil.configure()
+
+
 # 启动时的提交号：/api/health 回给前端，用来判断「更新后新进程是否已经起来」。
 # 云端镜像没有 .git，靠启动命令注入 MW_BUILD_COMMIT 才能显示版本。
 _COMMIT = (os.environ.get("MW_BUILD_COMMIT", "").strip() or None) or updater.head_commit()
@@ -78,6 +92,7 @@ _COMMIT = (os.environ.get("MW_BUILD_COMMIT", "").strip() or None) or updater.hea
 
 @asynccontextmanager
 async def _lifespan(application: FastAPI):
+    _configure_logging()
     # 导入模块只注册路由；调度/预热属于真正的 ASGI 服务启动。
     factor_research_layer.init_db()
     factor_research_layer.start_worker()
@@ -85,14 +100,24 @@ async def _lifespan(application: FastAPI):
         # 首启快照：云端冷建要 40 分钟以上，随包带的 last-good 先顶上（已存在则不动）
         seeded = plate_scores_layer.seed_from_bundle()
         if seeded:
-            print(f"[seed] 已写入首启快照：{', '.join(seeded)}", flush=True)
+            _log.info(f"[seed] 已写入首启快照：{', '.join(seeded)}")
         _start_background_jobs()
         yield
     finally:
         factor_research_layer.stop_worker()
 
 
-app = FastAPI(title="Market Workbench API", version=__version__, lifespan=_lifespan)
+# 应用创建：设了 MW_API_KEY 即视为对外部署，关闭 /docs /redoc /openapi.json
+# （匿名可下载全量接口清单）。本地自托管保留，方便调试。
+_PUBLIC_DEPLOYMENT = bool(_API_KEY) or os.environ.get("MW_PUBLIC", "").strip().lower() in ("1", "true", "yes", "on")
+app = FastAPI(
+    title="Market Workbench API", version=__version__, lifespan=_lifespan,
+    docs_url=None if _PUBLIC_DEPLOYMENT else "/docs",
+    redoc_url=None if _PUBLIC_DEPLOYMENT else "/redoc",
+    openapi_url=None if _PUBLIC_DEPLOYMENT else "/openapi.json",
+)
+# 单个请求体的字节上限（在中间件里按 Content-Length 拦）
+_MAX_BODY_BYTES = 40 * 1024 * 1024
 
 
 def _recalc_in_subprocess(module: str, entry: str, adopt) -> None:
@@ -107,7 +132,7 @@ def _recalc_in_subprocess(module: str, entry: str, adopt) -> None:
     try:
         score_worker.rebuild(module, adopt, entry=entry)
     except (OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
-        print(f"[recalc-subprocess] {module} 执行异常：{exc}", flush=True)
+        _log.info(f"[recalc-subprocess] {module} 执行异常：{exc}")
         return
 
 
@@ -123,7 +148,7 @@ def _warm_holder_increase() -> None:
         try:
             holder_increase.get_holder_increase("7d")
         except Exception:  # noqa: BLE001 - 预热失败留给真实请求再触发
-            pass
+            _log.debug("已吞掉的异常（降级路径）", exc_info=True)
 
     threading.Thread(target=run, daemon=True, name="warm:holder-increase").start()
 
@@ -159,7 +184,7 @@ def _warm_expensive_datasets(gap_seconds: float = 5.0) -> None:
         try:
             load()
         except Exception:  # noqa: BLE001 - 预热失败留给真实请求再触发
-            pass
+            _log.debug("已吞掉的异常（降级路径）", exc_info=True)
 
     def heavy_lane() -> None:
         for name, load in _WARM_HEAVY:
@@ -220,6 +245,10 @@ def _conditional_json(data, request: Request, response: Response):
     """
     fingerprint = "|".join(str(data.get(k)) if isinstance(data, dict) else ""
                            for k in _ETAG_FINGERPRINT_KEYS)
+    if not isinstance(data, dict):
+        # 列表等载荷没有「构建时点」字段可取：指纹会退化成一个与内容无关的常量，
+        # 同一 URL 的内容变了 ETag 却不变 → 浏览器永远拿到 304、永远显示旧数据。改为按内容取。
+        fingerprint = "raw|" + json.dumps(data, ensure_ascii=False, sort_keys=True, default=str)
     # SHA-256 而不是 MD5：这只是缓存校验值（不是安全边界），但弱哈希在静态检查里
     # 一律会被标出来，用强哈希没有代价，也省得每次都要判断这一次算不算敏感场景。
     etag = f'"{hashlib.sha256(fingerprint.encode()).hexdigest()}"'
@@ -244,7 +273,6 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # 可选鉴权：设了 MW_API_KEY 就要求所有 /api/* 带 `Authorization: Bearer <key>`
 #   （本地自托管不设=开放；公网部署务必设，否则别人能读你的持仓/调你的后端）。
-_API_KEY = os.environ.get("MW_API_KEY", "").strip()
 
 # 公开注册开关：默认关（账号由管理员用 backend/add_user.py 后台添加）。
 #   首次启动用户库为空时放行一次，方便新部署把主账号建出来；之后只能走后台添加。
@@ -262,24 +290,82 @@ _KEY_FREE_PATHS = frozenset({
 
 @app.middleware("http")
 async def _require_api_key(request: Request, call_next):
+    # 请求体上限（40MB）：研报 base64 约 33MB 是最大的合法载荷；没有上限时任何登录用户
+    # 都能用单个请求把内存或用户库撑满（实测 60MB 可直接入库）。
+    length = request.headers.get("content-length", "")
+    if length.isdigit() and int(length) > _MAX_BODY_BYTES:
+        return JSONResponse({"detail": f"请求体过大，上限 {_MAX_BODY_BYTES // 1024 // 1024}MB"}, status_code=413)
     if (
         _API_KEY
         and request.method != "OPTIONS"
         and request.url.path.startswith("/api/")
         and request.url.path not in _KEY_FREE_PATHS
     ):
-        bearer_ok = request.headers.get("authorization", "") == f"Bearer {_API_KEY}"
-        if request.headers.get("x-vr-access-key", "") != _API_KEY and not bearer_ok:
+        # 常量时间比较：密钥比对用 == 会随前缀匹配长度泄漏时间信息。
+        # 只看 Authorization: Bearer 与 X-VR-Access-Key 两个通道；Authorization 里放的
+        # 可能是访问密钥也可能是会话 token，两者各查各的，互不遮蔽。
+        supplied = (request.headers.get("x-vr-access-key", "").strip(), _authorization_bearer(request))
+        if not any(s and hmac.compare_digest(s, _API_KEY) for s in supplied):
             return JSONResponse({"detail": "未授权：缺少或错误的 API Key（MW_API_KEY）"}, status_code=401)
+    # 默认拒绝：所有会改状态或产生费用的方法（POST / PUT / PATCH / DELETE）一律要求登录，
+    # 在解析请求体之前判定。各处理函数里仍各自调用 _current_user（纵深防御）；这一层保证
+    # 「新增端点忘了写鉴权」时默认是关的，且匿名请求拿到的是 401 而非暴露校验细节的 422。
+    if (
+        request.method not in ("GET", "HEAD", "OPTIONS")
+        and request.url.path.startswith("/api/")
+        and request.url.path.rstrip("/") not in _ANONYMOUS_WRITE_PATHS
+        and not users.resolve_token(_bearer_token(request))
+    ):
+        return JSONResponse({"detail": "未登录或登录已过期"}, status_code=401)
     return await call_next(request)
 
 
+# 匿名也可用的写端点：登录 / 注册 / 云身份换会话（拿不到 token 时恰恰需要它们），以及
+# 退出登录（对匿名请求幂等）。
+_ANONYMOUS_WRITE_PATHS = frozenset({
+    "/api/auth/login", "/api/auth/register", "/api/auth/cloud", "/api/auth/logout",
+})
+
+
+def _authorization_bearer(request: Request) -> str:
+    """Authorization: Bearer <x> 里的 <x>（访问密钥通道）。"""
+    auth = request.headers.get("authorization", "")
+    return auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+
+
 def _bearer_token(request: Request) -> str:
+    """用户会话 token：X-VR-User-Token 优先，其次是 Authorization: Bearer（两者共用通道）。"""
     direct = request.headers.get("x-vr-user-token", "").strip()
     if direct:
         return direct
-    auth = request.headers.get("authorization", "")
-    return auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    return _authorization_bearer(request)
+
+
+# 登录失败限流：按「来源 IP + 用户名」滑动窗口计数，窗口内失败满 N 次后一律 429。
+# 做在进程内即可——单实例部署；它挡的是在线撞库，不承诺分布式限流。
+_LOGIN_WINDOW_S, _LOGIN_MAX_FAILS = 300, 10
+_LOGIN_FAILS: dict[str, deque] = defaultdict(deque)
+_LOGIN_FAILS_LOCK = threading.Lock()
+
+
+def _login_client(request: Request) -> str:
+    return request.client.host if request.client else "?"
+
+
+def _login_blocked(key: str) -> bool:
+    now = _time.time()
+    with _LOGIN_FAILS_LOCK:
+        q = _LOGIN_FAILS[key]
+        while q and now - q[0] > _LOGIN_WINDOW_S:
+            q.popleft()
+        return len(q) >= _LOGIN_MAX_FAILS
+
+
+def _login_failed(key: str) -> None:
+    with _LOGIN_FAILS_LOCK:
+        if len(_LOGIN_FAILS) > 10000:  # 键随「IP × 用户名」增长，超量时整体清空重来
+            _LOGIN_FAILS.clear()
+        _LOGIN_FAILS[key].append(_time.time())
 
 
 def _current_user(request: Request) -> dict:
@@ -290,14 +376,11 @@ def _current_user(request: Request) -> dict:
     return user
 
 
-def _optional_user_id(request: Request) -> int | None:
-    token = request.headers.get("x-vr-user-token", "").strip()
-    if not token:
-        return None
-    user = users.resolve_token(token)
-    if not user:
-        raise HTTPException(401, "未登录或登录已过期")
-    return int(user["id"])
+def _require_user_if(force: bool, request: Request) -> None:
+    """强制重建类开关（refresh=true）要求登录：它绕过 TTL 与退避直接打上游，
+    匿名可调时既会被用来把本机 IP 刷进上游黑名单，也会反复触发 50 秒级的重算。"""
+    if force:
+        _current_user(request)
 
 
 def _portfolio_user_id(request: Request) -> int:
@@ -315,7 +398,8 @@ def _validate(code: str) -> str:
 
 
 @app.get("/api/health")
-def health():
+async def health():
+    # 必须是 async：同步端点排队进线程池，线程池被长任务占满时健康检查会跟着挂起
     return {"ok": True, "service": "market-workbench-api", "version": __version__, "commit": _COMMIT}
 
 
@@ -339,11 +423,12 @@ def update_apply(request: Request):
 
 
 @app.get("/api/source-health")
-def source_health(force: bool = Query(False), source: str | None = Query(None)):
+def source_health(request: Request, force: bool = Query(False), source: str | None = Query(None)):
     """数据源健康检查：11 个上游探活（60s 节流）+ 各页面缓存/快照时间戳。
 
     source=<key> 只重探单个上游（单源按钮），其余沿用上次结果。
     """
+    _require_user_if(force, request)
     import source_health
 
     only = [s.strip() for s in source.split(",") if s.strip()] if source else None
@@ -382,12 +467,14 @@ _CLOUD_DATA_PROBE: dict = {}
 
 
 @app.post("/api/auth/cloud/data-probe")
-def auth_cloud_data_probe(req: dict):
+def auth_cloud_data_probe(req: dict, request: Request):
     """前端上报的云数据库自检结果（只存状态码/错误码，不存业务数据或 token）。"""
+    _current_user(request)
     _CLOUD_DATA_PROBE.clear()
     _CLOUD_DATA_PROBE.update({
-        "at": int(__import__("time").time()),
-        **{k: v for k, v in req.items() if k in ("ok", "migrated", "error", "code", "status")},
+        "at": int(_time.time()),
+        **{k: (v if isinstance(v, (int, float, bool, type(None))) else str(v)[:200])
+           for k, v in req.items() if k in ("ok", "migrated", "error", "code", "status")},
     })
     return {"data": {"ok": True}}
 
@@ -406,7 +493,8 @@ def _token_shape(token: str) -> dict:
             pad = parts[1] + "=" * (-len(parts[1]) % 4)
             claims = _json.loads(base64.urlsafe_b64decode(pad))
             shape["claims"] = {
-                k: claims.get(k) for k in ("iss", "aud", "sub", "exp", "iat", "client_id") if k in claims
+                # 不含 sub（那是上一位登录者的云 id，其他登录用户无权看到）
+                k: claims.get(k) for k in ("iss", "aud", "exp", "iat", "client_id") if k in claims
             }
             if isinstance(claims.get("exp"), (int, float)):
                 shape["expired"] = claims["exp"] < _time.time()
@@ -415,6 +503,15 @@ def _token_shape(token: str) -> dict:
     else:
         shape["prefix"] = token[:4]
     return shape
+
+
+def _probe_error_code(resp) -> str:
+    """从上游失败响应里只取 error 码。响应体可能含用户资料（id / 邮箱 / 手机），
+    任何情况下都不保留。"""
+    try:
+        return str((resp.json() or {}).get("error") or "")[:120]
+    except (ValueError, AttributeError):
+        return ""
 
 
 def _cloud_user_from_token(token: str, client_probe: dict | None = None) -> dict:
@@ -443,8 +540,8 @@ def _cloud_user_from_token(token: str, client_probe: dict | None = None) -> dict
         except Exception as exc:  # noqa: BLE001 - 网络异常记一笔后继续换组合
             probes.append({"variant": name, "status": 0, "error": str(exc)[:160]})
             continue
-        snippet = resp.text[:300]
-        probes.append({"variant": name, "status": resp.status_code, "body": snippet})
+        code = _probe_error_code(resp)
+        probes.append({"variant": name, "status": resp.status_code, "error": code})
         if resp.status_code < 400:
             try:
                 body = resp.json()
@@ -456,7 +553,7 @@ def _cloud_user_from_token(token: str, client_probe: dict | None = None) -> dict
 
     _CLOUD_LAST_PROBE.clear()
     _CLOUD_LAST_PROBE.update({
-        "at": int(__import__("time").time()),
+        "at": int(_time.time()),
         "endpoint": _CLOUD_ENDPOINT,
         "has_key": bool(_CLOUD_PUBLISHABLE_KEY),
         "probes": probes,
@@ -467,12 +564,7 @@ def _cloud_user_from_token(token: str, client_probe: dict | None = None) -> dict
     if body is None:
         status = probes[-1].get("status") if probes else 0
         if status in (401, 403):
-            code = ""
-            try:
-                code = str((__import__("json").loads(probes[-1].get("body") or "{}") or {}).get("error") or "")
-            except Exception:  # noqa: BLE001
-                code = ""
-            raise HTTPException(401, f"云会话已失效，请重新登录（{code or status}）")
+            raise HTTPException(401, f"云会话已失效，请重新登录（{probes[-1].get('error') or status}）")
         if status == 0:
             raise HTTPException(502, f"云服务不可达：{probes[-1].get('error', '')}")
         raise HTTPException(502, f"云服务返回 {status}")
@@ -480,8 +572,9 @@ def _cloud_user_from_token(token: str, client_probe: dict | None = None) -> dict
 
 
 @app.get("/api/auth/cloud/diag")
-def auth_cloud_diag():
-    """云登录自查：返回上一次校验的头部组合、状态码与 token 外形（不含 token 原文）。"""
+def auth_cloud_diag(request: Request):
+    """云登录自查：返回上一次校验的头部组合、状态码与错误码（不含 token 原文与响应体）。"""
+    _current_user(request)
     return {"data": {
         "configured": bool(_CLOUD_ENDPOINT and _CLOUD_PUBLISHABLE_KEY),
         "last": _CLOUD_LAST_PROBE or None,
@@ -490,12 +583,13 @@ def auth_cloud_diag():
 
 
 @app.get("/api/auth/cloud/selftest")
-def auth_cloud_selftest():
+def auth_cloud_selftest(request: Request):
     """用一枚故意无效的 token 探一次数据面，只回报状态码与错误码。
 
     用来区分「应用凭据（publishable key / Origin）不被接受」和「token 本身被拒」，
-    不涉及任何真实会话，也不回显密钥。
+    不涉及任何真实会话，也不回显密钥。要求登录：否则任何人都能让后端对外发请求。
     """
+    _current_user(request)
     if not (_CLOUD_ENDPOINT and _CLOUD_PUBLISHABLE_KEY):
         return {"data": {"configured": False}}
     import requests as _requests
@@ -509,12 +603,7 @@ def auth_cloud_selftest():
     ):
         try:
             r = _requests.get(url, headers=headers, timeout=8)
-            code = ""
-            try:
-                code = str((r.json() or {}).get("error") or "")
-            except ValueError:
-                code = ""
-            out.append({"variant": name, "status": r.status_code, "error": code})
+            out.append({"variant": name, "status": r.status_code, "error": _probe_error_code(r)})
         except Exception as exc:  # noqa: BLE001
             out.append({"variant": name, "status": 0, "error": str(exc)[:120]})
     return {"data": {"configured": True, "endpoint": _CLOUD_ENDPOINT, "probes": out}}
@@ -574,11 +663,18 @@ def auth_register(req: AuthReq):
 
 
 @app.post("/api/auth/login")
-def auth_login(req: AuthReq):
+def auth_login(req: AuthReq, request: Request):
+    key = f"{_login_client(request)}|{req.username.strip()}"
+    if _login_blocked(key):
+        _log.warning("event=auth.login_throttled client=%s", _login_client(request))
+        raise HTTPException(429, "登录失败次数过多，请稍后再试")
     try:
         sess = users.login(req.username, req.password)
     except ValueError as e:
+        _login_failed(key)
+        _log.warning("event=auth.login_failed client=%s username=%r", _login_client(request), req.username.strip()[:64])
         raise HTTPException(400, str(e))
+    _log.info("event=auth.login user_id=%s client=%s", sess["user_id"], _login_client(request))
     return {"data": sess}
 
 
@@ -613,7 +709,10 @@ def auth_set_data(req: DataSetReq, request: Request):
 def auth_merge_data(req: DataMergeReq, request: Request):
     """首次登录后把浏览器本地数据整体迁移到账号下。"""
     user = _current_user(request)
-    return {"data": users.merge_data(user["id"], req.items)}
+    try:
+        return {"data": users.merge_data(user["id"], req.items)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 # ---------------- 用户数据导入 / 导出（备份迁移：换电脑、换部署、账号间搬家） ----------------
@@ -715,13 +814,15 @@ class ChatReq(BaseModel):
 
 
 @app.post("/api/chat")
-def chat(req: ChatReq):
+def chat(req: ChatReq, request: Request):
     """系统 AI 对话，**流式** NDJSON（每行一个事件 {type: tool|delta|done|error}）。
 
     - API 接入：OpenAI 兼容 function-calling，边流答案边推工具调用事件。
     - 订阅接入（provider=cli-*）：调本机已登录的 CLI，stdout 边出边流（数据靠 context）。
     配置错误（缺 key / 未装 CLI）走 HTTP 400；运行时错误走流内 error 事件。用户配置随请求传入，后端不持久化。
+    要求登录：订阅接入花的是本机的订阅额度，自动化的 agent 还会读本机文件，不能匿名调用。
     """
+    _current_user(request)
     if not req.messages:
         raise HTTPException(400, "messages 不能为空")
     if not req.llm.model:
@@ -731,6 +832,9 @@ def chat(req: ChatReq):
     if is_cli:
         kind = req.llm.provider[4:]
         if not cli_runtime.detect_cli(kind):
+            notice = cli_runtime.agent_notice(kind)
+            if notice:
+                raise HTTPException(403, notice)
             raise HTTPException(400, f"未检测到「{kind}」对应的本机命令。请先安装并登录该 CLI，或改用「API 接入」。")
     elif not req.llm.apiKey or not req.llm.baseURL:
         raise HTTPException(400, "缺少 Base URL 或 API Key，请先在「接入 AI」里填写")
@@ -758,6 +862,9 @@ def _check_llm(llm: LLMConfig) -> dict:
     if llm.provider.startswith("cli-"):
         kind = llm.provider[4:]
         if not cli_runtime.detect_cli(kind):
+            notice = cli_runtime.agent_notice(kind)
+            if notice:
+                raise HTTPException(403, notice)
             raise HTTPException(400, f"未检测到「{kind}」对应的本机命令。请先安装并登录该 CLI，或改用「API 接入」。")
     elif not llm.apiKey or not llm.baseURL:
         raise HTTPException(400, "缺少 Base URL 或 API Key，请先在「接入 AI」里填写")
@@ -783,8 +890,9 @@ class ReflectReq(BaseModel):
 
 
 @app.post("/api/reflect")
-def reflect(req: ReflectReq):
+def reflect(req: ReflectReq, request: Request):
     """反思：对一段已写好的分析做推理审计（哪些有数据支撑、最脆弱一环、验证清单），流式 NDJSON。"""
+    _current_user(request)
     if not (req.source or "").strip():
         raise HTTPException(400, "source 不能为空")
     cfg = _check_llm(req.llm)
@@ -879,8 +987,9 @@ def portfolio_replay(request: Request, refresh: bool = Query(False)):
 
 
 @app.get("/api/stock/abnormal")
-def stock_abnormal(codes: str = Query(""), refresh: bool = Query(False)):
+def stock_abnormal(request: Request, codes: str = Query(""), refresh: bool = Query(False)):
     """A 股离交易所异常波动 / 严重异常波动标准还有多远（代码用逗号分隔）。"""
+    _require_user_if(refresh, request)
     items = [c.strip() for c in codes.split(",") if c.strip()][:80]
     if not items:
         return {"data": {"rows": [], "rules": [], "as_of": None, "intraday": False,
@@ -901,9 +1010,10 @@ def stock_event_kinds():
 
 
 @app.get("/api/stock/event-study")
-def stock_event_study(code: str = Query(...), kind: str = Query("earnings_forecast"),
+def stock_event_study(request: Request, code: str = Query(...), kind: str = Query("earnings_forecast"),
                      refresh: bool = Query(False)):
     """一类事件历史上每次前后 20 个交易日相对沪深300的超额收益。"""
+    _require_user_if(refresh, request)
     code = _validate(code)
     if refresh:
         for key in (f"events:{kind}:{code}", f"events:kline:{code}"):
@@ -915,8 +1025,9 @@ def stock_event_study(code: str = Query(...), kind: str = Query("earnings_foreca
 
 
 @app.get("/api/stock/earnings-preview")
-def stock_earnings_preview(code: str = Query(...), refresh: bool = Query(False)):
+def stock_earnings_preview(request: Request, code: str = Query(...), refresh: bool = Query(False)):
     """下一份定期报告的预约披露日、机构一致预期、历次发布后首日涨跌与预告对照。"""
+    _require_user_if(refresh, request)
     code = _validate(code)
     if refresh:
         for key in (f"events:appoint:{code}", f"events:reports:{code}",
@@ -951,8 +1062,11 @@ def pool_universes():
 
 
 @app.post("/api/screening/pool")
-def screening_pool(req: PoolRequest):
-    """规则核对候选池：按给定条件逐只核对，分「全部满足 / 有缺数据 / 有不满足」三组，不排名。"""
+def screening_pool(req: PoolRequest, request: Request):
+    """规则核对候选池：按给定条件逐只核对，分「全部满足 / 有缺数据 / 有不满足」三组，不排名。
+
+    要求登录：逐只核对会按代码数打上游（行情 / 估值），匿名可调等于开放了一个上游放大器。"""
+    _current_user(request)
     conditions: dict[str, Any] = {}
     for key, cond in (("pe_ttm", req.pe_ttm), ("pb", req.pb),
                       ("mcap_yi", req.mcap_yi), ("turnover_pct", req.turnover_pct)):
@@ -985,24 +1099,28 @@ class ReportIn(BaseModel):
     content_b64: str
 
 
+# 研报是用户私有资料：全部端点要求登录，并只作用于本人记录
 @app.get("/api/myreports")
-def myreports_list():
-    return {"data": mr.list_reports()}
+def myreports_list(request: Request):
+    return {"data": mr.list_reports(int(_current_user(request)["id"]))}
 
 
 @app.post("/api/myreports")
-def myreports_upload(r: ReportIn):
+def myreports_upload(r: ReportIn, request: Request):
     """上传一份研报（base64）→ 存本地 + 按文件名自动打行业标签。"""
+    uid = int(_current_user(request)["id"])
     try:
-        return {"data": mr.save_report(r.name, r.content_b64)}
+        return {"data": mr.save_report(r.name, r.content_b64, uid)}
     except mr.ReportError as e:
         raise HTTPException(400, str(e)) from e
+    except OSError as e:
+        raise HTTPException(507, f"研报写入失败：{e}") from e
 
 
 @app.get("/api/myreports/file/{rid}")
-def myreports_file(rid: str):
+def myreports_file(rid: str, request: Request):
     """下载/预览某份研报原文件。"""
-    hit = mr.report_path(rid)
+    hit = mr.report_path(rid, int(_current_user(request)["id"]))
     if not hit:
         raise HTTPException(404, "研报不存在")
     path, name = hit
@@ -1010,8 +1128,12 @@ def myreports_file(rid: str):
 
 
 @app.delete("/api/myreports/{rid}")
-def myreports_delete(rid: str):
-    return {"data": {"ok": mr.delete_report(rid)}}
+def myreports_delete(rid: str, request: Request):
+    uid = int(_current_user(request)["id"])
+    deleted = mr.delete_report(rid, uid)
+    if deleted:
+        _log.info("event=myreports.delete user_id=%s report_id=%s", uid, rid)
+    return {"data": {"ok": deleted}}
 
 
 class CloseIn(BaseModel):
@@ -1145,10 +1267,11 @@ def funds_screen(type: str = Query(""), r4433: bool = Query(False),
 
 
 @app.get("/api/funds/pfs")
-def funds_pfs(strategy: str = Query(""), tier: str = Query(""), pool: str = Query(""),
+def funds_pfs(request: Request, strategy: str = Query(""), tier: str = Query(""), pool: str = Query(""),
               keyword: str = Query(""), limit: int = Query(100, le=200),
               refresh: bool = Query(False)):
     """PFS V3.0 Manager-First 主动权益基金公开数据初筛。"""
+    _require_user_if(refresh, request)
     try:
         return {"data": fund_pfs.query_pfs(strategy, tier, pool, keyword, limit, refresh)}
     except Exception as e:  # noqa: BLE001
@@ -1275,8 +1398,9 @@ def radar():
 
 
 @app.post("/api/radar/refresh")
-def radar_refresh():
-    """强制重抓全部 RSS 源（耗时约 20-40s），更新缓存。"""
+def radar_refresh(request: Request):
+    """强制重抓全部 RSS 源（耗时约 20-40s），更新缓存。要求登录。"""
+    _current_user(request)
     try:
         return {"data": newsradar.get_radar(force=True)}
     except Exception as e:  # noqa: BLE001
@@ -1312,6 +1436,7 @@ def sector_scores(request: Request, response: Response, refresh: bool = Query(Fa
     a-stock-data 腾讯个股行情聚合当前值；盘中缓存 5 分钟、其他时段 1 小时。
     申万日频只作备用，refresh=true 会强制刷新当前评分。
     """
+    _require_user_if(refresh, request)
     try:
         return _conditional_json(sector_scores_layer.get_sector_scores(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
@@ -1331,6 +1456,7 @@ def sector_scores_level2(request: Request, response: Response, refresh: bool = Q
     当前值取申万二级行业最近交易日日频，历史分位锚取申万月报（约 60 个月）。
     盘中缓存 5 分钟、其他时段 1 小时；refresh=true 强制刷新。
     """
+    _require_user_if(refresh, request)
     try:
         return _conditional_json(sw_level2_layer.get_level2_scores(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
@@ -1351,6 +1477,7 @@ def plate_scores(request: Request, response: Response, refresh: bool = Query(Fal
     行情走腾讯批量接口，基准为中证全指。盘中缓存 5 分钟、其他时段 1 小时。
     refresh=true 强制刷新。
     """
+    _require_user_if(refresh, request)
     try:
         return _conditional_json(plate_scores_layer.get_plate_scores(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
@@ -1371,12 +1498,13 @@ _EVENT_WINDOWS = ("1d", "7d", "30d", "all")
 
 
 @app.get("/api/event/holder-increase")
-def event_holder_increase(window: str = Query("7d"), refresh: bool = Query(False)):
+def event_holder_increase(request: Request, window: str = Query("7d"), refresh: bool = Query(False)):
     """高管/管理层/股东增持名单（东财，30 分钟缓存）。
 
     window：1d 近1日（昨日 0:00 至今）/ 7d 过去7日 / 30d 过去30日 /
     all 全部未增持结束（进行中计划）。refresh=true 强制后台重拉（先返回旧值）。
     """
+    _require_user_if(refresh, request)
     if window not in _EVENT_WINDOWS:
         raise HTTPException(400, f"window 仅支持 {'/'.join(_EVENT_WINDOWS)}")
     try:
@@ -1395,12 +1523,13 @@ def industry_chains():
 
 
 @app.get("/api/industry-chain/{key}")
-def industry_chain(key: str, refresh: bool = Query(False)):
+def industry_chain(request: Request, key: str, refresh: bool = Query(False)):
     """产业链纵深聚合：图谱结构 / 各环节代表公司利润分布 / 瓶颈 / 景气传导 / 行业研报。
 
     链结构为人工维护快照（backend/data/industry_chains.json）；利润分布按
     同花顺财务摘要批量抓取（每日缓存，TTL 12 小时）。各块独立降级。refresh=true 强制刷新。
     """
+    _require_user_if(refresh, request)
     try:
         return {"data": industry_chain_layer.get_chain(key, force=refresh)}
     except KeyError as e:
@@ -1432,7 +1561,8 @@ def market_turnover_top():
 
 
 @app.get("/api/indices/history")
-def indices_history(symbol: str = Query(..., pattern="^(sh|sz|bj)[0-9]{6}$"), refresh: bool = False):
+def indices_history(request: Request, symbol: str = Query(..., pattern="^(sh|sz|bj)[0-9]{6}$"), refresh: bool = False):
+    _require_user_if(refresh, request)
     if symbol not in index_history._INDEXES:
         raise HTTPException(404, "不支持的指数")
     try:
@@ -1444,8 +1574,9 @@ def indices_history(symbol: str = Query(..., pattern="^(sh|sz|bj)[0-9]{6}$"), re
 
 
 @app.get("/api/market/liquidity")
-def market_liquidity(refresh: bool = False):
+def market_liquidity(request: Request, refresh: bool = False):
     """资金供给重要指标（国内：两融 / 主力净流入；国外：美债 10Y / 5Y / 3M 与 10Y-3M 利差）。缓存 5 分钟。"""
+    _require_user_if(refresh, request)
     try:
         return {"data": market.get_liquidity(force=refresh)}
     except Exception as e:  # noqa: BLE001
@@ -1459,9 +1590,10 @@ def _cache_put(cache: dict, key, value, limit: int = 8) -> None:
         cache.pop(next(iter(cache)))
 
 
-# 全球指数分时 60 秒缓存（数据源分钟级）
-# 全球指数 key 来自固定表，条数天然有界；A 股分时按代码累积，必须限量。
+# 全球指数分时 60 秒缓存（数据源分钟级）。全球指数 key 来自固定表，条数天然有界；
+# A 股分时按代码累积，必须限量。行业排名（按 top 参数）与分时是两类数据，单独一张表。
 _GLOBAL_MINUTE_CACHE: dict = {}
+_INDUSTRY_RANK_CACHE: dict = {}
 _A_MINUTE_CACHE: dict = {}
 _A_MINUTE_CACHE_LIMIT = 64
 
@@ -1528,8 +1660,9 @@ def global_minute(key: str = Query(..., min_length=2, max_length=16)):
 
 
 @app.get("/api/global/stock")
-def global_stock(symbol: str = Query(..., min_length=1, max_length=16), refresh: bool = False):
+def global_stock(request: Request, symbol: str = Query(..., min_length=1, max_length=16), refresh: bool = False):
     """美股 / 港股个股聚合：行情 + 关键财务指标（东财域内源）。symbol 如 AAPL / BABA / 00700。"""
+    _require_user_if(refresh, request)
     try:
         clean = symbol.strip().upper()
         data = _stock_cached("global_stock", clean, 15, lambda: gstock.us_hk_stock(clean), refresh)
@@ -1622,8 +1755,9 @@ def _stock_cached(endpoint: str, code: str, ttl: int, fetch, force: bool = False
 
 
 @app.get("/api/valuation/percentile")
-def valuation_percentile(code: str = Query(...), refresh: bool = False):
+def valuation_percentile(request: Request, code: str = Query(...), refresh: bool = False):
     """PE-TTM / PB 历史分位（近5年）。全站缓存 24 小时/代码（历史序列日频、变化慢）。"""
+    _require_user_if(refresh, request)
     code = _validate(code)
     try:
         return {"data": _stock_cached("valuation_percentile", code, 24 * 3600, lambda: astock.valuation_percentile(code), refresh, bool)}
@@ -1634,8 +1768,9 @@ def valuation_percentile(code: str = Query(...), refresh: bool = False):
 
 
 @app.get("/api/announcements")
-def announcements(code: str = Query(...), refresh: bool = False):
+def announcements(request: Request, code: str = Query(...), refresh: bool = False):
     """个股近期公告（东财，仅 requests）。缓存 15 分钟/代码。"""
+    _require_user_if(refresh, request)
     code = _validate(code)
     try:
         return {"data": _stock_cached("announcements", code, 900, lambda: astock.announcements(code), refresh)}
@@ -1644,8 +1779,9 @@ def announcements(code: str = Query(...), refresh: bool = False):
 
 
 @app.get("/api/financials")
-def financials(code: str = Query(...), refresh: bool = False):
+def financials(request: Request, code: str = Query(...), refresh: bool = False):
     """财务关键指标（同花顺财务摘要，最新报告期）。缓存 24 小时/代码。"""
+    _require_user_if(refresh, request)
     code = _validate(code)
     try:
         return {"data": _stock_cached("financials", code, 24 * 3600, lambda: astock.financials(code), refresh, bool)}
@@ -1656,8 +1792,9 @@ def financials(code: str = Query(...), refresh: bool = False):
 
 
 @app.get("/api/valuation")
-def valuation(code: str = Query(...), refresh: bool = False):
+def valuation(request: Request, code: str = Query(...), refresh: bool = False):
     """完整估值：行情 + 一致预期 + 前向PE/PEG/消化年数。"""
+    _require_user_if(refresh, request)
     code = _validate(code)
     try:
         return {"data": _stock_cached("valuation", code, 6 * 3600, lambda: astock.full_valuation(code), refresh, bool)}
@@ -1668,8 +1805,9 @@ def valuation(code: str = Query(...), refresh: bool = False):
 
 
 @app.get("/api/reports")
-def reports(code: str = Query(...), pages: int = Query(2, ge=1, le=5), refresh: bool = False):
+def reports(request: Request, code: str = Query(...), pages: int = Query(2, ge=1, le=5), refresh: bool = False):
     """个股研报列表（东财，含 PDF 链接）。仅需 requests。"""
+    _require_user_if(refresh, request)
     code = _validate(code)
     try:
         def build():
@@ -1683,8 +1821,9 @@ def reports(code: str = Query(...), pages: int = Query(2, ge=1, le=5), refresh: 
 
 
 @app.get("/api/news")
-def news(code: str = Query(...), limit: int = Query(20, ge=1, le=50), refresh: bool = False):
+def news(request: Request, code: str = Query(...), limit: int = Query(20, ge=1, le=50), refresh: bool = False):
     """个股新闻（东财，需 akshare）。"""
+    _require_user_if(refresh, request)
     code = _validate(code)
     try:
         return {"data": _stock_cached(f"news:{limit}", code, 600, lambda: astock.stock_news(code, limit=limit), refresh)}
@@ -1695,8 +1834,9 @@ def news(code: str = Query(...), limit: int = Query(20, ge=1, le=50), refresh: b
 
 
 @app.get("/api/info")
-def info(code: str = Query(...), refresh: bool = False):
+def info(request: Request, code: str = Query(...), refresh: bool = False):
     """个股基本面：行业/股本/上市时间（需 akshare）。"""
+    _require_user_if(refresh, request)
     code = _validate(code)
     try:
         return {"data": _stock_cached("info", code, 24 * 3600, lambda: astock.individual_info(code), refresh)}
@@ -1707,8 +1847,9 @@ def info(code: str = Query(...), refresh: bool = False):
 
 
 @app.get("/api/disclosure")
-def disclosure(code: str = Query(...), refresh: bool = False):
+def disclosure(request: Request, code: str = Query(...), refresh: bool = False):
     """巨潮公告列表（需 akshare）。"""
+    _require_user_if(refresh, request)
     code = _validate(code)
     try:
         return {"data": _stock_cached("disclosure", code, 900, lambda: astock.disclosure(code), refresh)}
@@ -1731,13 +1872,14 @@ def kline(code: str = Query(...), category: int = Query(4), offset: int = Query(
 
 
 @app.get("/api/kline/chart")
-def kline_chart(
+def kline_chart(request: Request, 
     code: str = Query(...),
     period: str = Query("day", pattern="^(day|week|month)$"),
     count: int = Query(250, ge=20, le=800),
     refresh: bool = False,
 ):
     """图表标准 OHLCV：腾讯前复权主源，mootdx 不复权备用。"""
+    _require_user_if(refresh, request)
     code = _validate(code)
     try:
         ttl = 300 if period == "day" else 24 * 3600
@@ -1782,9 +1924,6 @@ def kline_minute(code: str = Query(...)):
 
         if not data["points"]:
             raise HTTPException(502, "分时数据源当前无返回")
-
-        if not data["points"]:
-            raise HTTPException(502, "分时数据源当前无返回")
         # A 股指数/个股分时：注入固定交易时段（北京时间 09:30-11:30 / 13:00-15:00），
         # 让前端分时图 x 轴覆盖完整 240 分钟而非仅数据跨度——午休段不前向填充、
         # 收盘时间标注正确（不再把 13:01 数据点误标到 11:31 槽位）。
@@ -1799,8 +1938,9 @@ def kline_minute(code: str = Query(...)):
 
 
 @app.get("/api/finance")
-def finance(code: str = Query(...), refresh: bool = False):
+def finance(request: Request, code: str = Query(...), refresh: bool = False):
     """季报财务快照（需 mootdx）。"""
+    _require_user_if(refresh, request)
     code = _validate(code)
     try:
         return {"data": _stock_cached("finance", code, 24 * 3600, lambda: astock.finance(code), refresh, bool)}
@@ -2043,12 +2183,12 @@ def investor_qa(code: str = Query(...)):
 def industry(top: int = Query(20, ge=5, le=50)):
     """全行业涨跌幅排名（东财行业板块，板块级、零个股名单）。缓存 5 分钟。"""
     key = ("industry", str(top))
-    hit = _GLOBAL_MINUTE_CACHE.get(key)
+    hit = _INDUSTRY_RANK_CACHE.get(key)
     if hit and _time.time() - hit[0] < 300:
         return {"data": hit[1]}
     try:
         data = astock.industry_comparison(top_n=top)
-        _GLOBAL_MINUTE_CACHE[key] = (_time.time(), data)
+        _cache_put(_INDUSTRY_RANK_CACHE, key, (_time.time(), data))
         return {"data": data}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"行业排名异常：{e}") from e
@@ -2062,6 +2202,10 @@ _DEEP_ANALYSIS_URL = os.environ.get("MW_DEEP_ANALYSIS_URL", "http://192.168.0.23
 _DEEP_ANALYSIS_KEY = os.environ.get("MW_DEEP_ANALYSIS_KEY", "")
 _DEEP_ANALYSIS_MODEL = os.environ.get("MW_DEEP_ANALYSIS_MODEL", "hermes-agent")
 _DEEP_ANALYSIS_TIMEOUT = int(os.environ.get("MW_DEEP_ANALYSIS_TIMEOUT", "2400"))  # 秒，覆盖 20 分钟级任务
+# 同步长任务的上限：每个进行中的深度分析独占一个线程池线程、最长 2400 秒，
+# 默认线程池只有 40 个线程——不限量的话十来个并发就能把全部同步端点（含评分、持仓）堵死。
+_DEEP_ANALYSIS_SLOTS = threading.BoundedSemaphore(
+    int(os.environ.get("MW_DEEP_ANALYSIS_SLOTS", "4")))
 
 
 class DeepAnalysisReq(BaseModel):
@@ -2069,12 +2213,14 @@ class DeepAnalysisReq(BaseModel):
 
 
 @app.post("/api/deep-analysis")
-def deep_analysis(req: DeepAnalysisReq):
+def deep_analysis(req: DeepAnalysisReq, request: Request):
     """深度分析代理：把 prompt 转发给 hermes-agent，返回纯文本结论。
 
     hermes-agent 是 20 分钟级慢任务，这里用长 timeout 同步等待；
     前端把每次调用注册进 backgroundTasks，页面跳转/刷新后可继续查看进度。
+    要求登录，且同时进行的任务数有上限（超出立即 429，不排队占线程）。
     """
+    _current_user(request)
     prompt = (req.prompt or "").strip()
     if not prompt:
         raise HTTPException(400, "prompt 不能为空")
@@ -2083,6 +2229,8 @@ def deep_analysis(req: DeepAnalysisReq):
 
     import requests as _requests
 
+    if not _DEEP_ANALYSIS_SLOTS.acquire(blocking=False):
+        raise HTTPException(429, "深度分析并发已满，请等进行中的任务完成后再试")
     try:
         r = _requests.post(
             _DEEP_ANALYSIS_URL,
@@ -2093,22 +2241,24 @@ def deep_analysis(req: DeepAnalysisReq):
             json={"model": _DEEP_ANALYSIS_MODEL, "messages": [{"role": "user", "content": prompt}]},
             timeout=_DEEP_ANALYSIS_TIMEOUT,
         )
+
+        if r.status_code != 200:
+            raise HTTPException(502, f"深度分析服务 HTTP {r.status_code}: {r.text[:300]}")
+
+        try:
+            data = r.json()
+            content = data["choices"][0]["message"]["content"] or ""
+        except (ValueError, KeyError, IndexError) as e:
+            raise HTTPException(502, f"深度分析服务返回格式异常：{e}") from e
+        return {"data": {"content": content}}
     except _requests.RequestException as e:
         raise HTTPException(502, f"深度分析服务连接失败：{e}") from e
-
-    if r.status_code != 200:
-        raise HTTPException(502, f"深度分析服务 HTTP {r.status_code}: {r.text[:300]}")
-
-    try:
-        data = r.json()
-        content = data["choices"][0]["message"]["content"] or ""
-    except (ValueError, KeyError, IndexError) as e:
-        raise HTTPException(502, f"深度分析服务返回格式异常：{e}") from e
-    return {"data": {"content": content}}
+    finally:
+        _DEEP_ANALYSIS_SLOTS.release()
 
 
 @app.get("/api/pulse/overview")
-async def pulse_overview(refresh: bool = Query(False)):
+async def pulse_overview(request: Request, refresh: bool = Query(False)):
     """全球宏观预期概率总览（Polymarket + Kalshi 双源合并，按模块分组）。
 
     数据来自两站公开只读 API（免登录、零鉴权），作为全球宏观情绪温度计。
@@ -2116,6 +2266,7 @@ async def pulse_overview(refresh: bool = Query(False)):
     全量事件书约 1-8 分钟），立即返回当前快照并带 updating=true，前端轮询
     as_of 变化。移植自 https://github.com/simonlin1212/globalpercent（Apache-2.0）。
     """
+    _require_user_if(refresh, request)
     try:
         return {"data": await pulse_market_pulse.fetch_overview(force=refresh)}
     except Exception as e:  # noqa: BLE001
@@ -2123,8 +2274,11 @@ async def pulse_overview(refresh: bool = Query(False)):
 
 
 @app.get("/api/pulse/insight")
-async def pulse_insight(module: str = Query("", max_length=32)):
-    """重生成单张 AI 研判卡片。module 传「现状」刷新顶部现状长条，其余为模块名。"""
+async def pulse_insight(request: Request, module: str = Query("", max_length=32)):
+    """重生成单张 AI 研判卡片。module 传「现状」刷新顶部现状长条，其余为模块名。
+
+    虽然是 GET，它会调用 LLM 产生费用，因此要求登录。"""
+    await run_in_threadpool(_current_user, request)
     try:
         if not module or module == "现状":
             return {"data": await pulse_market_pulse.refresh_status() or None}
@@ -2149,8 +2303,9 @@ async def pulse_history(
 
 
 @app.get("/api/market/macro")
-def market_macro(refresh: bool = False):
+def market_macro(request: Request, refresh: bool = False):
     """宏观经济指标（GDP/CPI/PPI/PMI/M2/工业增加值/进出口/贸易差额/社融）。缓存 1 小时。"""
+    _require_user_if(refresh, request)
     try:
         return {"data": market.get_macro(force=refresh)}
     except Exception as e:  # noqa: BLE001
@@ -2160,6 +2315,7 @@ def market_macro(refresh: bool = False):
 @app.get("/api/bonds/curve")
 def bonds_curve(request: Request, response: Response, refresh: bool = False):
     """中债收益率曲线 + 期限/信用利差序列。缓存 6 小时，last-good 兜底。"""
+    _require_user_if(refresh, request)
     try:
         return _conditional_json(bonds_layer.get_curve(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
@@ -2169,6 +2325,7 @@ def bonds_curve(request: Request, response: Response, refresh: bool = False):
 @app.get("/api/bonds/overview")
 def bonds_overview(request: Request, response: Response, refresh: bool = False):
     """债市统一快照：原始行情、八维观察、现金流情景、品种比较与预测验证；源故障独立标注。"""
+    _require_user_if(refresh, request)
     try:
         return _conditional_json(bonds_layer.get_overview(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
@@ -2178,6 +2335,7 @@ def bonds_overview(request: Request, response: Response, refresh: bool = False):
 @app.get("/api/bonds/priors")
 def bonds_priors(request: Request, response: Response, refresh: bool = False):
     """Short/medium/long maturity candidate priors, independently dated and cached."""
+    _require_user_if(refresh, request)
     try:
         return _conditional_json(bonds_layer.get_priors(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
@@ -2187,6 +2345,7 @@ def bonds_priors(request: Request, response: Response, refresh: bool = False):
 @app.get("/api/bonds/framework")
 def bonds_framework(request: Request, response: Response, refresh: bool = False):
     """研究框架八状态仪表盘（Macro/Policy/Funding/SupplyDemand/CurveTP/Credit/Positioning/Global）。"""
+    _require_user_if(refresh, request)
     try:
         return _conditional_json(bonds_layer.get_framework(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
@@ -2194,8 +2353,9 @@ def bonds_framework(request: Request, response: Response, refresh: bool = False)
 
 
 @app.get("/api/bonds/calc")
-def bonds_calc(refresh: bool = False):
+def bonds_calc(request: Request, refresh: bool = False):
     """标准化平价债现金流情景：同日融资代理、3个月持有收益、久期/DV01及压力情景。"""
+    _require_user_if(refresh, request)
     try:
         return {"data": bonds_layer.get_calc(force=refresh)}
     except Exception as e:  # noqa: BLE001
@@ -2205,6 +2365,7 @@ def bonds_calc(refresh: bool = False):
 @app.get("/api/bonds/positioning")
 def bonds_positioning(request: Request, response: Response, refresh: bool = False):
     """仓位与拥挤度：国债期货四品种主力持仓/成交及近一年分位。"""
+    _require_user_if(refresh, request)
     try:
         return _conditional_json(bonds_layer.get_positioning(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
@@ -2214,6 +2375,7 @@ def bonds_positioning(request: Request, response: Response, refresh: bool = Fals
 @app.get("/api/bonds/segments")
 def bonds_segments(request: Request, response: Response, refresh: bool = False):
     """同一快照的分品种情景与实验指标；未验证分数不作投资排序。"""
+    _require_user_if(refresh, request)
     try:
         return _conditional_json(bonds_layer.get_segments(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
@@ -2221,8 +2383,10 @@ def bonds_segments(request: Request, response: Response, refresh: bool = False):
 
 
 @app.get("/api/bonds/insight")
-async def bonds_insight(refresh: bool = Query(False)):
+async def bonds_insight(request: Request, refresh: bool = Query(False)):
     """绑定输入指纹的AI数据解读；refresh=true重生成，旧版本解读不复用。"""
+    # 重生成要调 LLM，属花钱操作：refresh 要求登录，读缓存放开
+    await run_in_threadpool(_require_user_if, refresh, request)
     try:
         return {"data": await bonds_layer.get_ai_insight(force=refresh) or ""}
     except Exception as e:  # noqa: BLE001
@@ -2232,6 +2396,7 @@ async def bonds_insight(refresh: bool = Query(False)):
 @app.get("/api/gold/score")
 def gold_score(request: Request, response: Response, refresh: bool = False):
     """黄金价格多维评分（方案 V2.1）。缓存 1 小时，last-good 兜底。"""
+    _require_user_if(refresh, request)
     try:
         data = gold_score_layer.get_gold_score(force=refresh)
     except Exception as e:  # noqa: BLE001
@@ -2240,8 +2405,9 @@ def gold_score(request: Request, response: Response, refresh: bool = False):
 
 
 @app.get("/api/gold/insight")
-async def gold_insight(refresh: bool = Query(False)):
+async def gold_insight(request: Request, refresh: bool = Query(False)):
     """AI 通俗解读当前黄金评分（机会成本/资金仓位/综合形势三角度）。refresh=true 重新生成并写回快照。"""
+    await run_in_threadpool(_require_user_if, refresh, request)
     try:
         return {"data": await gold_score_layer.get_ai_insight(force=refresh) or ""}
     except Exception as e:  # noqa: BLE001
@@ -2305,6 +2471,7 @@ def gold_paxg():
 @app.get("/api/oil/score")
 def oil_score(request: Request, response: Response, refresh: bool = False):
     """油价多维评分（框架 V1.0）：物理稀缺/供给/炼化/仓位/溢价/美元/动量。缓存 1 小时。"""
+    _require_user_if(refresh, request)
     try:
         return _conditional_json(oil_layer.get_oil_score(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
@@ -2312,8 +2479,9 @@ def oil_score(request: Request, response: Response, refresh: bool = False):
 
 
 @app.get("/api/oil/insight")
-async def oil_insight(refresh: bool = Query(False)):
+async def oil_insight(request: Request, refresh: bool = Query(False)):
     """AI 通俗解读当前油价评分（稀缺供需/计价溢价/综合形势三角度）。refresh=true 重新生成并写回快照。"""
+    await run_in_threadpool(_require_user_if, refresh, request)
     try:
         return {"data": await oil_layer.get_ai_insight(force=refresh) or ""}
     except Exception as e:  # noqa: BLE001
@@ -2357,6 +2525,7 @@ def fedwatch_snapshot(request: Request, response: Response, refresh: bool = Fals
 
     缓存 2 分钟（盘中边际变化敏感），磁盘快照 last-good 兜底。
     """
+    _require_user_if(refresh, request)
     try:
         data = fedwatch_layer.get_fedwatch(force=refresh)
     except Exception as e:  # noqa: BLE001
@@ -2376,6 +2545,7 @@ def oil_brent_hist(days: int = Query(400, ge=60, le=1000)):
 @app.get("/api/allocation")
 def allocation(request: Request, response: Response, refresh: bool = False):
     """择时 + 大类资产配置：市场环境研判（5 档风险等级）→ 股/债/商品/现金目标权重。缓存 1 小时。"""
+    _require_user_if(refresh, request)
     try:
         return _conditional_json(timing_alloc.get_timing_allocation(force=refresh), request, response)
     except Exception as e:  # noqa: BLE001
@@ -2383,8 +2553,9 @@ def allocation(request: Request, response: Response, refresh: bool = False):
 
 
 @app.get("/api/allocation/insight")
-async def allocation_insight(refresh: bool = Query(False)):
+async def allocation_insight(request: Request, refresh: bool = Query(False)):
     """AI 通俗解读当前择时分（宏观/流动性/市场确认三角度）。refresh=true 重新生成并写回快照。"""
+    await run_in_threadpool(_require_user_if, refresh, request)
     try:
         return {"data": await timing_alloc.get_ai_insight(force=refresh) or ""}
     except Exception as e:  # noqa: BLE001
@@ -2423,21 +2594,22 @@ def _run_full_build():
     try:
         factor_data.build_dataset()
     except Exception as exc:  # noqa: BLE001 — 日线失败也继续试财务（可能已有旧日线）
-        print(f"[factor-build] 日线构建失败：{type(exc).__name__}", flush=True)
+        _log.info(f"[factor-build] 日线构建失败：{type(exc).__name__}")
     try:
         factor_pit.build_fundamentals()
     except Exception as exc:  # noqa: BLE001
-        print(f"[factor-build] 财务构建失败：{type(exc).__name__}", flush=True)
+        _log.info(f"[factor-build] 财务构建失败：{type(exc).__name__}")
 
 
 @app.post("/api/factor/build")
-def factor_build():
-    """触发后台数据构建：日线（约 20-40 分钟）→ PIT 财务 2006-今（约 10-20 分钟）。"""
+def factor_build(request: Request):
+    """触发后台数据构建：日线（约 20-40 分钟）→ PIT 财务 2006-今（约 10-20 分钟）。要求登录。"""
     import threading
 
     import factor_data
     import factor_pit
 
+    _current_user(request)
     # 检查+占位必须原子：否则并发双击会各起一个线程、双跑 20-40 分钟构建并双写数据文件
     with factor_data._STATE_LOCK:
         already = factor_data._STATE["building"] or factor_pit._STATE["building"]
@@ -2545,10 +2717,11 @@ def factor_fields():
 
 
 @app.post("/api/factor/validate")
-def factor_validate(req: FactorSaveReq):
+def factor_validate(req: FactorSaveReq, request: Request):
     """静态校验公式（解析 + 参数检查）；expr 可以先不保存。"""
     import factor_expr
 
+    _current_user(request)
     try:
         factor_expr.compile_expr(req.expr)
         return {"data": {"ok": True}}
@@ -2557,21 +2730,26 @@ def factor_validate(req: FactorSaveReq):
 
 
 @app.post("/api/factor/custom")
-def factor_custom_save(req: FactorSaveReq):
-    """保存自定义因子（id 唯一，重复即覆盖）。之后用 factor='custom:<id>' 检验/回测。"""
+def factor_custom_save(req: FactorSaveReq, request: Request):
+    """保存自定义因子（id 唯一，重复即覆盖）。之后用 factor='custom:<id>' 检验/回测。要求登录。"""
     import factor_expr
 
+    _current_user(request)
     try:
-        return {"data": factor_expr.save_custom(req.id, req.name, req.expr)}
+        result = factor_expr.save_custom(req.id, req.name, req.expr)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
+    _log.info("event=factor.custom.save id=%s", req.id)
+    return {"data": result}
 
 
 @app.delete("/api/factor/custom/{fid}")
-def factor_custom_delete(fid: str):
+def factor_custom_delete(fid: str, request: Request):
     import factor_expr
 
+    _current_user(request)
     factor_expr.delete_custom(fid)
+    _log.info("event=factor.custom.delete id=%s", fid)
     return {"data": {"deleted": fid}}
 
 

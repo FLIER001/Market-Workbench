@@ -38,12 +38,14 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import cache_runtime
+import paths
+import logutil
+_log = logutil.get(__name__)
 
 BEIJING = timezone(timedelta(hours=8))
 ET = ZoneInfo("America/New_York")
 
-_SNAPSHOT_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(
-    os.path.expanduser("~"), ".market-workbench")
+_SNAPSHOT_DIR = paths.DATA_DIR
 _SNAPSHOT = os.path.join(_SNAPSHOT_DIR, "fedwatch_snapshot.json")
 # v1 混入过以抓取时间重记的回退值；保留原文件，可信观测从 v2 重新积累。
 _HISTORY = os.path.join(_SNAPSHOT_DIR, "fedwatch_history_v2.jsonl")
@@ -131,7 +133,7 @@ def _fetch(url: str, timeout: int = 20) -> str:
             raise RuntimeError(f"Yahoo 限流 429 url={url[:80]}")
         # 其他 HTTP 错误 → 试 curl 通道
     except Exception:  # noqa: BLE001 — 网络层失败 → curl 通道
-        pass
+        _log.debug("已吞掉的异常（降级路径）", exc_info=True)
     # 通道 2：curl（探测过的本地代理）
     if _PROXY is None:
         _detect_proxy()
@@ -371,7 +373,7 @@ def _fetch_zq_quotes() -> dict[str, dict]:
                     _ZQ_COOLDOWN_UNTIL = time.time() + 600
                     return out
             except Exception:  # noqa: BLE001 — 退避后重试
-                pass
+                _log.debug("已吞掉的异常（降级路径）", exc_info=True)
             if attempt == 2:
                 break
             time.sleep((2 ** attempt) * 2)  # 2s / 4s
@@ -958,7 +960,7 @@ def _build_snapshot() -> dict:
         try:
             _hist_append(current_probs, current_pm)
         except Exception:  # noqa: BLE001
-            pass
+            _log.debug("已吞掉的异常（降级路径）", exc_info=True)
     return data
 
 
@@ -999,7 +1001,7 @@ def _save_snapshot(data: dict) -> None:
         json.dump({"updated_ts": time.time(), "data": data},
                   open(_SNAPSHOT, "w"), ensure_ascii=False)
     except Exception:  # noqa: BLE001
-        pass
+        _log.debug("已吞掉的异常（降级路径）", exc_info=True)
 
 
 def get_fedwatch(force: bool = False) -> dict:
@@ -1032,7 +1034,7 @@ def start_scheduler(interval: int = 600) -> None:
             try:
                 get_fedwatch(force=True)
             except Exception:  # noqa: BLE001 — 调度失败下轮再试
-                pass
+                _log.debug("已吞掉的异常（降级路径）", exc_info=True)
             time.sleep(interval)
 
     threading.Thread(target=_run, daemon=True,
@@ -1045,7 +1047,7 @@ def warmup() -> None:
         try:
             get_fedwatch()
         except Exception:  # noqa: BLE001
-            pass
+            _log.debug("已吞掉的异常（降级路径）", exc_info=True)
     threading.Thread(target=_run, daemon=True, name="warm:fedwatch").start()
 
 

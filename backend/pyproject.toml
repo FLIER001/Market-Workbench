@@ -1,0 +1,20 @@
+# 后端工具配置。只放 lint / 测试设置，不声明打包信息（后端以源码目录方式运行）。
+#
+# 规则集刻意很小，但每一条都对应过真实事故：
+#   E9/F63/F7  语法错误
+#   F82        条件分支里重复定义同名变量
+#   F821       未定义名称 —— 2026-11-25 引入：astock.futures_minute_kline 的空数据分支
+#              引用了不存在的 get_today_cn，黄金期货分时在无数据时直接 NameError
+#   F401       未使用的 import（自动修复，顺带防「import 即副作用」被悄悄依赖）
+# 未使用的变量（F841）暂不纳入：数据层里有一批「为了触发依赖检查而赋值」的写法。
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82", "F821", "F401"]
+exclude = [".venv", "seed"]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试文件里常有意无意的多余 import（夹具、被 monkeypatch 的对象）
+"tests/**" = ["F401"]

@@ -21,10 +21,11 @@ from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import cache_runtime
+import paths
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SOURCES_FILE = os.path.join(HERE, "news_sources.json")
-DATA_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
+DATA_DIR = paths.DATA_DIR
 CACHE_DIR = DATA_DIR
 CACHE_FILE = os.path.join(CACHE_DIR, "radar.json")
 LEGACY_CACHE_FILE = os.path.join(HERE, ".cache", "radar.json")

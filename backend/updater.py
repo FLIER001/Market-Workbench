@@ -21,6 +21,8 @@ import threading
 from pathlib import Path
 
 from version import read_version
+import logutil
+_log = logutil.get(__name__)
 
 # 上游默认取 origin/main：README 里给出 clone 的仓库，部署用户从它取更新。
 # 需要跟踪别的远程/分支时用环境变量覆盖（例如自建镜像）。
@@ -181,6 +183,7 @@ def apply() -> dict:
                     (install.stderr or install.stdout).strip().splitlines()[-1]
                 )
 
+        _log.info("event=update.apply from=%s to=%s files=%d", before, after[:7], len(changed))
         threading.Timer(1.0, _restart).start()
         return {
             "ok": True,
@@ -211,10 +214,10 @@ def _restart_argv() -> list[str]:
 def _restart() -> None:
     """原地 exec：进程号不变，launchd 的 KeepAlive 与手动启动都能接着跑。"""
     argv = _restart_argv()
-    print(f"[update] 重启：{' '.join(argv)}", flush=True)
+    _log.info(f"[update] 重启：{' '.join(argv)}")
     try:
         # 必须用 argv 直传、不经 shell：重启命令里不能再多一层引号/解析风险。
         os.execv(argv[0], argv)  # noqa: S606 — 参数表直传，无 shell
     except OSError as exc:  # run.sh 被删/无 bash 这类极端情况，launchd 会重拉本进程
-        print(f"[update] 重启失败，请手动重启：{exc}", file=sys.stderr, flush=True)
+        _log.warning(f"[update] 重启失败，请手动重启：{exc}")
         os._exit(1)

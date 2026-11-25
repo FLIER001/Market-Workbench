@@ -85,8 +85,9 @@ def cmd_remove(argv: list[str]) -> None:
         c.execute("DELETE FROM user_data WHERE user_id=?", (uid,))
         c.execute("DELETE FROM user_data_backups WHERE user_id=?", (uid,))
         c.execute("DELETE FROM users WHERE id=?", (uid,))
+    # 账本与账号库同在数据目录（MW_DATA_DIR）；按数据目录删，不要按用户库所在目录猜
     for name in (f"portfolio.user-{uid}.json", f"fund_portfolio.user-{uid}.json"):
-        path = os.path.join(users.CACHE_DIR, name)
+        path = os.path.join(users.paths.DATA_DIR, name)
         if os.path.exists(path):
             os.remove(path)
     print(f"已删除账号及其全部数据：{username}（id={uid}）")

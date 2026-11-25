@@ -512,7 +512,8 @@ def _call(name: str, args: list[tuple], w: dict[str, pd.DataFrame]):
         r = x.rolling(int(args[1][1]))
         lo, hi = r.min(), r.max()
         return (x - lo) / (hi - lo + 1e-12)
-    x = _eval(args[0], w)
+    # x 已在上方求值一次。这里曾经再求值一次，嵌套 N 层时首个参数被求值 2^N 次
+    # （实测深度 8 → 256 次），单条公式即可把 CPU 与内存占满。
     n = int(args[1][1])
     if name == "ts_mean":
         return x.rolling(n).mean()

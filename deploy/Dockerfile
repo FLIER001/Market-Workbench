@@ -1,7 +1,10 @@
 # syntax=docker/dockerfile:1
 
 # ---------- 前端构建 ----------
-FROM node:22-alpine AS web
+# 基础镜像钉到 digest（多架构索引）：同一个 Dockerfile 永远构建出同样的基础层。
+# 需要跟进上游安全更新时手动更新 digest：
+#   docker buildx imagetools inspect node:22-alpine
+FROM node:22-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a AS web
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
@@ -10,7 +13,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # ---------- 运行时 ----------
-FROM python:3.14-slim AS runtime
+FROM python:3.14-slim@sha256:22eafb370920ad8b429e0aec3fff433e0669968519f5d60469d83729c138b28b AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

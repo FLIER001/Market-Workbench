@@ -14,6 +14,10 @@ services:
       PORT: "8900"
       MW_HOST: 0.0.0.0
       MW_PORT: "8900"
+      # 内存看门狗：macOS 上靠 launchd KeepAlive 拉起，容器里靠 restart 策略。
+      # 阈值默认取 mem_limit 的 80%（约 2.4g）或运行满 8h，主动退出后由 Docker 拉回，
+      # 磁盘快照兜底首请求。不设的话内存只涨不跌，只能等 OOM kill。
+      MW_MEM_WATCHDOG: "1"
     volumes:
       # 用户库、自选/持仓、研报、各类快照全部落在这里
       - ./data:/data

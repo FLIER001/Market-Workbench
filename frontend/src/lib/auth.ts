@@ -2,6 +2,7 @@
 // 解决纯 localStorage 存自选时换域名(localhost/127.0.0.1)/换浏览器就丢的问题。
 
 import { storageGet, storageSet, storageRemove } from "./storage";
+import { authHeaders } from "./api";
 import { cloud, CLOUD_ENABLED } from "./cloud";
 import {
   CLOUD_DATA_FLAG,
@@ -39,28 +40,40 @@ export function saveUser(user: AuthUser) {
   storageSet(USER_KEY, JSON.stringify(user));
 }
 
-export function saveSession(token: string, user: AuthUser) {
-  storageSet(TOKEN_KEY, token);
-  saveUser(user);
-}
-
 export function clearSession() {
   storageRemove(TOKEN_KEY);
   storageRemove(USER_KEY);
   storageRemove("vr-just-logged-in");
   storageRemove(CLOUD_DATA_FLAG);
+  resetOnceFlags();
 }
 
-export function authHeaders(): Record<string, string> {
-  const t = loadToken();
-  const access = storageGet("vr-access-key") || "";
-  return {
-    // 两个都发：直连时 Authorization 够用；经过某些网关/反代时它可能被当成网关自身的鉴权头
-    // 而不再透传，X-VR-User-Token 是后端同样支持的通道，能兜住这种情况。
-    ...(t ? { Authorization: `Bearer ${t}`, "X-VR-User-Token": t } : {}),
-    ...(access ? { "X-VR-Access-Key": access } : {}),
-  };
+// 会话级一次性标记。登录守卫随路由切换反复挂载，而「校验会话」「拉取后端数据」
+// 每个会话只该做一次；原先的模块级布尔值登出后不复位，换账号登录就不再执行。
+const once = { verified: false, pulled: false };
+
+/** 若本会话尚未执行过该动作则执行并记为已做；返回是否执行。 */
+export function runOncePerSession(key: "verified" | "pulled", action: () => void): boolean {
+  if (once[key]) return false;
+  once[key] = true;
+  action();
+  return true;
 }
+
+export function resetOnceFlags(): void {
+  once.verified = false;
+  once.pulled = false;
+}
+
+export function saveSession(token: string, user: AuthUser) {
+  resetOnceFlags();
+  storageSet(TOKEN_KEY, token);
+  saveUser(user);
+}
+
+// 鉴权头只有一份实现（api.ts）。此前这里另写一份且多带 Authorization: Bearer，
+// 两个客户端在会改写 Authorization 的网关后面行为不一致。
+export { authHeaders } from "./api";
 
 async function req<T>(path: string, method: "GET" | "POST" = "GET", body?: unknown): Promise<T> {
   const headers: Record<string, string> = { ...authHeaders() };
@@ -254,7 +267,8 @@ export async function bridgeCloudSession(): Promise<void> {
   }
   void fetch("/api/auth/cloud/data-probe", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    // 后端要求登录（诊断数据只对登录用户可见）；会话此时已建立，直接带鉴权头
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(dataProbe),
   }).catch(() => {});
 }

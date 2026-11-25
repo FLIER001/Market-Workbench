@@ -1,5 +1,9 @@
 # 开发/测试依赖。安装：.venv/bin/pip install -r requirements-dev.txt
 # 跑测试：.venv/bin/pytest -m "not live"   （只跑离线单测/API 测，快且稳）
 #         .venv/bin/pytest -m live          （联网核对数据源 shape，开源前/升级后用）
+# 覆盖率：.venv/bin/pytest -m "not live" --cov=. --cov-report=term-missing
+# 静态检查：.venv/bin/ruff check .          （规则见 pyproject.toml，CI 跑同一套）
 pytest>=7
 httpx>=0.24   # fastapi TestClient 依赖
+pytest-cov>=5
+ruff>=0.17

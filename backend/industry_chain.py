@@ -17,9 +17,10 @@ from datetime import datetime, timedelta, timezone
 
 import astock
 import cache_runtime
+import paths
 
 BEIJING = timezone(timedelta(hours=8))
-DATA_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
+DATA_DIR = paths.DATA_DIR
 _CHAIN_FILE = os.path.join(os.path.dirname(__file__), "data", "industry_chains.json")
 _FIN_CACHE_PRIMARY = os.path.join(DATA_DIR, "industry_chain_financials.json")
 _FIN_CACHE_FALLBACK = os.path.join(os.path.dirname(__file__), ".cache", "industry_chain_financials.json")

@@ -19,8 +19,11 @@ import time
 from datetime import datetime, timezone, timedelta
 
 import fund
+import paths
+import logutil
+_log = logutil.get(__name__)
 
-CACHE_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
+CACHE_DIR = paths.DATA_DIR
 FPF_FILE = os.path.join(CACHE_DIR, "fund_portfolio.json")
 BEIJING = timezone(timedelta(hours=8))
 _LOCK = threading.Lock()
@@ -226,7 +229,7 @@ def close_position(code: str, date: str, nav: float, shares: float, cost: float 
             if meta:
                 name = meta["name"]
         except Exception:
-            pass
+            _log.debug("已吞掉的异常（降级路径）", exc_info=True)
     with _LOCK:
         d = _load(user_id)
         holding = next((h for h in d["holdings"] if h["code"] == code), None)
@@ -512,7 +515,7 @@ def start_scheduler(interval: int = 120, user_ids=lambda: ()) -> None:
                 if mode == "nav":
                     last_nav = time.time()
             except Exception:
-                pass
+                _log.debug("已吞掉的异常（降级路径）", exc_info=True)
     threading.Thread(target=loop, daemon=True).start()
 
 

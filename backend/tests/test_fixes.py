@@ -3,6 +3,7 @@
 空结果不缓存 / akshare 缺失降级 / 无 index 工具调用归位 / CLI 流式超时。
 """
 import pytest
+import sys
 import time
 from datetime import datetime
 from fastapi.testclient import TestClient
@@ -20,8 +21,13 @@ client = TestClient(app_module.app)
 
 @pytest.fixture(autouse=True)
 def legacy_ledger_unit_scope(monkeypatch):
-    """旧 CRUD 用例只验证账本算法；HTTP 鉴权/隔离由专门用例覆盖。"""
+    """旧 CRUD 用例只验证账本算法；HTTP 鉴权/隔离由专门用例覆盖。
+
+    账本归属固定为全局文件（user_id=None）；模块级 client 换成带登录态的版本——
+    写端点现在默认要求登录，匿名 POST 到不了处理函数。"""
+    import conftest
     monkeypatch.setattr(app_module, "_portfolio_user_id", lambda request: None)
+    monkeypatch.setattr(sys.modules[__name__], "client", conftest.authed_client())
 
 
 # ── MW_API_KEY 鉴权中间件 ───────────────────────────────────────────
@@ -355,15 +361,28 @@ def test_gold_series_cache_marks_fallback_stale():
     market._SUB_LAST.pop(key, None)
 
 
-# ── akshare 未安装：market 降级返回空，不挡服务 ─────────────────────
+# ── akshare 未安装 / 上游不可达：market 降级返回空，不挡服务 ─────────────
 
 def test_market_degrades_without_akshare(monkeypatch):
+    """全部离线：情绪的两个上游（乐咕、东财兜底）都置空，板块资金流因 akshare 缺失而不可用。
+    此前只置空 akshare 就断言情绪为空——加上东财兜底后该断言过期，且这个「离线」用例实际在联网。"""
     def boom():
         raise astock.DependencyMissing("akshare 未安装")
 
     monkeypatch.setattr(astock, "_akshare", boom)
+    monkeypatch.setattr(market, "_legu_activity", lambda: {})
+    monkeypatch.setattr(market, "_em_activity", lambda: {})
     assert market._sentiment() == {}
     assert market._sectors() == []
+
+
+def test_sentiment_falls_back_to_eastmoney_and_labels_source(monkeypatch):
+    monkeypatch.setattr(market, "_legu_activity", lambda: {})
+    monkeypatch.setattr(market, "_em_activity",
+                        lambda: {"上涨": 3000, "下跌": 2000, "涨停": 60, "真实涨停": 50,
+                                 "跌停": 5, "真实跌停": 4, "统计日期": "2026-11-25"})
+    out = market._sentiment()
+    assert out["source"] == "东方财富" and out["up"] == 3000 and out["breadth"] == "偏强"
 
 
 # ── 流式工具调用：非标网关不带 index 时按 id 归位、不串参数 ──────────

@@ -117,7 +117,7 @@ export function Layout() {
   const logout = () => {
     auth.logout().catch(() => { /* 后端不在也允许本地登出 */ });
     clearSession();
-    clearLocalUserData();
+    clearLocalUserData({ includeCaches: true });
     clearUserSWRCache();
     navigate("/login", { replace: true });
   };

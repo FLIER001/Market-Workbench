@@ -60,7 +60,7 @@ Copy [`.env.example`](.env.example) if you need configuration. Local development
 | Variable | Purpose |
 |---|---|
 | `MW_ALLOW_ORIGINS` | Comma-separated CORS allowlist; `*` is the local-development default |
-| `MW_API_KEY` | Enables bearer-token protection for `/api/*` except health |
+| `MW_API_KEY` | Enables bearer-token protection for `/api/*` except the auth entry points and health; also disables `/docs` and `/openapi.json`. Every POST/PUT/PATCH/DELETE, every `refresh=true` and every LLM-calling endpoint additionally requires a logged-in session |
 | `MW_DATA_DIR` | Base directory for local portfolio, reports and user data |
 | `MW_REPORTS_DIR` | Overrides the report archive directory only |
 | `MW_DATA_PROXY` | Set to `1` only when data sources must use the system proxy |
@@ -72,11 +72,17 @@ See the root [configuration guide](../docs/configuration.md) for storage and dep
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest tests -q
+.venv/bin/python -m pytest -m "not live" -q          # 离线用例（CI 跑的就是这条）
+.venv/bin/python -m pytest -m "not live" -q --cov=. --cov-report=term-missing
+.venv/bin/ruff check .                                # 语法错误 / 未定义名称 / 未使用 import
 ```
+
+`tests/test_auth_boundary.py` 是结构性守卫：新增的写端点若没有登录校验，测试直接失败。
+新增**可以匿名调用**的 POST / PUT / DELETE 端点时，必须有意识地改 `app._ANONYMOUS_WRITE_PATHS` 与该测试里的白名单。
 
 ## Data and security notes
 
-- Account data is stored in SQLite at `~/.market-workbench/users.db` by default. Passwords are salted and hashed; browser sessions use random tokens.
-- Portfolio and report files are stored under `~/.market-workbench/` unless redirected by environment variables.
-- The service is not a multi-tenant hosted platform. Do not expose it publicly without configuring CORS, an API key, TLS and your own access controls.
+- Account data is stored in SQLite at `$MW_DATA_DIR/users.db` (`~/.market-workbench/users.db` by default). Passwords are salted and hashed with PBKDF2; only the SHA-256 of each session token is stored.
+- Portfolio and report files are stored under `~/.market-workbench/` unless redirected by environment variables. All data paths resolve through `paths.py`.
+- Every mutating endpoint, every `refresh=true` / `force=true` and every endpoint that calls an LLM or a local CLI requires a logged-in session. The Codex / Qwen / DeepSeek CLIs run in fully automatic mode and stay disabled unless `MW_CLI_AGENTS=1` is set.
+- The service is not a multi-tenant hosted platform. Do not expose it publicly without configuring CORS, an API key, TLS and your own access controls. See `SECURITY.md` in the repository root.

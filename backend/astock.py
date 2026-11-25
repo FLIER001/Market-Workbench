@@ -21,8 +21,9 @@ import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
-from pathlib import Path
 from zoneinfo import ZoneInfo
+import logutil
+_log = logutil.get(__name__)
 
 BEIJING = ZoneInfo("Asia/Shanghai")
 
@@ -620,7 +621,7 @@ def tencent_kline(code: str, period: str = "day", count: int = 250) -> list[dict
             if rows:
                 return rows
         except Exception:  # noqa: BLE001 — 主源被 WAF 拦/超时，走备用域名
-            pass
+            _log.debug("已吞掉的异常（降级路径）", exc_info=True)
         _TX_KLINE_WEB_OK = False
 
     # 备用：proxy.finance.qq.com（直连、忽略系统代理，避免科学上网代理挂掉国内站）
@@ -2018,6 +2019,11 @@ def profit_forecast_revision_em(code: str) -> dict:
 
 
 # ==================== 黄金期货分钟线支持 ====================
+def get_today_cn() -> str:
+    """北京时间当日日期（YYYY-MM-DD）。"""
+    return datetime.now(BEIJING).strftime("%Y-%m-%d")
+
+
 def futures_minute_kline(code: str) -> dict:
     """获取黄金期货当日分钟线（新浪 InnerFuturesNewService.getFewMinLine）。"""
     symbol_map = {
@@ -2038,7 +2044,6 @@ def futures_minute_kline(code: str) -> dict:
         with urllib.request.urlopen(req, timeout=8) as resp:
             raw = resp.read().decode("gbk")
 
-        import re
         start_idx_data = raw.find("[")
         end_idx_data = raw.rfind("]")
         if start_idx_data < 0 or end_idx_data <= start_idx_data:

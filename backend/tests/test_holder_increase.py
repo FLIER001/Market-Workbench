@@ -1,6 +1,7 @@
 """高管/股东增持数据层测试：身份分层、归一化、窗口切分、评分、计划解析、缓存 warm/force。"""
 import re
-from datetime import datetime, timedelta, timezone
+import threading
+from datetime import datetime, timedelta
 
 import holder_increase as hi
 import cache_runtime
@@ -359,7 +360,10 @@ def test_build_raw_includes_plans(monkeypatch):
     monkeypatch.setattr(hi, "_fetch_holder_increase", lambda today: [])
     fetched = []
     def fake_anns(code, today):
-        fetched.append(code)
+        # 其他用例启动真实 lifespan 后会留下后台重拉线程，它们也会调到这个被打桩的函数；
+        # 这里只统计本线程（被测路径是同步的）发起的请求
+        if threading.current_thread() is threading.main_thread():
+            fetched.append(code)
         return _plan(notice_date="2026-08-01", start_date="2026-08-01", end_date="2027-02-01",
                      amount_label="≥1亿元", amount=1e8, window_parsed=True), \
             [{"date": "2026-08-27", "title": "增持公告", "url": "https://x/1.html"}]

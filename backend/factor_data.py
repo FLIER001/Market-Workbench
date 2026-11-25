@@ -22,9 +22,12 @@ import pandas as pd
 from pandas._typing import DtypeArg
 
 import astock
+import paths
+import logutil
+_log = logutil.get(__name__)
 
 DATA_DIR = os.path.join(
-    os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench"),
+    paths.DATA_DIR,
     "factor",
 )
 _BARS_FILE = os.path.join(DATA_DIR, "bars.csv.gz")
@@ -97,7 +100,7 @@ def fetch_instruments() -> list[dict]:
                     data = candidate
                     break
             except Exception as exc:  # noqa: BLE001 — 换备用域名重试
-                print(f"[factor-data] 股票池第 {page} 页请求失败：{type(exc).__name__}", flush=True)
+                _log.info(f"[factor-data] 股票池第 {page} 页请求失败：{type(exc).__name__}")
                 continue
         if data is None:
             raise RuntimeError(f"股票池第 {page} 页拉取失败，未保存不完整数据")
@@ -179,7 +182,7 @@ def _tencent_kline_paged(code: str, count: int, end_suffix: str) -> list[dict]:
         if rows:
             return rows
     except Exception as exc:  # noqa: BLE001
-        print(f"[factor-data] 日线主接口失败：{type(exc).__name__}", flush=True)
+        _log.info(f"[factor-data] 日线主接口失败：{type(exc).__name__}")
     # 备用域名（proxy.finance.qq.com，2026-08 起 web.ifzq 被 WAF 拦时的实际主力）
     try:
         import requests as _req

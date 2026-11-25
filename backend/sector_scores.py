@@ -19,22 +19,20 @@ import json
 import io
 import math
 import os
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 
 import requests
-import urllib3
 
 import astock
 import cache_runtime
 import score_worker
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+import tls_verify
+import paths
 
 BEIJING = timezone(timedelta(hours=8))
-DATA_DIR = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
+DATA_DIR = paths.DATA_DIR
 _PRIMARY_CACHE_FILE = os.path.join(DATA_DIR, "sector_scores.json")
 _FALLBACK_CACHE_FILE = os.path.join(os.path.dirname(__file__), ".cache", "sector_scores.json")
 _PRIMARY_SNAPSHOT_FILE = os.path.join(DATA_DIR, "sector_score_snapshots.json")
@@ -174,7 +172,7 @@ def _request_json(url: str, params: dict) -> dict:
                 url,
                 params=params,
                 headers=_HEADERS,
-                verify=False,
+                verify=tls_verify.swsresearch_verify(),
                 timeout=15,
             )
             response.raise_for_status()
@@ -214,7 +212,7 @@ def _fetch_sw_classification() -> dict:
     response = requests.get(
         _CLASSIFICATION_URL,
         headers={**_HEADERS, "Referer": "https://www.swsresearch.com/"},
-        verify=False,
+        verify=tls_verify.swsresearch_verify(),
         timeout=30,
     )
     response.raise_for_status()

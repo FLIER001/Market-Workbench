@@ -5,6 +5,8 @@ from __future__ import annotations
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+import logutil
+_log = logutil.get(__name__)
 
 BEIJING = timezone(timedelta(hours=8))
 
@@ -38,6 +40,6 @@ def start(sector_refresh, level2_refresh, plate_refresh) -> None:
                     if postclose:
                         closed[key] = now.date().isoformat()
                 except Exception:
-                    pass
+                    _log.debug("已吞掉的异常（降级路径）", exc_info=True)
 
     threading.Thread(target=loop, daemon=True, name="score-scheduler").start()

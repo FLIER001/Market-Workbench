@@ -19,6 +19,8 @@ import astock
 import cache_runtime
 import gold_score
 import market
+import tls_verify
+import paths
 
 BEIJING = timezone(timedelta(hours=8))
 _PROBE_THROTTLE = 60  # 秒；两次探活的最小间隔
@@ -125,7 +127,7 @@ def _probe_sws() -> str | None:
             "https://www.swsresearch.com/institute-sw/api/index_analysis/week_month_datetime/",
             params={"page": "1", "pagesize": "1"},
             headers={"User-Agent": astock.UA, "Referer": "https://www.swsresearch.com/"},
-            verify=False,  # 与正式抓取同一入口：该站证书链校验失败，sector_scores._request_json 同样关校验
+            verify=tls_verify.swsresearch_verify(),  # 与正式抓取同一入口：补全证书链，不关校验
             timeout=8,
         )
         return None if str(r.json().get("code")) == "200" else f"接口码 {r.json().get('code')}"
@@ -358,7 +360,7 @@ def _snapshot_state(module: str) -> dict | None:
     """pulse / factor_data 的快照状态（文件 mtime + 简单内容摘要）。"""
     import os
 
-    base = os.environ.get("MW_DATA_DIR") or os.path.join(os.path.expanduser("~"), ".market-workbench")
+    base = paths.DATA_DIR
     if module == "pulse":
         path = os.path.join(base, "pulse", "pulse_snapshot.json")
         try:

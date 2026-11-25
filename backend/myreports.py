@@ -4,7 +4,9 @@
 - 走 base64 JSON 上传（不引入 python-multipart 依赖，契合本项目「秒装必可用」）；研报文件不大，够用。
 - 存到 `MW_REPORTS_DIR`（默认 ~/.market-workbench/myreports/，也可用 MW_DATA_DIR 换根目录）——用户私有资料，绝不进仓、不上传。
   放仓库外，重新下载/覆盖项目文件夹不会丢（issue #12）；≤v0.1.1 存 backend/.cache/myreports/，首次启动自动迁移（复制，旧目录保留作备份）。
-- 元数据存目录内 index.json；按文件名关键词自动打「行业」标签（best-effort，未命中记「未分类」）。
+- 元数据存目录内 index.json，按文件名关键词自动打「行业」标签（best-effort，未命中记「未分类」）。
+- 归属：每条记录带 owner_id（登录用户），列表 / 下载 / 删除只作用于本人记录。
+  修复前的记录是全局的、没有归属：第一个列出它的登录用户认领全部无主记录。
 
 合规/隐私：与「持仓 / 关注股只存本地」同一红线——研报是用户私有数据，只落本地磁盘。
 """
@@ -16,17 +18,17 @@ import binascii
 import json
 import os
 import shutil
-import sys
 import threading
 import time
 import uuid
 from pathlib import Path
 
+import paths
+import logutil
+_log = logutil.get(__name__)
+
 _OLD_DEFAULT_DIR = Path(__file__).resolve().parent / ".cache" / "myreports"  # ≤v0.1.1 旧位置
-_DATA_DIR = Path(os.environ.get("MW_DATA_DIR") or Path.home() / ".market-workbench")
-_DEFAULT_DIR = _DATA_DIR / "myreports"
-# 空串视同未设置（与 MW_DATA_DIR 语义一致，避免 Path("") 落到进程工作目录）
-REPORTS_DIR = Path(os.environ.get("MW_REPORTS_DIR") or str(_DEFAULT_DIR))
+REPORTS_DIR = Path(paths.REPORTS_DIR)
 _INDEX = REPORTS_DIR / "index.json"
 
 
@@ -42,13 +44,15 @@ def _migrate_legacy() -> None:
         os.replace(tmp, REPORTS_DIR)  # 同盘原子改名：复制中断不会留半套研报挡住下次重试
     except OSError as e:
         # 迁移失败不阻塞启动，但要出声——旧数据原样保留在 _OLD_DEFAULT_DIR，可手工复制
-        print(f"[market-workbench] 研报数据迁移失败（旧数据仍在 {_OLD_DEFAULT_DIR}）: {e}", file=sys.stderr)
+        _log.warning(f"[market-workbench] 研报数据迁移失败（旧数据仍在 {_OLD_DEFAULT_DIR}）: {e}")
 
 
 _migrate_legacy()
 _LOCK = threading.Lock()  # 索引读-改-写串行化（与 portfolio.py 同款），防并发上传/删除互相覆盖
 
 MAX_BYTES = 25 * 1024 * 1024  # 单文件上限 25MB
+# base64 文本长度上限：超限在解码前就拒绝，不必先把几十 MB 读进内存再判
+MAX_B64_CHARS = (MAX_BYTES + 2) * 4 // 3
 # 允许的文档类型（白名单——不存可执行 / 网页等，避免下载回放风险）
 ALLOWED_EXT = {
     ".pdf", ".doc", ".docx", ".txt", ".md", ".markdown",
@@ -110,17 +114,36 @@ def _sanitize_name(name: str) -> str:
     return base or "未命名"
 
 
-def list_reports() -> list[dict]:
-    """按上传时间倒序返回元数据列表。"""
-    return sorted(_load_index(), key=lambda r: r.get("ts", 0), reverse=True)
+def _owned(items: list[dict], user_id: int | None) -> list[dict]:
+    return [r for r in items if r.get("owner_id") == user_id]
 
 
-def save_report(name: str, content_b64: str) -> dict:
+def _adopt_legacy(items: list[dict], user_id: int | None) -> list[dict]:
+    """修复前的记录没有 owner_id（当时全局可见）。第一个列出它的登录用户
+    认领全部无主记录，之后与其他记录一样按用户隔离。"""
+    if user_id is None or not any("owner_id" not in r for r in items):
+        return items
+    for r in items:
+        r.setdefault("owner_id", user_id)
+    _save_index(items)
+    return items
+
+
+def list_reports(user_id: int | None = None) -> list[dict]:
+    """按上传时间倒序返回当前用户的元数据列表。"""
+    with _LOCK:
+        items = _adopt_legacy(_load_index(), user_id)
+    return sorted(_owned(items, user_id), key=lambda r: r.get("ts", 0), reverse=True)
+
+
+def save_report(name: str, content_b64: str, user_id: int | None = None) -> dict:
     """解码 base64 存盘 + 打行业标签 + 记录元数据。返回该条元数据。"""
     fname = _sanitize_name(name)
     ext = os.path.splitext(fname)[1].lower()
     if ext not in ALLOWED_EXT:
         raise ReportError(f"不支持的文件类型 {ext or '（无扩展名）'}；支持：PDF / Word / txt / md / 表格 / 图片")
+    if len(content_b64 or "") > MAX_B64_CHARS:
+        raise ReportError(f"文件过大，上限 {MAX_BYTES // 1024 // 1024}MB")
     # base64 可能带 data:URI 前缀（前端 FileReader.readAsDataURL），剥掉逗号前半段
     if content_b64.startswith("data:"):
         parts = content_b64.split(",", 1)
@@ -148,6 +171,7 @@ def save_report(name: str, content_b64: str) -> dict:
         "size": len(blob),
         "ext": ext,
         "ts": int(time.time() * 1000),
+        "owner_id": user_id,
     }
     with _LOCK:
         items = _load_index()
@@ -156,20 +180,22 @@ def save_report(name: str, content_b64: str) -> dict:
     return meta
 
 
-def report_path(rid: str) -> tuple[Path, str] | None:
-    """按 id 取 (磁盘路径, 原始文件名)；不存在返回 None。"""
-    for r in _load_index():
+def report_path(rid: str, user_id: int | None = None) -> tuple[Path, str] | None:
+    """按 id 取 (磁盘路径, 原始文件名)；不存在或不属于当前用户返回 None。"""
+    with _LOCK:
+        items = _load_index()
+    for r in _owned(items, user_id):
         if r.get("id") == rid:
             p = REPORTS_DIR / f"{rid}{r.get('ext', '')}"
             return (p, r.get("name", rid)) if p.exists() else None
     return None
 
 
-def delete_report(rid: str) -> bool:
-    """删文件 + 移除索引条目。删成功（或本就不在）返回是否命中。"""
+def delete_report(rid: str, user_id: int | None = None) -> bool:
+    """删文件 + 移除索引条目。删成功返回是否命中本人的记录。"""
     with _LOCK:
         items = _load_index()
-        hit = next((r for r in items if r.get("id") == rid), None)
+        hit = next((r for r in _owned(items, user_id) if r.get("id") == rid), None)
         if hit is None:
             return False
         fp = REPORTS_DIR / f"{rid}{hit.get('ext', '')}"

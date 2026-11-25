@@ -6,6 +6,7 @@
 - 成本允许负数、清仓日期格式校验。
 """
 import base64
+import sys
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,7 +20,11 @@ client = TestClient(app_module.app)
 
 @pytest.fixture(autouse=True)
 def legacy_ledger_unit_scope(monkeypatch):
+    """账本归属固定为全局文件；模块级 client 带登录态（写端点默认要求登录）。
+    需要验证匿名行为的用例自己建不带头的 TestClient。"""
+    import conftest
     monkeypatch.setattr(app_module, "_portfolio_user_id", lambda request: None)
+    monkeypatch.setattr(sys.modules[__name__], "client", conftest.authed_client())
 
 _B64 = "data:application/pdf;base64," + base64.b64encode(b"%PDF-1.4 test").decode()
 
@@ -32,32 +37,47 @@ def test_classify_by_filename():
     assert mr.classify("随手记.txt") == "未分类"
 
 
-def test_report_roundtrip_and_delete():
-    r = client.post("/api/myreports", json={"name": "长鑫_HBM_深度.pdf", "content_b64": _B64})
+def test_report_roundtrip_and_delete(logged_in):
+    r = client.post("/api/myreports", json={"name": "长鑫_HBM_深度.pdf", "content_b64": _B64}, headers=logged_in)
     assert r.status_code == 200
     meta = r.json()["data"]
     assert meta["industry"] == "HBM存储"
     rid = meta["id"]
     try:
-        assert any(x["id"] == rid for x in client.get("/api/myreports").json()["data"])
-        assert client.get(f"/api/myreports/file/{rid}").status_code == 200
+        assert any(x["id"] == rid for x in client.get("/api/myreports", headers=logged_in).json()["data"])
+        assert client.get(f"/api/myreports/file/{rid}", headers=logged_in).status_code == 200
     finally:
-        assert client.delete(f"/api/myreports/{rid}").json()["data"]["ok"] is True
-    assert client.get(f"/api/myreports/file/{rid}").status_code == 404
+        assert client.delete(f"/api/myreports/{rid}", headers=logged_in).json()["data"]["ok"] is True
+    assert client.get(f"/api/myreports/file/{rid}", headers=logged_in).status_code == 404
 
 
-def test_report_illegal_type_400():
-    r = client.post("/api/myreports", json={"name": "x.exe", "content_b64": _B64})
+def test_report_illegal_type_400(logged_in):
+    r = client.post("/api/myreports", json={"name": "x.exe", "content_b64": _B64}, headers=logged_in)
     assert r.status_code == 400
 
 
-def test_report_data_uri_without_comma_400():
+def test_report_data_uri_without_comma_400(logged_in):
     # 之前会 IndexError→500，现应 400
-    assert client.post("/api/myreports", json={"name": "a.pdf", "content_b64": "data:"}).status_code == 400
+    assert client.post("/api/myreports", json={"name": "a.pdf", "content_b64": "data:"}, headers=logged_in).status_code == 400
 
 
-def test_report_missing_file_404():
-    assert client.get("/api/myreports/file/does-not-exist").status_code == 404
+def test_report_missing_file_404(logged_in):
+    assert client.get("/api/myreports/file/does-not-exist", headers=logged_in).status_code == 404
+
+
+def test_reports_require_login_and_are_isolated_per_user(logged_in):
+    # 研报是用户私有资料：未登录 401；另一个登录用户看不到、删不掉、下载不到本人的记录
+    import conftest
+    anonymous = TestClient(app_module.app)  # 模块级 client 自带登录态，这里要匿名的
+    assert anonymous.get("/api/myreports").status_code == 401
+    assert anonymous.post("/api/myreports", json={"name": "a.pdf", "content_b64": _B64}).status_code == 401
+    rid = client.post("/api/myreports", json={"name": "a.pdf", "content_b64": _B64},
+                      headers=logged_in).json()["data"]["id"]
+    other = conftest.auth_headers()
+    assert client.get("/api/myreports", headers=other).json()["data"] == []
+    assert client.get(f"/api/myreports/file/{rid}", headers=other).status_code == 404
+    assert client.delete(f"/api/myreports/{rid}", headers=other).json()["data"]["ok"] is False
+    assert client.get(f"/api/myreports/file/{rid}", headers=logged_in).status_code == 200
 
 
 # ---- SSRF 守卫 ----

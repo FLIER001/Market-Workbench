@@ -113,10 +113,16 @@ def test_reflect_prompt_forbids_own_judgement():
 
 # ---- 路由校验 ----
 
-def test_reflect_route_rejects_empty_source():
-    assert client.post("/api/reflect", json={"source": "  ", "llm": _LLM}).status_code == 400
+def test_reflect_route_rejects_empty_source(logged_in):
+    assert client.post("/api/reflect", json={"source": "  ", "llm": _LLM}, headers=logged_in).status_code == 400
 
 
-def test_reflect_route_requires_llm_config():
-    r = client.post("/api/reflect", json={"source": "一段分析", "llm": {**_LLM, "baseURL": ""}})
+def test_reflect_route_requires_login():
+    # /api/reflect 会调本机 CLI / 用户配置的模型，属花钱或动本机的操作：未登录直接 401
+    r = client.post("/api/reflect", json={"source": "一段分析", "llm": _LLM})
+    assert r.status_code == 401
+
+
+def test_reflect_route_requires_llm_config(logged_in):
+    r = client.post("/api/reflect", json={"source": "一段分析", "llm": {**_LLM, "baseURL": ""}}, headers=logged_in)
     assert r.status_code == 400

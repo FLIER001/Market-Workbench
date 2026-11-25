@@ -5,7 +5,6 @@ import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
-import abnormal
 import app as app_module
 import cache_runtime
 import portfolio as pf
